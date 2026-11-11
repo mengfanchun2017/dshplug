@@ -298,29 +298,31 @@ async function writeBeacon(cfg, versionsData) {
   return { ok: true, committed: commit.ok, file, payload };
 }
 
-function apply(ctx) {
-  // —— 启动诊断：把加载事实写盘，便于排查「插件到底有没有被宿主加载」。 ——
-  // 只在加载时写一次，不含任何配置内容，不影响功能。
+/** 写一条启动诊断（JSON Lines）。绝不抛错，绝不写入任何配置内容。 */
+function diag(extra) {
   try {
-    const diagDir = path.join(os.homedir(), '.dsh', 'logs');
-    fs.mkdirSync(diagDir, { recursive: true });
+    const dir = path.join(os.homedir(), '.dsh', 'logs');
+    fs.mkdirSync(dir, { recursive: true });
     fs.appendFileSync(
-      path.join(diagDir, 'dsh-synchub-boot.log'),
-      JSON.stringify({
-        at: new Date().toISOString(),
-        phase: 'apply',
-        pid: process.pid,
-        version: process.versions?.node,
-        hasCtx: !!ctx,
-        hasWebServer: !!(ctx && ctx.webServer),
-        webServerRegisterType: typeof (ctx && ctx.webServer && ctx.webServer.register),
-        ctxKeys: ctx ? Object.keys(ctx).slice(0, 40) : [],
-        dshHome: process.env.DSH_HOME || null,
-        profile: process.env.DSH_PROFILE || null,
-      }) + '\n',
+      path.join(dir, 'dsh-synchub-boot.log'),
+      JSON.stringify({ at: new Date().toISOString(), pid: process.pid, ...extra }) + '\n',
       'utf8',
     );
   } catch { /* 诊断失败不影响插件 */ }
+}
+
+function apply(ctx) {
+  // —— 启动诊断：把加载事实写盘，便于排查「插件到底有没有被宿主加载」。 ——
+  diag({
+    phase: 'apply',
+    version: process.versions?.node,
+    hasCtx: !!ctx,
+    hasWebServer: !!(ctx && ctx.webServer),
+    webServerRegisterType: typeof (ctx && ctx.webServer && ctx.webServer.register),
+    ctxKeys: ctx ? Object.keys(ctx).slice(0, 40) : [],
+    dshHome: process.env.DSH_HOME || null,
+    profile: process.env.DSH_PROFILE || null,
+  });
 
   const routes = [
     {
@@ -380,21 +382,29 @@ function apply(ctx) {
 
   const disposers = [];
   if (ctx.webServer && typeof ctx.webServer.register === 'function') {
-    for (const route of routes) {
-      disposers.push(ctx.webServer.register({
-        ...route,
-        handler: (req, res) => {
-          const reason = guard(req);
-          if (reason) return json(res, 403, { ok: false, error: `请求来源不被接受（${reason}）` });
-          return route.handler(req, res);
-        },
-      }));
+    try {
+      for (const route of routes) {
+        disposers.push(ctx.webServer.register({
+          ...route,
+          handler: (req, res) => {
+            const reason = guard(req);
+            if (reason) return json(res, 403, { ok: false, error: `请求来源不被接受（${reason}）` });
+            return route.handler(req, res);
+          },
+        }));
+      }
+      log(ctx, 'info', `registered ${routes.length} routes`);
+      diag({ phase: 'routes-ok', count: routes.length });
+    } catch (e) {
+      // 注册失败必须留痕：否则表现就是「接口全 401」，无从判断。
+      diag({ phase: 'routes-failed', error: String((e && e.stack) || e) });
+      log(ctx, 'error', `路由注册失败: ${String((e && e.message) || e)}`);
     }
-    log(ctx, 'info', `registered ${routes.length} routes`);
   } else {
+    diag({ phase: 'no-webserver', hasCtx: !!ctx, webServerType: typeof (ctx && ctx.webServer) });
     log(ctx, 'warn', 'webServer 不可用：状态接口未注册');
   }
-  ctx.effect(() => { for (const d of disposers) { try { d?.(); } catch { /* noop */ } } });
+  try { ctx.effect(() => { for (const d of disposers) { try { d?.(); } catch { /* noop */ } } }); } catch { /* noop */ }
 }
 
 export { name, inject, apply };
