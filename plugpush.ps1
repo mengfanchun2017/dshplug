@@ -59,7 +59,26 @@ if (& git -C $RepoRoot status --porcelain -- 'list.json') {
   Write-Host "`n[list.json] 清单有变更，一并提交"
   $staged += 'list.json'
 }
-if ($staged.Count -eq 0) { Write-Host "`n没有需要提交的内容。什么都没做。"; return }
+if ($staged.Count -eq 0) {
+  # 没有「未提交」的改动，不代表没有「未推送」的提交。以前的版本在这里直接 return，
+  # 于是「先 git commit 过、再跑 plugpush」永远推不上去（远端一直空）。
+  $originProbe = & git -C $RepoRoot remote get-url origin 2>$null
+  $aheadCount = 0
+  if ($originProbe) {
+    $ahead = & git -C $RepoRoot rev-list --count '@{u}..HEAD' 2>$null
+    if ($LASTEXITCODE -eq 0 -and $ahead) { $aheadCount = [int]$ahead }
+    else {
+      # 还没有上游跟踪分支（远端一次都没推过）→ 本地所有提交都算待推送
+      $aheadCount = [int](& git -C $RepoRoot rev-list --count HEAD 2>$null)
+    }
+  }
+  if ($aheadCount -gt 0 -and $originProbe) {
+    Write-Host "`n没有未提交的改动，但有 $aheadCount 个提交还没推送到远端 —— 继续推送。"
+  } else {
+    Write-Host "`n没有需要提交或推送的内容。什么都没做。"
+    return
+  }
+}
 
 if ($DryRun) {
   Write-Host "`n[DryRun] 会 stage 这些路径：$($staged -join ', ')"

@@ -123,11 +123,51 @@ async function writeConfig(patch) {
   return next;
 }
 
+/**
+ * 读 chatsync 的落盘配置（$DSH_HOME/dsh-sync.json）。
+ * 只看两件事：有没有连私有仓库、是否仍靠「首次同步自动建仓」。
+ * 不调用 chatsync 的接口 —— 自检必须是只读快照，不能触发同步副作用。
+ */
+async function readChatsyncChannel() {
+  const file = path.join(DSH_HOME, 'dsh-sync.json');
+  try {
+    const raw = JSON.parse(await fsp.readFile(file, 'utf8'));
+    return { remote: typeof raw.remote === 'string' ? raw.remote : '', autoRepo: raw.autoRepo !== false };
+  } catch {
+    return { remote: '', autoRepo: true };
+  }
+}
+
+/**
+ * 读 config-manager 的活动同步通道（$DSH_HOME/dsh-config-manager/sync-profiles/<profile>/sync-config.json）。
+ * 各通道地址分散在 git.repoUrl / webdav.url / s3.* / gist.* 下，这里只提炼「配没配 + 哪个通道 + 地址」。
+ */
+async function readConfigManagerChannel() {
+  const profile = path.basename(PROFILE_DIR) || 'desktop';
+  const file = path.join(DSH_HOME, 'dsh-config-manager', 'sync-profiles', profile, 'sync-config.json');
+  try {
+    const raw = JSON.parse(await fsp.readFile(file, 'utf8'));
+    const transport = typeof raw.transport === 'string' ? raw.transport : '';
+    const where =
+      (raw.git && raw.git.repoUrl) ||
+      (raw.webdav && raw.webdav.url) ||
+      (raw.s3 && (raw.s3.endpoint || raw.s3.bucket)) ||
+      (raw.gist && (raw.gist.gistId || raw.gist.id)) ||
+      '';
+    return { configured: Boolean(transport && where), transport, where: String(where || '') };
+  } catch {
+    return { configured: false, transport: '', where: '' };
+  }
+}
+
 /** 只读预检：逐项说清楚「能不能用」，不写任何东西。 */
 async function checkConfig(raw) {
   const cfg = { ...DEFAULTS, ...sanitizeConfig(raw) };
   const checks = [];
   const push = (id, ok, detail) => checks.push({ id, ok, detail });
+  // —— 两条跨机通道的真实配置（只读落盘文件，不调用对方接口） ——
+  const chatsync = await readChatsyncChannel();
+  const configManager = await readConfigManagerChannel();
   push('configFile', true, CONFIG_FILE);
   push('machine', Boolean(cfg.machine), `机器名 = ${cfg.machine || '(空)'}（两台必须不同，否则信标互相覆盖）`);
   push('dshHome', fs.existsSync(DSH_HOME), `${DSH_HOME} ${fs.existsSync(DSH_HOME) ? '存在' : '不存在'}`);
@@ -138,14 +178,32 @@ async function checkConfig(raw) {
   push('workspaceGit', isRepo, isRepo ? '是 Git 仓库' : '不是 Git 仓库（拉取/推送/信标不可用）');
   if (isRepo) {
     const remote = await git(root, ['remote', 'get-url', 'origin']);
-    push('workspaceRemote', remote.ok, remote.ok ? `origin = ${remote.out}` : '没有 origin（只能本地提交，无法跨机同步）');
+    // 没有 origin 并不等于「无法跨机同步」：chatsync 用自己独立的影子仓库
+    // （gitdir + tree）承载工作区内容，推到私有仓库的 ws/<id> 分支，不读写工作区的 .git。
+    // 所以这里只在有 origin 时校验它是否可用，没 origin 就降级为提示而非失败，
+    // 真正的跨机通道由下面的 chatsync 自检项负责。
+    if (remote.ok) {
+      push('workspaceRemote', true, `origin = ${remote.out}`);
+    } else {
+      push('workspaceRemote', true, '无 origin（正常：工作区内容由 chatsync 经 ws/<id> 分支同步，不依赖工作区自身远端）');
+    }
   } else push('workspaceRemote', false, '跳过（工作区不是 Git 仓库）');
   // 仓库根目录的插件清单
   const repoRoot = path.join(DSH_HOME, '..', 'dsh-plugins');
   const listPath = path.join('C:\\dsh', 'dsh-plugins', 'list.json');
   push('pluginList', fs.existsSync(listPath), listPath);
   push('profileDir', fs.existsSync(path.join(PROFILE_DIR, 'package.json')), PROFILE_DIR);
-  return { ok: checks.every(c => c.ok), checks, config: cfg };
+
+  // —— 真正的跨机通道自检：直接读 chatsync / config-manager 的落盘配置 ——
+  // 之前只看工作区有没有 origin，但那个跟跨机无关；能同步与否由这两条通道决定。
+  push('chatsyncChannel', chatsync.remote !== '', chatsync.remote !== ''
+    ? `私有仓库 = ${chatsync.remote}（工作区经 ws/<id> 分支同步）`
+    : '未连私有仓库：设置 → 同步 里填仓库地址');
+  push('configChannel', configManager.configured, configManager.configured
+    ? `通道 = ${configManager.transport}（DSH 配置快照）`
+    : '未配同步通道：设置 → 备份与迁移 → 同步');
+
+  return { ok: checks.every(c => c.ok), checks, config: cfg, channels: { chatsync, configManager } };
 }
 
 /** 只接受同源 / 非跨站请求，与 chatsync 的 guard 同口径。 */
@@ -346,10 +404,15 @@ function apply(ctx) {
       kind: 'exact', path: '/api/dsh-synchub/status', handler: async (_req, res) => {
         try {
           const cfg = await readConfig();
-          const [workspace, vers, beacons] = await Promise.all([
+          const [workspace, vers, beacons, chatsyncCh, configCh] = await Promise.all([
             workspaceStatus(cfg), versions(), readBeacons(cfg),
+            readChatsyncChannel(), readConfigManagerChannel(),
           ]);
-          return json(res, 200, { ok: true, machine: cfg.machine, staleHours: cfg.staleHours, workspace, versions: vers, beacons });
+          return json(res, 200, {
+            ok: true, machine: cfg.machine, staleHours: cfg.staleHours,
+            workspace, versions: vers, beacons,
+            channels: { chatsync: chatsyncCh, configManager: configCh },
+          });
         } catch (e) { return json(res, 500, { ok: false, error: String(e.message || e) }); }
       },
     },

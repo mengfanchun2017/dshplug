@@ -45,6 +45,12 @@ window.__ModuleLoader__.load({
     function deriveAlerts(own, chat, cm) {
       const a = [];
       if (!own || !own.ok) a.push({ level: 'warn', text: '同步中心状态接口不可用' });
+      // 两条跨机通道没配好 = 根本没法跨机，这是最该提醒的一条，排在前面。
+      const ch = (own && own.channels) || {};
+      if (own && own.ok) {
+        if (ch.chatsync && ch.chatsync.remote === '') a.push({ level: 'red', text: 'chatsync 还没连私有仓库：设置 → 同步' });
+        if (ch.configManager && ch.configManager.configured === false) a.push({ level: 'red', text: '配置同步还没配通道：设置 → 备份与迁移 → 同步' });
+      }
       if (own && own.ok) {
         const w = own.workspace || {};
         if (w.error === 'not-a-git-repo') a.push({ level: 'warn', text: '工作区不是 Git 仓库' });
@@ -381,6 +387,13 @@ window.__ModuleLoader__.load({
               ? e('span', { className: 'red' }, status.workspace.error)
               : `${status.workspace?.branch || '—'} · ${status.workspace?.ahead || 0} 领先 / ${status.workspace?.behind || 0} 落后 / ${status.workspace?.dirty || 0} 脏`),
             row('已装插件版本', Object.entries(status.versions?.local || {}).filter(([, x]) => x).map(([k, x]) => `${k} ${x}`).join(' · ') || '—'),
+            // 这两条才是「能不能跨机」的判据：都配好 = 成对可用。
+            row('对话同步通道', status.channels?.chatsync?.remote
+              ? e('span', { className: 'good' }, status.channels.chatsync.remote)
+              : e('span', { className: 'red' }, '未连接（设置 → 同步）')),
+            row('配置同步通道', status.channels?.configManager?.configured
+              ? e('span', { className: 'good' }, `${status.channels.configManager.transport} · ${status.channels.configManager.where || '已配置'}`)
+              : e('span', { className: 'red' }, '未配置（设置 → 备份与迁移 → 同步）')),
             row('另一台信标', (status.beacons?.machines || []).length
               ? status.beacons.machines.map(m => m.machine).join(' · ') : '暂无')));
 
