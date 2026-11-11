@@ -404,7 +404,12 @@ function apply(ctx) {
     diag({ phase: 'no-webserver', hasCtx: !!ctx, webServerType: typeof (ctx && ctx.webServer) });
     log(ctx, 'warn', 'webServer 不可用：状态接口未注册');
   }
-  try { ctx.effect(() => { for (const d of disposers) { try { d?.(); } catch { /* noop */ } } }); } catch { /* noop */ }
+  // ⚠️ effect(fn) 会「立即调用 fn」，并把 fn 的返回值当作清理函数 ——
+  // 绝不能把注销逻辑写进 fn 本体（那会在注册完成后立刻把路由全部撤销，
+  // 于是 exact 表始终为空，请求落到 /api 前缀路由 → 全部 401）。
+  try {
+    ctx.effect(() => () => { for (const d of disposers) { try { d?.(); } catch { /* noop */ } } });
+  } catch { /* 老版本 Cordis 无 effect 时忽略 */ }
 }
 
 export { name, inject, apply };
