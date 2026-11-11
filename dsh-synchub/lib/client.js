@@ -407,8 +407,16 @@ window.__ModuleLoader__.load({
 
       return e('div', { className: 'dshc' },
         e('style', null, CONFIG_STYLES),
-        e('h2', null, '同步中心 · 设置'),
-        e('div', { className: 'sub' }, '状态与目录一览、修改本机配置、保存前逐项检查。配置只写本机 $DSH_HOME，不进任何同步通道。'),
+        e('h2', null, '同步中心 · 总览与自检'),
+        e('div', { className: 'sub' }, '只读汇总 + 本机配置 + 自检。配置只写本机 $DSH_HOME，不进任何同步通道。'),
+        e('div', { className: 'note' },
+          e('strong', null, '三个同步相关的地方，分工不同：'),
+          e('br'),
+          '· ', e('strong', null, '本页（同步中心）'), ' — 两台机器的总体状态、本机路径与机器名、自检查『哪里没配好』。',
+          e('br'),
+          '· ', e('strong', null, '设置 → 同步'), ' — chatsync 自己：对话记录同步到哪个私有仓库。',
+          e('br'),
+          '· ', e('strong', null, '设置 → 备份与迁移'), ' — config-manager：DSH 配置的导出/导入，内含『同步』tab 管配置同步通道。'),
         statusCard,
         formCard,
         checkCard,
@@ -429,7 +437,9 @@ window.__ModuleLoader__.load({
       try {
         ctx.slots.inject('settings.section', () =>
           ctx.slots.register(
-            { name: 'settings.section', id: 'dsh-synchub-settings', order: 470, label: '同步中心' },
+            // 名字必须能和另外两处一眼区分：config-manager 的分区叫「备份与迁移」（内部还有
+            // 一个「同步」tab）、chatsync 的分区叫「同步」。所以这里带上用途限定词。
+            { name: 'settings.section', id: 'dsh-synchub-settings', order: 470, label: '同步中心（总览与自检）' },
             SettingsSection));
       } catch { /* 宿主没有设置 slot 时优雅降级：主面板仍可用 */ }
     }

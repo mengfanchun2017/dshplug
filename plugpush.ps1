@@ -100,6 +100,12 @@ if ($Tag -and -not $All) {
 }
 
 # ---- 7. push（首次自动带 -u 建立跟踪） ----
+# 分支自动跟随本地当前分支：仓库初始化时是 master，凭 -Branch 猜 main 会直接失败
+# （"src refspec main does not match any"）。显式传 -Branch 仍然优先。
+if (-not $PSBoundParameters.ContainsKey('Branch')) {
+  $current = (& git -C $RepoRoot branch --show-current 2>$null)
+  if ($current) { $Branch = $current.Trim() }
+}
 Write-Host "`n推送到 $origin ($Branch) ..."
 & git -C $RepoRoot push -u origin $Branch
 if ($LASTEXITCODE -ne 0) { throw "push 失败（exit $LASTEXITCODE）。commit 已在本机，可稍后重试：git -C $RepoRoot push" }
