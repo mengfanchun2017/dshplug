@@ -268,6 +268,137 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /* ---------------------------------------------------------- 设置面板 */
+    // 设置 → 同步中心：看状态、看目录、改配置、保存前检查。
+    // 与侧栏主面板共用同一套 API，但职责不同：这里是「配置与自检」，那边是「日常状态与动作」。
+    const CONFIG_STYLES = `
+.dshc{font-size:13px;line-height:1.6;padding:16px;max-width:760px}
+.dshc h2{margin:0 0 4px;font-size:17px}.dshc .sub{opacity:.7;margin-bottom:16px}
+.dshc .card{border:1px solid rgba(128,128,128,.3);border-radius:10px;padding:12px 14px;margin-bottom:12px}
+.dshc .card h3{margin:0 0 10px;font-size:14px}
+.dshc .field{display:grid;grid-template-columns:150px 1fr;gap:8px 12px;align-items:center;padding:5px 0}
+.dshc .field label{opacity:.75;font-size:12.5px}
+.dshc input[type=text],.dshc input[type=number]{font:inherit;width:100%;box-sizing:border-box;padding:5px 8px;border:1px solid rgba(128,128,128,.4);border-radius:6px;background:transparent;color:inherit}
+.dshc .hint{grid-column:2;font-size:11.5px;opacity:.6;margin-top:-3px}
+.dshc .chk{display:flex;align-items:center;gap:8px;padding:5px 0}
+.dshc .btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.dshc button{font:inherit;padding:6px 12px;border-radius:7px;border:1px solid rgba(128,128,128,.4);background:transparent;color:inherit;cursor:pointer}
+.dshc button:hover{background:rgba(128,128,128,.12)}.dshc button:disabled{opacity:.45;cursor:default}
+.dshc button.primary{border-color:#2563eb;color:#2563eb}
+.dshc .row{display:flex;justify-content:space-between;gap:12px;padding:3px 0;flex-wrap:wrap}
+.dshc .k{opacity:.7}.dshc .v{font-variant-numeric:tabular-nums}
+.dshc .good{color:#16a34a}.dshc .warn{color:#d97706}.dshc .red{color:#dc2626}
+.dshc .check{padding:4px 8px;border-radius:6px;margin-bottom:4px;font-size:12.5px;display:flex;gap:8px;align-items:flex-start}
+.dshc .check.ok{background:rgba(22,163,74,.08)}.dshc .check.bad{background:rgba(220,38,38,.1)}
+.dshc code{font-size:11.5px;opacity:.8;word-break:break-all}
+.dshc .msg{font-size:12px;margin-top:8px;white-space:pre-wrap;word-break:break-all}
+.dshc .msg.err{color:#dc2626}.dshc .msg.ok{color:#16a34a}
+.dshc .note{font-size:12px;opacity:.65;margin-top:10px;border-top:1px dashed rgba(128,128,128,.3);padding-top:10px}
+`;
+
+    function SettingsSection() {
+      const [form, setForm] = useState(null);
+      const [saved, setSaved] = useState(null);
+      const [checks, setChecks] = useState(null);
+      const [status, setStatus] = useState(null);
+      const [busy, setBusy] = useState('');
+      const [msg, setMsg] = useState({ text: '', kind: '' });
+
+      const load = useCallback(async () => {
+        try {
+          const r = await getJSON(`${API}/config`);
+          if (r.ok) { setForm(r.config); setSaved(r.config); }
+        } catch (ex) { setMsg({ text: '配置读取失败：' + String(ex.message || ex), kind: 'err' }); }
+        try { const s = await getJSON(`${API}/status`); if (s.ok) setStatus(s); } catch { /* 状态可选 */ }
+      }, []);
+      useEffect(() => { load(); }, [load]);
+
+      const set = (k, v) => setForm(f => ({ ...(f || {}), [k]: v }));
+      const dirty = form && saved && JSON.stringify(form) !== JSON.stringify(saved);
+
+      const doCheck = useCallback(async (draft) => {
+        setBusy('check'); setMsg({ text: '', kind: '' });
+        try {
+          const r = await post(`${API}/check`, draft || form || {});
+          setChecks(r);
+          setMsg({ text: r.ok ? '检查通过：所有项目可用。' : '检查发现问题，请逐项处理（不影响保存草稿）。', kind: r.ok ? 'ok' : 'err' });
+        } catch (ex) { setMsg({ text: '检查失败：' + String(ex.message || ex), kind: 'err' }); }
+        finally { setBusy(''); }
+      }, [form]);
+
+      const doSave = useCallback(async () => {
+        setBusy('save'); setMsg({ text: '', kind: '' });
+        try {
+          // 先拿草稿体检，再把结果和值一起落盘；体检不通过也允许保存（用户可能正在修路径）
+          const pre = await post(`${API}/check`, form);
+          setChecks(pre);
+          const r = await getJSON(`${API}/config`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form || {}),
+          });
+          if (!r.ok) throw new Error(r.error || '保存失败');
+          setForm(r.config); setSaved(r.config);
+          setMsg({ text: pre.ok ? '已保存，检查通过。' : '已保存，但检查仍有问题；建议修好后再用同步功能。', kind: pre.ok ? 'ok' : 'err' });
+          const s = await getJSON(`${API}/status`); if (s.ok) setStatus(s);
+        } catch (ex) { setMsg({ text: '保存失败：' + String(ex.message || ex), kind: 'err' }); }
+        finally { setBusy(''); }
+      }, [form]);
+
+      const F = (k, label, hint, type) => e(react.Fragment, { key: k },
+        e('div', { className: 'field' },
+          e('label', null, label),
+          type === 'checkbox'
+            ? e('input', { type: 'checkbox', checked: Boolean(form?.[k]), onChange: ev => set(k, ev.target.checked) })
+            : e('input', { type: type || 'text', value: form?.[k] ?? '', onChange: ev => set(k, type === 'number' ? ev.target.value : ev.target.value) }),
+          hint ? e('div', { className: 'hint' }, hint) : null));
+
+      const row = (k, v) => e('div', { className: 'row' },
+        e('span', { className: 'k' }, k), e('span', { className: 'v' }, v));
+
+      const statusCard = e('div', { className: 'card' },
+        e('h3', null, '当前状态与目录'),
+        status === null
+          ? e('div', { className: 'k' }, '读取中…')
+          : e(react.Fragment, null,
+            row('本机', status.machine),
+            row('工作区路径', e('code', null, status.workspace?.root || '—')),
+            row('工作区仓库', status.workspace?.error
+              ? e('span', { className: 'red' }, status.workspace.error)
+              : `${status.workspace?.branch || '—'} · ${status.workspace?.ahead || 0} 领先 / ${status.workspace?.behind || 0} 落后 / ${status.workspace?.dirty || 0} 脏`),
+            row('已装插件版本', Object.entries(status.versions?.local || {}).filter(([, x]) => x).map(([k, x]) => `${k} ${x}`).join(' · ') || '—'),
+            row('另一台信标', (status.beacons?.machines || []).length
+              ? status.beacons.machines.map(m => m.machine).join(' · ') : '暂无')));
+
+      const formCard = e('div', { className: 'card' },
+        e('h3', null, '本机配置'),
+        form === null
+          ? e('div', { className: 'k' }, '读取中…')
+          : e(react.Fragment, null,
+            F('workspace', '工作区路径', 'C:\\dsh 下的某个工作区，必须是 Git 仓库；两台机器路径可以不同'),
+            F('machine', '机器名', '两台必须不同，否则 sync-beacon 会互相覆盖'),
+            F('staleHours', '过期阈值（小时）', '超过这么久没有新提交/没有对方信标就橙点提醒', 'number'),
+            F('beacon', '写入信标', '允许「写本机信标」把版本信息提交进工作区仓库', 'checkbox'),
+            e('div', { className: 'btns' },
+              e('button', { disabled: Boolean(busy), onClick: () => doCheck(form) }, busy === 'check' ? '检查中…' : '检查当前表单'),
+              e('button', { disabled: Boolean(busy), onClick: load }, '重新读取'),
+              e('button', { className: 'primary', disabled: Boolean(busy) || !dirty, onClick: doSave }, busy === 'save' ? '保存中…' : dirty ? '保存' : '已保存')),
+            e('div', { className: 'note' }, '保存 = 写到 $DSH_HOME\\dsh-synchub\\config.json。它不会被 chatsync / config-manager 同步，所以两台机器各设各的。')));
+
+      const checkCard = checks ? e('div', { className: 'card' },
+        e('h3', null, '检查结果', e('span', { className: checks.ok ? 'good' : 'red' }, checks.ok ? ' ● 全部可用' : ' ● 有问题')),
+        (checks.checks || []).map((c, i) => e('div', { key: i, className: 'check ' + (c.ok ? 'ok' : 'bad') },
+          e('span', { className: c.ok ? 'good' : 'red' }, c.ok ? '✓' : '✗'),
+          e('span', null, e('strong', null, c.id), ' — ', c.detail)))) : null;
+
+      return e('div', { className: 'dshc' },
+        e('style', null, CONFIG_STYLES),
+        e('h2', null, '同步中心 · 设置'),
+        e('div', { className: 'sub' }, '状态与目录一览、修改本机配置、保存前逐项检查。配置只写本机 $DSH_HOME，不进任何同步通道。'),
+        statusCard,
+        formCard,
+        checkCard,
+        msg.text ? e('div', { className: 'msg ' + msg.kind }, msg.text) : null);
+    }
+
     function apply(ctx) {
       if (!ctx.slots || typeof ctx.slots.inject !== 'function') return;
       // 侧栏入口（带红点）+ 主面板，和 chatsync 用同一组 slot 名。
@@ -278,6 +409,13 @@ window.__ModuleLoader__.load({
           SidebarEntry);
         return () => { try { entry?.(); } catch {} try { main?.(); } catch {} };
       });
+      // 设置面板分节：状态 / 目录 / 改配置 / 检查。与 chatsync 的 settings.section 同契约。
+      try {
+        ctx.slots.inject('settings.section', () =>
+          ctx.slots.register(
+            { name: 'settings.section', id: 'dsh-synchub-settings', order: 470, label: '同步中心' },
+            SettingsSection));
+      } catch { /* 宿主没有设置 slot 时优雅降级：主面板仍可用 */ }
     }
 
     module.exports = { name: 'dsh-synchub', inject, apply };

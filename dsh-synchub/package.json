@@ -1,9 +1,9 @@
 {
   "name": "dsh-synchub",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "同步中心：在一个侧边栏面板里汇总 chatsync / dsh-config-manager / 工作区 Git 的同步状态，一键发起同步，并在配置落后或插件过旧时红点提醒。",
+  "description": "同步中心：侧边栏 + 设置面板，汇总 chatsync / dsh-config-manager / 工作区 Git 的同步状态，一键发起同步，改配置与自检，旧版本红点提醒。",
   "keywords": ["dsh", "dsh-plugin", "sync", "dashboard", "sidebar"],
   "license": "MIT",
   "engines": {

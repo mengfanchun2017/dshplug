@@ -88,11 +88,50 @@ async function readConfig() {
   }
 }
 
+/** 只接受已知键，防止把任意内容写进配置（只读预检也走这里）。 */
+function sanitizeConfig(raw) {
+  const out = {};
+  if (Object.prototype.hasOwnProperty.call(raw, 'workspace') && typeof raw.workspace === 'string') out.workspace = raw.workspace.trim();
+  if (Object.prototype.hasOwnProperty.call(raw, 'staleHours') && Number.isFinite(Number(raw.staleHours))) {
+    out.staleHours = Math.min(720, Math.max(1, Math.trunc(Number(raw.staleHours))));
+  }
+  if (Object.prototype.hasOwnProperty.call(raw, 'beacon') && typeof raw.beacon === 'boolean') out.beacon = raw.beacon;
+  if (Object.prototype.hasOwnProperty.call(raw, 'machine') && typeof raw.machine === 'string') {
+    out.machine = raw.machine.trim().replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 64);
+  }
+  return out;
+}
+
 async function writeConfig(patch) {
-  const next = { ...(await readConfig()), ...patch };
+  const next = { ...(await readConfig()), ...sanitizeConfig(patch) };
   await fsp.mkdir(path.dirname(CONFIG_FILE), { recursive: true });
   await fsp.writeFile(CONFIG_FILE, JSON.stringify(next, null, 2), 'utf8');
   return next;
+}
+
+/** 只读预检：逐项说清楚「能不能用」，不写任何东西。 */
+async function checkConfig(raw) {
+  const cfg = { ...DEFAULTS, ...sanitizeConfig(raw) };
+  const checks = [];
+  const push = (id, ok, detail) => checks.push({ id, ok, detail });
+  push('configFile', true, CONFIG_FILE);
+  push('machine', Boolean(cfg.machine), `机器名 = ${cfg.machine || '(空)'}（两台必须不同，否则信标互相覆盖）`);
+  push('dshHome', fs.existsSync(DSH_HOME), `${DSH_HOME} ${fs.existsSync(DSH_HOME) ? '存在' : '不存在'}`);
+  const root = cfg.workspace;
+  const isDir = root ? fs.existsSync(root) : false;
+  push('workspaceDir', isDir, `${root || '(空)'} ${isDir ? '存在' : '不存在'}`);
+  const isRepo = isDir && fs.existsSync(path.join(root, '.git'));
+  push('workspaceGit', isRepo, isRepo ? '是 Git 仓库' : '不是 Git 仓库（拉取/推送/信标不可用）');
+  if (isRepo) {
+    const remote = await git(root, ['remote', 'get-url', 'origin']);
+    push('workspaceRemote', remote.ok, remote.ok ? `origin = ${remote.out}` : '没有 origin（只能本地提交，无法跨机同步）');
+  } else push('workspaceRemote', false, '跳过（工作区不是 Git 仓库）');
+  // 仓库根目录的插件清单
+  const repoRoot = path.join(DSH_HOME, '..', 'dsh-plugins');
+  const listPath = path.join('C:\\dsh', 'dsh-plugins', 'list.json');
+  push('pluginList', fs.existsSync(listPath), listPath);
+  push('profileDir', fs.existsSync(path.join(PROFILE_DIR, 'package.json')), PROFILE_DIR);
+  return { ok: checks.every(c => c.ok), checks, config: cfg };
 }
 
 /** 只接受同源 / 非跨站请求，与 chatsync 的 guard 同口径。 */
@@ -252,6 +291,15 @@ function apply(ctx) {
         try {
           if (req.method === 'PUT') return json(res, 200, { ok: true, config: await writeConfig(await readBody(req)) });
           return json(res, 200, { ok: true, config: await readConfig() });
+        } catch (e) { return json(res, 400, { ok: false, error: String(e.message || e) }); }
+      },
+    },
+    {
+      kind: 'exact', path: '/api/dsh-synchub/check', handler: async (req, res) => {
+        try {
+          // GET = 用当前落盘配置做只读体检；POST = 拿表单里的草稿先体检，不落盘。
+          const raw = req.method === 'POST' ? await readBody(req) : await readConfig();
+          return json(res, 200, { ok: true, ...(await checkConfig(raw)) });
         } catch (e) { return json(res, 400, { ok: false, error: String(e.message || e) }); }
       },
     },

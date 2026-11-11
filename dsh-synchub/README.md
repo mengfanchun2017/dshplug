@@ -1,6 +1,20 @@
 # dsh-synchub · 同步中心
 
-把两台 Windows 电脑上的 DSH 同步状态收进**一个侧边栏面板**：看到状态、一键发起同步、配置处理，并在「配置落后 / 插件过旧 / 忘了同步」时红点提醒。
+把两台 Windows 电脑上的 DSH 同步状态收进**一个侧边栏面板 + 一个设置面板**：看到状态、一键发起同步、改本机配置、逐项自检，并在「配置落后 / 插件过旧 / 忘了同步」时红点提醒。
+
+> 本插件源码由仓库 `C:\dsh\dsh-plugins` 的 `list.json` 管理；安装用 `install.ps1`，
+> 上线给另一台用 `plugpush.ps1`。详见仓库根目录 README。
+
+## 两个界面
+
+| 入口 | 用途 |
+|---|---|
+| 侧边栏「同步中心」（带红点）+ 主面板 | **日常**：看三路状态、一键拉取/推送、看另一台信标、版本比对 |
+| **设置 → 同步中心** | **配置**：看状态与目录一览、修改 `workspace / machine / staleHours / beacon`、保存前逐项检查 |
+
+设置面板的 4 个可改项：工作区路径、机器名、过期阈值（小时）、是否写本机信标。
+「检查当前表单」是**只读预检**（草稿不落盘，逐项列出 OK/FAIL）；「保存」才写
+`$DSH_HOME\dsh-synchub\config.json`，且该文件**不进任何同步通道**，两台各设各的。
 
 ## 它是什么 / 不是什么
 
@@ -41,17 +55,18 @@
 
 ## 安装
 
-推荐用仓库根目录的 `install.ps1`（自动把 `plugins/` 下所有插件一次性装好）：
+推荐用仓库根目录的 `install.ps1`（按 `list.json` 装全部 active 插件，或 `-Only` 装单个）：
 
 ```powershell
 & "C:\dsh\dsh-plugins\install.ps1"
+& "C:\dsh\dsh-plugins\install.ps1" -Only dsh-synchub
 ```
 
-也可以只装这一个：
+也可以直接用 dsh 命令装这一个（路径与两台机器必须一致）：
 
 ```powershell
 & "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd" `
-  plugin --profile desktop add "file:C:\dsh\dsh-plugins\plugins\dsh-synchub"
+  plugin --profile desktop add "file:C:\dsh\dsh-plugins\dsh-synchub"
 ```
 
 完全退出 DSH 再打开。侧边栏出现「同步中心」（带红点），点开是主面板。
