@@ -1,0 +1,7 @@
+# dsh-synchub bundle patch
+# 安装：dsh plugin --profile desktop add file:C:\dsh\dsh-plugins\plugins\dsh-synchub
+# 与 chatsync / dsh-config-manager 同形态：一行裸插件行，宿主半运行 lib/index.js，
+# 浏览器半由 package.json 的 dsh.client 声明自动打包进 Web GUI。
+- insert:
+    - id: dsh-synchub
+      name: 'dsh-synchub'
