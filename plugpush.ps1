@@ -1,6 +1,6 @@
 # plugpush · 把「指定的插件」从本地改动提交并推送到私有 Git 远端
 #
-# 为什么需要它：file: 依赖是 hardlink，你改源码 = 立刻改了已安装副本，
+# 为什么需要它：插件用 link:（目录 Junction）装进 profile，你改源码即时生效，
 # 但**不会自动产生 git commit**。默认一切留在本机；只有你跑这条命令才上行。
 #
 # 用法：
@@ -106,4 +106,4 @@ if ($LASTEXITCODE -ne 0) { throw "push 失败（exit $LASTEXITCODE）。commit �
 
 Write-Host "`n完成。另一台机器执行："
 Write-Host "  git -C C:\dsh\dsh-plugins pull"
-Write-Host "  & C:\dsh\dsh-plugins\install.ps1 -Only $($entries[0].name)   # 仅新增/删除插件时需要；改源码因 hardlink 会自动生效"
+Write-Host "  （改源码无需重装——link: Junction 即时生效；仅新增/删除插件时才需要 install.ps1）"

@@ -48,18 +48,36 @@ C:\dsh\dsh-plugins\
 **默认什么都不自动上行。** `plugpush.ps1` 不跑就没有任何 commit、没有任何 push——
 这就是你说的「不提交就相当于本地插件」，完全成立，两台机各自本地改、互不干扰。
 
-关于 `file:` 依赖的开发体验（实测结论，容易踩坑）：
+### 改源码即时生效，不需要任何手动步骤
 
-- pnpm 把 `file:` 目录**硬链接**进 `node_modules`（同一 inode，不是复制）。
-- **用编辑器「原地保存」**（改完保存同一个文件）→ 已安装副本立刻同步，不用重跑 install。
-- **但用会「替换文件」的工具**（本会话里的 `write`/`edit`、某些编辑器、IDE 的重构/格式化、
-  git checkout、解压缩覆盖）会生成**新 inode**，硬链接就断了 → 已安装副本还是旧代码。
-  本次实测：`package.json`/`lib/*.js` 断链后安装副本仍停在 0.1.0。
-- 断链的表现：**改了没生效**。此时跑一次 `install.ps1 -Only <名字>`（内部 remove+add）
-  即可重新建立硬链接；不确定就 `-Check` 看目录，或直接重跑一次，代价只有半秒。
+插件用 **`link:`** 装进 profile（pnpm 建的是目录 **Junction**，指向插件目录本身）。
+文件怎么替换都透过链接读，所以**你改完保存就生效**，不用重跑 install、不用退出 DSH。
 
-所以开发习惯建议：**改完源码跑一次 `install.ps1 -Only <名字>` 再退出重开 DSH**，
-别依赖硬链接的即时性。
+为什么不用 `file:`：`file:` 是**按文件硬链接**。任何「删除+重建」的保存方式
+（`write`/`edit` 工具、IDE 原子改名、git checkout、解压覆盖）都会换 inode → 断链，
+已安装副本停在旧代码。这是上一版「改了没生效」的真实根因，我实测复现过
+（`package.json`、`lib/*.js` 断链后安装副本仍是 0.1.0）。
+
+改 `link:` 之后实测三种写入方式（原地写 / 删除重建 / 原子改名）**全部即时生效**，
+inode 变了也不影响。
+
+> 只有三种情况需要跑 `install.ps1`：新机器首次、新增/删除插件、`list.json` 改动。
+> 日常改代码不在其中。`-Force` 可强制重装。
+
+### `install.ps1 -Check` 会检出四类问题并给出修复命令
+
+```
+link-junction   正常，改代码即时生效
+file-hardlink   file: 形态，可能已断链  → 跑 install.ps1 自动升级为 link:
+copy            更旧的复制形态          → 跑 install.ps1
+orphan          node_modules 有残留链接但 package.json 无声明（DSH 不会加载）→ 跑 install.ps1
+missing         声明了但没装出来        → 跑 install.ps1
+```
+
+`orphan` 是 `dsh plugin remove` 的真实副作用：它**只删 `package.json` 里的依赖声明，
+却把 `node_modules` 里的 Junction 留在原地**。这种状态插件不会加载，但目录看起来正常，
+所以脚本特意以**依赖声明**而不是目录存在来判断，并在重装前先清掉残骸
+（删除 Junction 不会影响源目录，已实测）。
 
 ```powershell
 # 看清单
@@ -112,7 +130,7 @@ HTTPS + PAT 会弹一次系统登录窗并记住，不用把 token 写进任何�
 4. 之后才让 dsh-config-manager 开始同步配置
 ```
 
-> 之后改源码：建议跑一次 `install.ps1 -Only <名字>` 刷新硬链接（见上面「关于 file: 依赖」）；
+> 之后改源码**即时生效**（`link:` Junction），不用再跑 install；
 > 只有「另一台也要拿到」时才跑 `plugpush.ps1` + 那边 `git pull`。
 
 ## 与 config-manager 的「本地插件打包」关系（重要）
@@ -140,6 +158,9 @@ HTTPS + PAT 会弹一次系统登录窗并记住，不用把 token 写进任何�
 3. 本机 `& .\install.ps1 -Only <名字>` → 完全退出 DSH 再打开 → 确认面板/侧栏出现
 4. `& .\plugpush.ps1 <名字> "新增 <名字>"` → 另一台 `git pull` + `& .\install.ps1 -Only <名字>`
 5. 想发布一个版本点时：bump `package.json` 的 `version`，推时加 `-Tag`
+
+> 第 3、4 步里「装」是必需的：`link:` 需要 pnpm 建一次 Junction。
+> 但**之后改这个插件的代码就不用再装了**。
 
 ## 已知限制
 

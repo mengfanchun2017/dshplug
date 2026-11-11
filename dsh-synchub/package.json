@@ -24,13 +24,5 @@
       "inject": ["slots"],
       "platform": "web"
     }
-  },
-  "peerDependencies": {
-    "chatsync": ">=0.21.0 <0.30.0-0",
-    "dsh-config-manager": ">=0.8.0 <0.9.0-0"
-  },
-  "peerDependenciesMeta": {
-    "chatsync": { "optional": true },
-    "dsh-config-manager": { "optional": true }
   }
 }
