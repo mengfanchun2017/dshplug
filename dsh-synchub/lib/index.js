@@ -22,6 +22,20 @@ const execFileAsync = promisify(execFile);
 const name = 'dsh-synchub';
 const inject = ['webServer'];
 
+// —— 模块级诊断：证明「本模块到底有没有被宿主 import」——
+// 与 apply() 里的诊断配合，可区分两种失败：
+//   只有 module 行 → 模块进来了但 apply 没被调用；
+//   两行都有       → 插件正常加载（问题在路由层）；
+//   一行都没有     → 模块根本没被 import（bundle 没展开）。
+try {
+  const dir = path.join(os.homedir(), '.dsh', 'logs');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.appendFileSync(
+    path.join(dir, 'dsh-synchub-boot.log'),
+    JSON.stringify({ at: new Date().toISOString(), phase: 'module', pid: process.pid }) + '\n',
+  );
+} catch { /* 诊断本身绝不影响加载 */ }
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 /** 找到宿主 profile 目录：从本文件所在目录往上走，遇到 node_modules 就取它的父目录。
@@ -285,6 +299,29 @@ async function writeBeacon(cfg, versionsData) {
 }
 
 function apply(ctx) {
+  // —— 启动诊断：把加载事实写盘，便于排查「插件到底有没有被宿主加载」。 ——
+  // 只在加载时写一次，不含任何配置内容，不影响功能。
+  try {
+    const diagDir = path.join(os.homedir(), '.dsh', 'logs');
+    fs.mkdirSync(diagDir, { recursive: true });
+    fs.appendFileSync(
+      path.join(diagDir, 'dsh-synchub-boot.log'),
+      JSON.stringify({
+        at: new Date().toISOString(),
+        phase: 'apply',
+        pid: process.pid,
+        version: process.versions?.node,
+        hasCtx: !!ctx,
+        hasWebServer: !!(ctx && ctx.webServer),
+        webServerRegisterType: typeof (ctx && ctx.webServer && ctx.webServer.register),
+        ctxKeys: ctx ? Object.keys(ctx).slice(0, 40) : [],
+        dshHome: process.env.DSH_HOME || null,
+        profile: process.env.DSH_PROFILE || null,
+      }) + '\n',
+      'utf8',
+    );
+  } catch { /* 诊断失败不影响插件 */ }
+
   const routes = [
     {
       kind: 'exact', path: '/api/dsh-synchub/config', handler: async (req, res) => {

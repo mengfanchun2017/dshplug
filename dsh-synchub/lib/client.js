@@ -128,21 +128,37 @@ window.__ModuleLoader__.load({
       });
     }
 
-    // sidebar.panellist 的 seat 组件：常驻可见，带红点。
+    // sidebar.panellist 的 seat 组件：只画图标 + 红点。
+    // 重要：侧栏文字由插槽元数据的 label 渲染，组件里**不能**再写名字，
+    // 否则会出现「同步中心 同步中心」两遍。
     function SidebarEntry() {
       const [alerts, setAlerts] = useState(bridge.alerts);
       useEffect(() => bridge.subscribe(setAlerts), []);
       const red = alerts.some(a => a.level === 'red');
       const amber = alerts.some(a => a.level === 'warn');
-      return e('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 4 } },
-        e('span', null, '同步中心'),
-        e('span', {
+      const title = red ? '同步中心：有需要处理的问题' : amber ? '同步中心：有提醒' : '同步中心';
+      return e('span', {
+        title,
+        'aria-label': title,
+        style: { display: 'inline-flex', alignItems: 'center', gap: 5, position: 'relative' },
+      },
+        // 双向箭头图标：表示「两台机器互相同步」
+        e('svg', {
+          width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none',
+          stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round',
+          'aria-hidden': 'true',
+        },
+          e('path', { d: 'M7 4v12' }),
+          e('path', { d: 'M4 13l3 3 3-3' }),
+          e('path', { d: 'M17 20V8' }),
+          e('path', { d: 'M14 11l3-3 3 3' })),
+        (red || amber) && e('span', {
           style: {
-            display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
-            background: red ? '#dc2626' : amber ? '#d97706' : 'transparent',
-            boxShadow: red ? '0 0 0 2px rgba(220,38,38,.2)' : amber ? '0 0 0 2px rgba(217,119,6,.2)' : 'none',
+            position: 'absolute', top: -2, right: -3,
+            width: 7, height: 7, borderRadius: '50%',
+            background: red ? '#dc2626' : '#d97706',
+            boxShadow: `0 0 0 2px ${red ? 'rgba(220,38,38,.25)' : 'rgba(217,119,6,.25)'}`,
           },
-          title: red ? '有需要处理的同步问题' : amber ? '有提醒' : null,
         }));
     }
 

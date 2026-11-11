@@ -1,0 +1,21 @@
+# 强制仓库内所有文本文件使用 LF 检出。
+# 原因：DSH 的 cordis.patch.yml 与插件 JS 由 Node/YAML 解析器读取，
+# Windows 的 core.autocrlf=true 会把它们转成 CRLF；实测 CRLF 的 patch 会被
+# 静默跳过（插件宿主半不加载、/api 路由 404→401），而正常工作的插件全是 LF。
+* text=auto eol=lf
+
+# 批处理/PowerShell 脚本按各自惯例保留
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# 二进制文件不要动
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.zip binary
+*.glb binary
+*.obj binary
