@@ -6,12 +6,35 @@ Git 认证一站式管理插件：**检查 / 建议 / 配置 / 验证 / 撤销**
 （DPAPI 加密、绑定用户+本机、出机器解不开）。WSL 通过 interop 直接调用 Windows 的
 `git-credential-manager.exe`，**自己一个字节的密钥都不存**。
 
-> **版本 0.1.0 ｜ 状态 dev ｜ 2026-11-12**
-> 未发布 npm，未装进任何 profile。开发工作区就是本目录 `C:\dsh\dshplug\dsh-gitok`。
+> **版本 0.2.0 ｜ 状态 active ｜ 2026-11-12**
+> 未发布 npm，已用 `link:` 装进 `desktop` profile（宿主机 `REDMIPRO`）。
 > 这份 README 是**交接文档**：设计、机制、实测数据、踩过的坑全在里面，换机器/换工作区照着读就能接着开发。
 
 ---
 
+## 面板长什么样
+
+装好后在 **设置 → Git 认证** 里：
+
+```
+┌─ Git 认证 ───────────────────────────────┐
+│ ● 正常   已配置，认证可用                  │
+│                                          │
+│ 凭据后端      (default = wincredman)      │
+│ git helper    .../gitconfig   manager     │
+│ 代理          http://127.0.0.1:7897       │
+│ SSH 密钥      (无)                        │
+│ gh CLI        not installed              │
+│ 已存凭据      1 条                        │
+│ GCM 路径      .../git-credential-manager  │
+│                                          │
+│ [ 重新检查 ]  [ 查看原始报告 ]              │
+└──────────────────────────────────────────┘
+```
+
+新手不用知道 `gitok_*` 工具名，看卡片 + 点按钮就够。
+
+---
 ## 目录
 
 - [1. 为什么做这个](#1-为什么做这个)
@@ -149,6 +172,13 @@ git -c credential.helper=<Windows GCM 路径> \
 
 ## 4. 插件设计
 
+本插件两个半区：
+
+| 半区 | 文件 | 职责 |
+|---|---|---|
+| 宿主（Host） | `lib/index.js` | 6 个工具 + `/plugins/gitok/status` 数据路由 |
+| 浏览器（Client） | `lib/client.js` | 设置里的「Git 认证」面板 |
+
 ### 4.1 工具清单
 
 | 工具 | 性质 | 作用 |
@@ -159,6 +189,35 @@ git -c credential.helper=<Windows GCM 路径> \
 | `gitok_login` | 触发登录 | 让 GCM 弹浏览器/设备码。**密钥不经过本插件** |
 | `gitok_adopt` | **改配置** | 把 WSL 端点的 helper 指向 Windows GCM（先备份） |
 | `gitok_revoke` | **删除** | GCM `erase` 删凭据 + 可选清理 WSL 配置。**必须 `confirm: true`** |
+
+> **面向新手时不要提工具名。** 设置里有一个「Git 认证」面板，新手只需看卡片、点「重新检查」。
+> 工具名只在需要精确操作（如 `gitok_revoke` 删某一条）时由 AI 代调。
+
+### 4.1.1 设置面板（v0.2.0 新增）
+
+在「设置」侧边栏注册一顶层分区 **Git 认证**（`settings.section`，`id: gitok`，`order: 65`）。
+
+面板做什么：
+
+| 区域 | 内容 |
+|---|---|
+| 状态卡 | 一个颜色徽标（正常/待处理/异常）+ 一句话结论，如「已配置，认证可用」 |
+| 明细行 | 凭据后端、git helper、仓库级 helper、代理、SSH 密钥、gh CLI、已存凭据条数、GCM 路径 |
+| 按钮 | 「重新检查」（带 `?refresh=1` 绕过 5s 缓存）、「查看原始报告」（展开完整体检文本） |
+| 新手说明 | 告诉用户凭据到底在哪、怎么删、怎么换账号 |
+
+**数据通路**（这是关键，Client 拿不到 Host 的能力）：
+
+```
+面板 fetch /plugins/gitok/status?refresh=1
+  → Host 路由（webServer.register）实际跑 pwsh 探测
+  → 返回 { ok, status:{level,summary,...}, report:"<原始体检文本>" }
+```
+
+缓存 5 秒：面板一次渲染可能拉多次，避免每次都起 pwsh 子进程。
+
+`parseStatus()` 把体检文本解析成结构化 JSON。它和 `gitok_doctor` 工具**共用 `runDoctor()`**，
+避免两边行为漂移。
 
 ### 4.2 端点抽象
 
@@ -305,7 +364,10 @@ $env:DSH_HOME="C:\Users\franc\.dsh"; $env:DSH_PROFILE="desktop"
 - [ ] `gitok_login` 未做真实登录实测（会弹浏览器，需人工在场）
 - [ ] 没有 mock ctx 的自动化测试（`test/` 目录还没建）
 - [x] ✅ **已装进 `desktop` profile**（2026-11-12，`list.json` 里 `status: active`、`installedOn: ["REDMIPRO"]`）
-- [ ] 装完后**尚未重启 DSH 验证工具真的出现在会话里**（需人工完全退出再打开）
+- [x] ✅ **重启后已验证**：`gitok_doctor` 在会话里实际可用（2026-11-12 16:37）
+- [x] ✅ **v0.2.0 设置面板**：`lib/client.js` + `dsh.client` + Host 路由已写完
+- [ ] 设置面板**尚未在界面上实际确认渲染**（需重启后在「设置」里看到「Git 认证」分区）
+- [ ] 面板里的「重新登录 / 撤销」按钮未做（目前需 AI 代调工具）
 - [ ] `gitok_adopt` 没有 `--dry-run` 选项，只能靠备份回滚
 - [ ] 没处理 `gitok_revoke` 之后「其他仓库还在用旧凭据」的提示
 
@@ -442,9 +504,82 @@ config.targets        // → { get: [Function], Symbol(cosmokit.volatile.write):
 
 注意：`env -i` 看是 0 个代理变量，`bash -ic` 看是 6 个 —— 因为它是 login shell 才加载的。
 
+### 8.7 `\s*` 会吃掉换行符，正则解析多行文本必坑
+
+写 `parseStatus()` 时踩的。从体检文本里抓值：
+
+```js
+// ❌ 错：目标值为空时，\s* 吃掉换行，.+ 抓到下一行
+const scoped = text.match(/^helper\(scoped\):\s*(.+)$/m)?.[1]
+```
+
+实测：`helper(scoped):` 后面是空的时候，抓到了 `credentialStore: (default = wincredman)`。
+界面上就会出现「仓库级 helper = credentialStore...」这种荒唐值。
+
+根因：JS 的 `\s` 包含 `\n`。`\s*` 贪婪地跨过了换行符，然后 `.+` 在**下一行**匹配成功。
+而 `/m` 只影响 `^` / `$` 的语义，不影响 `\s` 的字符类。
+
+```js
+// ✅ 正：限定在行内空白，并且用 (.*) 允许空
+const scoped = text.match(/^helper\(scoped\):[ \t]*(.*)$/m)?.[1] ?? ''
+```
+
+两个要点：`[ \t]*` 代替 `\s*`；`(.*)` 代替 `(.+)`（否则空值匹配不上，又回退去跨行）。
+
+### 8.8 Client 半的 `t` 必须用 `ctx.locale.bind(NS)`
+
+第一版写成 `const t = (s) => s`（一个直通函数），结果 locale 字典注了也白注，
+设置侧边栏的导航文字拿不到翻译值。
+
+```js
+// ❌ 错：字典注册了也不生效
+const t = (s) => s
+
+// ✅ 正：从 locale 服务拿绑定函数
+ctx.effect(() => ctx.locale.register(NS, { zh:{nav:'Git 认证'}, en:{nav:'Git Auth'} }), '...')
+const t = ctx.locale.bind(NS)
+```
+
+对照 `dsh-getbrain/client.js:1125` 同写法。注意 `t` 要在 `register` **之后**定义。
+
+### 8.9 加了 `dsh.client` 必须重装，不能只靠 Junction
+
+`link-junction` 让**代码**改动即时生效，但 `package.json` 里的 `dsh.client` 声明
+是安装时写进 profile 的。新增浏览器半后如果只改代码不重装，DSH 根本不会去加载 `client.js`。
+
+```powershell
+& C:\dsh\dshplug\install.ps1 -Only dsh-gitok -Force
+```
+
+`-Force` 必须加：不加的话 `install.ps1` 看到已是 `link-junction` 就认为「无需操作」。
+但 `-Force` 会先 `remove` 再 `add`，**没重启 DSH 时可能让运行中的实例短暂找不到包**，
+所以顺序上先重装、再重启。
+
+### 8.10 设置面板要读真实数据，必须开 Host 路由
+
+Client 半拿不到 Host 的工具，也起不了 pwsh 子进程。所以「当前认证通不通」
+这件事，必须在 Host 侧开一个 HTTP 路由，面板去 fetch。
+
+同 `dsh-getbrain` 的做法：
+
+```js
+ctx.inject(['webServer'], (webCtx) => {
+  webCtx.effect(() => webCtx.webServer.register({
+    kind: 'exact',
+    path: '/plugins/gitok/status',
+    handler: async (req, res) => { /* ... */ },
+  }), 'gitok: status route')
+})
+```
+
+注意 `ctx.inject(['webServer'], fn)` 是**服务就绪才回调**；如果宿主没有 webServer
+（比如纯 CLI 模式），这段不会执行，但插件其余部分照常工作。
+
 ---
 
 ## 9. 换工作区继续开发（交接清单）
+
+> 2026-11-12 已从临时工作区搬入 `C:\dsh\dshplug\dsh-gitok`，这是唯一开发位置。
 
 这个插件**没有留在临时工作区**，代码已经放进 dshplug 仓库。换机器 / 换工作区后按下面做：
 

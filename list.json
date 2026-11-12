@@ -35,8 +35,8 @@
     {
       "name": "dsh-gitok",
       "dir": "dsh-gitok",
-      "version": "0.1.0",
-      "description": "Git 认证一站式管理：doctor 体检 / list 查看 / verify 端到端验证 / login 触发 GCM / adopt 让 WSL 借用 Windows 凭据 / revoke 精确撤销。凭据统一收敛到 Windows 凭据管理器（DPAPI，出机器不可用），输出全程脱敏。",
+      "version": "0.2.0",
+      "description": "Git 认证一站式管理：设置里有一个「Git 认证」面板（状态卡片 + 一键重检 + 原始报告），新手不用记工具名。底层 6 个 gitok_* 工具做体检/查看/验证/登录/接管/撤销，凭据收敛到 Windows 凭据管理器（DPAPI，出机器不可用）。",
       "installedOn": [
         "REDMIPRO"
       ],

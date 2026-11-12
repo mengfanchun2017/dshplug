@@ -1,0 +1,338 @@
+// dsh-gitok · 浏览器半（设置面板）
+//
+// 与 dsh-synchub / dsh-getbrain 同形态：window.__ModuleLoader__.load 包装 + Cordis 导出。
+//
+// 职责：在「设置」里注册一个顶层分区 **Git 认证**，让新手不用记 gitok_* 工具名，
+// 点按钮就能看状态、做体检、重新登录。
+//
+// 数据通路：
+//   面板 → GET /plugins/gitok/status（Host 侧路由，实际跑 pwsh 探测）
+//   → 返回 { ok, status, report }
+//   Client 半边拿不到 Host 工具与进程能力，所以必须走这条 HTTP 路由。
+//
+// 约束：不 import @deepseek-ai/dsh-client-ui-primitives（官方 UI 规则），
+// 只用 react + 主题 CSS 变量手写控件。
+window.__ModuleLoader__.load({
+  id: 'dsh-gitok',
+  factory: (require) => {
+    var module = { exports: {} };
+    var exports = module.exports;
+    const react = require('react');
+    const { useState, useEffect, useCallback, useRef } = react;
+
+    const inject = ['slots'];
+
+    const API = '/plugins/gitok/status';
+    const NS = 'gitok.settings';
+
+    // ── 取数据 ────────────────────────────────────────────────────────────
+    // Host 侧的探测要起 pwsh 子进程（~2-5s），超时给宽一点。
+    // 但也不能太宽：界面转圈 45s 用户会以为卡死。
+    const fetchStatus = async (refresh = false, timeout = 30000) => {
+      const url = refresh ? `${API}?refresh=1` : API;
+      const r = await fetch(url, {
+        credentials: 'same-origin',
+        signal: AbortSignal.timeout(timeout),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    };
+
+    // ── 极简样式（只用主题变量，跟随亮/暗） ────────────────────────────────
+    // 不引 UI 库，所以这里手写几个通用片段复用。
+    const S = {
+      wrap: { padding: '16px 18px', maxWidth: 760, fontFamily: 'inherit', fontSize: 13 },
+      h: { fontSize: 15, fontWeight: 600, margin: '0 0 4px' },
+      sub: { color: 'var(--dsh-text-secondary, #888)', margin: '0 0 16px', fontSize: 12 },
+      card: {
+        border: '1px solid var(--dsh-border, #e3e3e3)',
+        borderRadius: 8,
+        padding: '14px 16px',
+        marginBottom: 12,
+        background: 'var(--dsh-bg-elevated, transparent)',
+      },
+      row: {
+        display: 'flex',
+        justifyContent: 'space-between',
+        gap: 16,
+        padding: '5px 0',
+        borderBottom: '1px dashed var(--dsh-border, #f0f0f0)',
+        alignItems: 'baseline',
+      },
+      k: { color: 'var(--dsh-text-secondary, #777)', flex: '0 0 auto', minWidth: 96 },
+      v: {
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontSize: 12,
+        textAlign: 'right',
+        wordBreak: 'break-all',
+        flex: 1,
+      },
+      btn: {
+        padding: '6px 14px',
+        borderRadius: 6,
+        border: '1px solid var(--dsh-border, #ccc)',
+        background: 'var(--dsh-bg-elevated, #fff)',
+        color: 'inherit',
+        cursor: 'pointer',
+        fontSize: 13,
+        fontFamily: 'inherit',
+      },
+      btnPrimary: {
+        padding: '6px 14px',
+        borderRadius: 6,
+        border: '1px solid transparent',
+        background: 'var(--dsh-accent, #2f6feb)',
+        color: '#fff',
+        cursor: 'pointer',
+        fontSize: 13,
+        fontFamily: 'inherit',
+      },
+      badge: (level) => {
+        const c =
+          level === 'ok' ? '#1a7f37' : level === 'warn' ? '#9a6700' : level === 'error' ? '#cf222e' : '#666';
+        return {
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '2px 10px',
+          borderRadius: 999,
+          fontSize: 12,
+          fontWeight: 600,
+          color: c,
+          border: `1px solid ${c}40`,
+          background: `${c}14`,
+        };
+      },
+      pre: {
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontSize: 11.5,
+        lineHeight: 1.55,
+        background: 'var(--dsh-bg-code, rgba(127,127,127,.08))',
+        border: '1px solid var(--dsh-border, #e3e3e3)',
+        borderRadius: 6,
+        padding: 12,
+        overflow: 'auto',
+        maxHeight: 320,
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-all',
+        margin: 0,
+      },
+      hint: {
+        fontSize: 12,
+        lineHeight: 1.6,
+        color: 'var(--dsh-text-secondary, #888)',
+        margin: '8px 0 0',
+      },
+    };
+
+    const Row = ({ k, v, mono = true }) =>
+      react.createElement(
+        'div',
+        { style: S.row },
+        react.createElement('span', { style: S.k }, k),
+        react.createElement('span', { style: mono ? S.v : { ...S.v, fontFamily: 'inherit' } }, v),
+      );
+
+    const LEVEL_TEXT = { ok: '正常', warn: '待处理', error: '异常', unknown: '未知' };
+
+    // ── 主面板组件 ────────────────────────────────────────────────────────
+    function GitokSection() {
+      const [data, setData] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const [err, setErr] = useState(null);
+      const [showReport, setShowReport] = useState(false);
+      // mounted 守卫：面板切走后异步回调不再 setState（React 会警告）
+      const alive = useRef(true);
+
+      const load = useCallback(async (refresh) => {
+        setLoading(true);
+        setErr(null);
+        try {
+          const d = await fetchStatus(refresh);
+          if (!alive.current) return;
+          if (d && d.ok) setData(d);
+          else setErr((d && d.error) || '状态接口返回失败');
+        } catch (e) {
+          if (!alive.current) return;
+          // 路由没挂上（Host 半未加载）与探测超时要分开说，否则新手不知道找谁
+          const msg = String((e && e.message) || e);
+          setErr(
+            msg.includes('404') || msg.includes('Failed to fetch')
+              ? '状态接口不可用：Host 半边可能未加载（需完全退出 DSH 再打开）'
+              : msg,
+          );
+        } finally {
+          if (alive.current) setLoading(false);
+        }
+      }, []);
+
+      useEffect(() => {
+        alive.current = true;
+        load(false);
+        return () => {
+          alive.current = false;
+        };
+      }, [load]);
+
+      const st = data && data.status;
+      const level = st ? st.level : err ? 'error' : 'unknown';
+
+      return react.createElement(
+        'div',
+        { style: S.wrap },
+
+        react.createElement('h2', { style: S.h }, 'Git 认证'),
+        react.createElement(
+          'p',
+          { style: S.sub },
+          '统一管理本机的 git 凭据。密钥存在 Windows 凭据管理器里（DPAPI 加密，换台机器解不开），插件本身不保存任何密钥。',
+        ),
+
+        // ── 状态卡 ──
+        react.createElement(
+          'div',
+          { style: S.card },
+          react.createElement(
+            'div',
+            { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 } },
+            react.createElement('span', { style: S.badge(level) }, LEVEL_TEXT[level] || level),
+            react.createElement(
+              'span',
+              { style: { fontSize: 13, fontWeight: 500 } },
+              loading ? '正在检查…' : st ? st.summary : err || '未知',
+            ),
+          ),
+
+          st &&
+            react.createElement(
+              'div',
+              null,
+              StatusRows(st),
+            ),
+
+          err &&
+            react.createElement(
+              'p',
+              { style: { ...S.hint, color: '#cf222e' } },
+              err,
+            ),
+
+          // 操作区
+          react.createElement(
+            'div',
+            { style: { display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' } },
+            react.createElement(
+              'button',
+              {
+                style: S.btnPrimary,
+                disabled: loading,
+                onClick: () => load(true),
+              },
+              loading ? '检查中…' : '重新检查',
+            ),
+            data &&
+              react.createElement(
+                'button',
+                {
+                  style: S.btn,
+                  onClick: () => setShowReport((v) => !v),
+                },
+                showReport ? '收起原始报告' : '查看原始报告',
+              ),
+          ),
+        ),
+
+        // ── 原始报告 ──
+        showReport &&
+          data &&
+          react.createElement(
+            'div',
+            { style: S.card },
+            react.createElement('pre', { style: S.pre }, data.report || '(空)'),
+          ),
+
+        // ── 给新手的说明 ──
+        react.createElement(
+          'div',
+          { style: S.card },
+          react.createElement('div', { style: { fontWeight: 600, marginBottom: 8 } }, '这些信息在哪里管理'),
+          react.createElement(
+            'div',
+            { style: S.hint },
+            '凭据本体在「Windows 凭据管理器」里（控制面板 → 凭据管理器 → Windows 凭据，找 git:https://...）。',
+            react.createElement('br'),
+            '删除：可以在那里直接删，也可以在本会话里让 AI 调 ',
+            react.createElement('code', { style: { fontSize: 11.5 } }, 'gitok_revoke'),
+            '（需确认）精确删某一条。',
+            react.createElement('br'),
+            '换新账号：点上面的「重新检查」旁边让 AI 调 ',
+            react.createElement('code', { style: { fontSize: 11.5 } }, 'gitok_login'),
+            '，会弹浏览器走 GCM 登录，密钥由 GCM 直接写进凭据管理器。',
+          ),
+        ),
+      );
+    }
+
+    // 状态行：抽出来避免主组件过长
+    function StatusRows(st) {
+      const rows = [];
+      const push = (k, v) => {
+        if (v) rows.push(react.createElement(Row, { key: k, k, v }));
+      };
+      push('凭据后端', st.store);
+      push('git helper', st.helper);
+      push('仓库级 helper', st.scoped !== '(无)' ? st.scoped : '');
+      push('代理', st.proxy || st.sysProxy || '(未配置)');
+      push('SSH 密钥', st.sshKeys || '(无)');
+      push('gh CLI', st.gh);
+      push(
+        '已存凭据',
+        st.credTargets && st.credTargets.length ? `${st.credTargets.length} 条` : '尚无',
+      );
+      push('GCM 路径', st.gcmPath);
+      return rows.length ? react.createElement('div', null, rows) : null;
+    }
+
+    // ── 插件入口 ──────────────────────────────────────────────────────────
+    function apply(ctx) {
+      // 必须用 ctx.locale.bind(NS)，不能写 const t = (s) => s：
+      // 那样 locale 字典注册了也不会生效，导航栏永远拿不到翻译后的文字。
+      // 这个坑 dsh-getbrain 里验证过（它的 1125 行同样写法）。
+      ctx.effect(() =>
+        ctx.locale.register(NS, {
+          zh: { nav: 'Git 认证' },
+          en: { nav: 'Git Auth' },
+        }),
+        'gitok: settings dictionaries',
+      );
+
+      const t = ctx.locale.bind(NS)
+      // 顶层设置分区。order 取 65：getbrain 是 60，synchub 是 470，
+      // 放在 getbrain 之后、同步中心之前，符合「先配凭据，再配同步」的使用顺序。
+      ctx.effect(
+        () =>
+          ctx.slots.inject('settings.section', () =>
+            ctx.slots.register(
+              {
+                name: 'settings.section',
+                id: 'gitok',
+                order: 65,
+                label: () => t('nav'),
+                locale: NS,
+              },
+              GitokSection,
+            ),
+          ),
+        'gitok: settings section',
+      );
+
+      // 自报一次，便于黑盒确认 slot 注册真的执行了（失败不影响界面）。
+      try {
+        fetch('/plugins/gitok/status', { credentials: 'same-origin' }).catch(() => {});
+      } catch { /* noop */ }
+    }
+
+    module.exports = { name: 'dsh-gitok', inject, apply };
+    return module.exports;
+  },
+});

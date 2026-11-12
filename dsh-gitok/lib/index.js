@@ -275,6 +275,100 @@ echo "gh status:       $(command -v gh >/dev/null 2>&1 && (gh auth status 2>&1 |
 }
 
 // ---------------------------------------------------------------------------
+// 体检逻辑（工具与设置面板共用）
+// ---------------------------------------------------------------------------
+
+/**
+ * 跑完整体检，返回纯文本报告。
+ * 抽成独立函数是为了让 gitok_doctor 工具和设置面板的 /status 路由共用同一份逻辑，
+ * 避免两边行为漂移。
+ */
+async function runDoctor(api, listArg) {
+  const list = Array.isArray(listArg) && listArg.length ? listArg.map(String) : api.targets()
+  const g = api.gcm()
+  const lines = []
+
+  lines.push('# git 认证体检')
+  lines.push('')
+  lines.push(`- GCM 路径：${g || '❌ 未找到（请设置 gcmPath）'}`)
+  if (g) {
+    const ver = await exec(g, ['--version'], { timeoutMs: api.probeTimeout() })
+    lines.push(`- GCM 版本：${(ver.stdout || ver.stderr || '').trim() || '(未知)'}`)
+  }
+  lines.push('')
+
+  for (const target of list) {
+    lines.push(`## 端点：${target}`)
+    const cmd = target === 'windows' ? probeWindows() : probeWsl()
+    const r = await runOn(target, cmd, { timeoutMs: api.probeTimeout() })
+    const body = redact((r.stdout || '').trim())
+    if (r.code === 'TIMEOUT') {
+      lines.push(`> ⏱ 超时（${api.probeTimeout()}ms），该端点可能未启动或 WSL 未运行。`)
+    } else if (!r.ok && !body) {
+      lines.push(`> ❌ 探测失败 [${r.code}] ${redact(r.stderr) || '(无输出)'}`)
+    } else {
+      lines.push('```')
+      lines.push(body || '(无输出)')
+      lines.push('```')
+    }
+    lines.push('')
+  }
+
+  lines.push('---')
+  lines.push('**判读要点**')
+  lines.push('- `helper` 为空且无 `credentialStore` → 该终端不会持久化任何凭据。')
+  lines.push('- `plaintext creds` 或 `~/.config/gh/hosts.yml` 有值 → 明文落盘，违背「不落明文」。')
+  lines.push('- `env HTTPS_PROXY` 为空但需要代理 → git 直连会超时。')
+  lines.push('- `ssh keys` 有 `id_*` 时，请另外确认是否设了口令：`ssh-keygen -y -P "" -f <key>` 能成功即为空口令。')
+  return lines.join('\n')
+}
+
+/**
+ * 把体检文本解析成结构化状态，给设置面板画卡片用。
+ * 解析失败一律降级为 unknown，不让面板崩。
+ */
+function parseStatus(text, gcmPath) {
+  // 【坑】这里必须用 [ \t]* 而不是 \s*：\s 包含换行符，
+  // 目标行值为空时 \s* 会吃掉换行，.+ 转而抓到下一行内容。
+  // 实测：helper(scoped): 为空时，regex 抓到了 "credentialStore: (default = wincredman)"。
+  const pick = (re) => { const m = text.match(re); return m && m[1] ? m[1].trim() : '' }
+  const helper = pick(/^helper:[ \t]*(.*)$/m)
+  const scoped = pick(/^helper\(scoped\):[ \t]*(.*)$/m)
+  const store = pick(/^credentialStore:[ \t]*(.*)$/m)
+  const proxy = pick(/^http\.proxy:[ \t]*(.*)$/m)
+  const sysProxy = pick(/^sys proxy:[ \t]*(.*)$/m)
+  const sshKeys = pick(/^ssh keys:[ \t]*(.*)$/m)
+  const sshAgent = pick(/^ssh-agent:[ \t]*(.*)$/m)
+  const gh = pick(/^gh:[ \t]*(.*)$/m)
+  const credTargets = [...text.matchAll(/Target:\s*(\S+)/g)].map((m) => m[1])
+
+  // 认证是否可用：有 GCM + 有具体 helper（不是空串）+ 有已存凭据
+  const hasGcm = !!gcmPath
+  const hasHelper = /manager|credential-manager/i.test(helper)
+  const hasCred = credTargets.length > 0
+
+  let level = 'ok'
+  let summary = '已配置，认证可用'
+  if (!hasGcm) { level = 'error'; summary = '未找到 GCM，无法管理凭据' }
+  else if (!hasHelper) { level = 'warn'; summary = '未挂载 GCM 作 credential helper' }
+  else if (!hasCred) { level = 'warn'; summary = 'GCM 已就绪，但还没存过凭据（需要登录一次）' }
+
+  return {
+    level, summary, gcmPath: gcmPath || '',
+    helper: helper || '(未配置)',
+    scoped: scoped || '(无)',
+    store: store || '(默认 wincredman)',
+    proxy: proxy && proxy !== '(unset)' ? proxy : '',
+    sysProxy: sysProxy || '',
+    sshKeys: sshKeys && sshKeys !== 'none' ? sshKeys : '',
+    sshAgent: sshAgent || '',
+    gh: gh || '',
+    credTargets,
+    checkedAt: new Date().toISOString(),
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 工具实现
 // ---------------------------------------------------------------------------
 
@@ -314,44 +408,8 @@ export function apply(ctx, config) {
     output: textOutput(),
     timeoutMs: 180000,
     async execute(args) {
-      const list = Array.isArray(args?.targets) && args.targets.length ? args.targets.map(String) : targets()
-      const g = gcm()
-      const lines = []
-
-      lines.push('# git 认证体检')
-      lines.push('')
-      lines.push(`- GCM 路径：${g || '❌ 未找到（请设置 gcmPath）'}`)
-      if (g) {
-        const ver = await exec(g, ['--version'], { timeoutMs: probeTimeout() })
-        lines.push(`- GCM 版本：${(ver.stdout || ver.stderr || '').trim() || '(未知)'}`)
-      }
-      lines.push('')
-
-      for (const target of list) {
-        lines.push(`## 端点：${target}`)
-        const cmd = target === 'windows' ? probeWindows() : probeWsl()
-        const r = await runOn(target, cmd, { timeoutMs: probeTimeout() })
-        const body = redact((r.stdout || '').trim())
-        if (r.code === 'TIMEOUT') {
-          lines.push(`> ⏱ 超时（${probeTimeout()}ms），该端点可能未启动或 WSL 未运行。`)
-        } else if (!r.ok && !body) {
-          lines.push(`> ❌ 探测失败 [${r.code}] ${redact(r.stderr) || '(无输出)'}`)
-        } else {
-          lines.push('```')
-          lines.push(body || '(无输出)')
-          lines.push('```')
-        }
-        lines.push('')
-      }
-
-      lines.push('---')
-      lines.push('**判读要点**')
-      lines.push('- `helper` 为空且无 `credentialStore` → 该终端不会持久化任何凭据。')
-      lines.push('- `plaintext creds` 或 `~/.config/gh/hosts.yml` 有值 → 明文落盘，违背「不落明文」。')
-      lines.push('- `env HTTPS_PROXY` 为空但需要代理 → git 直连会超时（本机 Windows 侧当前就是这种情况）。')
-      lines.push('- `ssh keys` 有 `id_*` 时，请另外确认是否设了口令：`ssh-keygen -y -P "" -f <key>` 能成功即为空口令。')
-      return lines.join('\n')
-    },
+      return runDoctor({ targets, gcm, probeTimeout }, args?.targets)
+    }
   }, 'doctor')
 
   // -------------------------------------------------------------------------
@@ -644,4 +702,47 @@ echo "ssh keys:       $(ls ~/.ssh/id_* 2>/dev/null | xargs -r -n1 basename | tr 
       return lines.join('\n')
     },
   }, 'adopt')
+
+  // -------------------------------------------------------------------------
+  // 设置面板的数据通道
+  //
+  // 为什么需要它：Client 半边拿不到 Host 的工具与进程能力，
+  // 而「当前 git 认证到底通不通」必须真跑一次探测。
+  // 所以 Host 这边开一个只读路由，面板拉它画卡片。
+  // 同 dsh-getbrain 的做法：路由挂在 webServer 的 prefix 下，与 /plugins/ 同源。
+  // -------------------------------------------------------------------------
+  ctx.inject(['webServer'], (webCtx) => {
+    // 缓存 5 秒：面板一次渲染可能拉多次，别每次都起 pwsh 子进程。
+    const cache = { at: 0, text: '', status: null }
+
+    const build = async (force) => {
+      const now = Date.now()
+      if (!force && cache.status && now - cache.at < 5000) return cache.status
+      const api = { targets, gcm, probeTimeout }
+      const text = await runDoctor(api)
+      const status = parseStatus(text, gcm())
+      cache.at = now
+      cache.text = text
+      cache.status = status
+      return status
+    }
+
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/gitok/status',
+      handler: async (req, res) => {
+        try {
+          const url = new URL(req.url || '/', 'http://127.0.0.1')
+          const force = url.searchParams.get('refresh') === '1'
+          const status = await build(force)
+          const body = JSON.stringify({ ok: true, status, report: cache.text }, null, 2)
+          res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+          res.end(body)
+        } catch (err) {
+          res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({ ok: false, error: String(err && err.message || err) }))
+        }
+      },
+    }), 'gitok: status route')
+  })
 }
