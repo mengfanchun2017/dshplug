@@ -1,0 +1,52 @@
+{
+  "name": "dsh-pixel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "像素 IP 工作台：把「像素标记」做成左侧任务栏里的独立小应用——作品库、调色板、逐像素编辑、对话框指令，以及按原生网格整数倍导出的整套资产（favicon 到印刷档）。",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "pixel",
+    "pixel-art",
+    "ip",
+    "brand",
+    "sprite",
+    "sidebar"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0",
+    "dsh": ">=0.2.0-rc.1 <0.3.0-0"
+  },
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "assets/palette.json"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-sidebar-right",
+        "@deepseek-ai/dsh-client-ui-layout"
+      ],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "test": "node test/run.mjs"
+  }
+}

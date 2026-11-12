@@ -1,0 +1,9 @@
+# 依赖由 DSH profile 解析，插件自己不带 node_modules
+node_modules/
+__pycache__/
+*.pyc
+
+# 本机临时产物
+*.local.json
+scratch/
+_tmp/

@@ -1,0 +1,8 @@
+# dsh-pixel bundle patch
+# 安装：& C:\dsh\dshplug\install.ps1 -Only dsh-pixel
+# 一行裸插件行：宿主半运行 lib/index.js，浏览器半由 package.json 的 dsh.client
+# 声明自动打进 Web GUI。id 必须等于 lib/index.js 里 `export const name`。
+# 插件本体用 link: 装进 profile，所以改完代码即时生效，不用重装、不用重启。
+- insert:
+    - id: dsh-pixel
+      name: 'dsh-pixel'

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated": "2026-11-12",
+  "updated": "2026-11-13",
   "note": "本机自研插件清单。install.ps1 按此表决定装哪些；plugpush.ps1 按此表决定推哪些。新增插件时加一条即可。",
   "plugins": [
     {
@@ -8,7 +8,17 @@
       "dir": "dsh-synchub",
       "version": "0.3.1",
       "description": "同步中心：会话/工作区/附件/技能/配置层 → 各自私有 Git 仓库；同步面分级 + 危险目录守卫 + 环境切换检测 + 一键同步",
-      "installedOn": ["FRANCIS-HOME-I7"],
+      "installedOn": [
+        "FRANCIS-HOME-I7"
+      ],
+      "status": "active"
+    },
+    {
+      "name": "dsh-pixel",
+      "dir": "dsh-pixel",
+      "version": "0.1.0",
+      "description": "像素 IP 工作台：左侧任务栏小应用 + 右侧快捷入口。作品库、调色板、逐像素编辑、对话框指令，按原生网格整数倍导出整套资产（48…1008 px）。",
+      "installedOn": [],
       "status": "active"
     },
     {
@@ -17,7 +27,9 @@
       "version": "2.2.0",
       "packageName": "@local/getnote-organize",
       "description": "得到大脑（原 Get 笔记）整理插件：官方 OpenAPI 全量下载到统一数据目录，默认只读、写操作需确认、删除双重闸门；附 SKILL.md 整理纪律",
-      "installedOn": ["FRANCIS-HOME-I7"],
+      "installedOn": [
+        "FRANCIS-HOME-I7"
+      ],
       "status": "active",
       "note": "目录名 dsh-getbrain 与包名 @local/getnote-organize 不一致：包名是历史遗留，profile 里按包名声明，改名会断开现有链接，所以靠 packageName 字段桥接。"
     },
