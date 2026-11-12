@@ -1,0 +1,28 @@
+# dsh-gitok bundle patch
+# 安装：& C:\dsh\dshplug\install.ps1 -Only dsh-gitok -RepoRoot 'C:\dsh\dshplug'
+#
+# 一行裸插件行：宿主半运行 lib/index.js，注册 6 个 gitok_* 工具。
+# 本插件没有浏览器半（无 dsh.client），全部能力在模型工具层。
+#
+# 安全约定：本文件不含任何密钥。密钥只存在于 Windows 凭据管理器（DPAPI）。
+- insert:
+    - id: gitok
+      name: dsh-gitok
+      config:
+        # Windows 侧 GCM 可执行文件路径（留空则自动探测 MinGit / Git for Windows）
+        gcmPath: ''
+        # 需要管理的端点：windows = 本机 Windows；其余字符串视为 WSL 发行版名。
+        #
+        # 2026-11-12：用户明确「WSL 的都先不动，后续再改，只改 Windows」，
+        # 所以这里只保留 windows。要启用 WSL 时把发行版名加回下面，
+        # 或用工具参数临时指定（如 gitok_doctor targets=["claude"]）。
+        #   - claude
+        #   - u26claude4
+        targets:
+          - windows
+        # 默认代理（留空则自动从系统代理读取）
+        proxy: 'http://127.0.0.1:7897'
+        # 凭据按 host+repo 路径区分（推荐 true：做到「一个仓库一个认证」）
+        useHttpPath: false
+        # gitok_verify 里每条命令的超时
+        probeTimeoutMs: 20000

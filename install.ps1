@@ -1,4 +1,4 @@
-# dsh-plugins · 按 list.json 注册自研插件到 DSH profile
+﻿# dsh-plugins · 按 list.json 注册自研插件到 DSH profile
 #
 # 用法：
 #   & "C:\dsh\dsh-plugins\install.ps1"                     # 装全部 status=active 的插件
@@ -117,9 +117,12 @@ if ($List -or $Check) {
   if ($Check) {
     Write-Host ''
     $active = @($manifest.plugins | Where-Object { $_.status -eq 'active' })
-    $missing  = @($active | Where-Object { (Get-InstallState $_.name) -eq 'missing' }).Count
-    $orphan   = @($active | Where-Object { (Get-InstallState $_.name) -eq 'orphan' }).Count
-    $legacy   = @($active | Where-Object { (Get-InstallState $_.name) -in @('file-hardlink', 'copy') }).Count
+    # 汇总必须用【包名】而不是清单 name：历史上 dsh-getbrain 包名与目录名不一致时会误报 missing。
+    # 现在已统一为 dsh-getbrain，保留 packageName 兼容逻辑以防未来再出现不一致。
+    $installedName = { param($p) if ($p.packageName) { $p.packageName } else { $p.name } }
+    $missing  = @($active | Where-Object { (Get-InstallState (& $installedName $_)) -eq 'missing' }).Count
+    $orphan   = @($active | Where-Object { (Get-InstallState (& $installedName $_)) -eq 'orphan' }).Count
+    $legacy   = @($active | Where-Object { (Get-InstallState (& $installedName $_)) -in @('file-hardlink', 'copy') }).Count
     $problems = $bad + $missing + $orphan + $legacy
     if ($bad     -gt 0) { Write-Host "  ✗ $bad 个插件已断链（安装副本是旧代码）" -ForegroundColor Yellow }
     if ($legacy  -gt 0) { Write-Host "  ⚠ $legacy 个插件仍是 file:/copy 形态（可能断链，可升级）" -ForegroundColor Yellow }
@@ -143,7 +146,8 @@ foreach ($p in $targets) {
   $dir = Join-Path $RepoRoot $p.dir
   if (-not (Test-Path -LiteralPath $dir)) { Write-Host "跳过 $($p.name)：目录不存在 $dir" -ForegroundColor Yellow; continue }
   if (-not (Test-Bundle $dir)) { Write-Host "跳过 $($p.name)：不是 bundle（缺 dsh.bundle.patch）" -ForegroundColor Yellow; continue }
-  # 目录名与包名可以不同（例：dsh-getbrain 目录里包名是 @local/getnote-organize）。
+  # 目录名与包名历史上可以不同（旧 dsh-getbrain 曾用 @local/getnote-organize）。
+  # 现已统一；保留 packageName 桥接逻辑作为兼容。
   # profile 里声明的是**包名**，所以查安装状态必须用包名，不能用清单里的 name。
   $pkgName = if ($p.packageName) { $p.packageName } else { $p.name }
   $state = Get-InstallState $pkgName

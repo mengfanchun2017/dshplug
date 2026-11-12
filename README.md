@@ -35,24 +35,34 @@ C:\dsh\dshplug\
 │  ├─ README.md       # 架构、同步面分级、状态机、API
 │  └─ lib\ {index.js, client.js}
 ├─ dsh-getbrain\      ← 插件 2：得到大脑（原 Get 笔记）整理
-│  ├─ package.json    # name 是 @local/getnote-organize（历史包名）
+│  ├─ package.json    # name = dsh-getbrain（与目录名一致）
 │  ├─ cordis.patch.yml
 │  ├─ index.js + client.js + gn.py / gn.ps1
 │  └─ SKILL.md        # 整理纪律
-├─ dsh-larkcli\       ← 插件 3：飞书 CLI 的 Windows 原生驱动（开发中）
+├─ dsh-gitok\        ← 插件 4：Git 认证一站式管理（开发中）
+│  ├─ package.json    # name = dsh-gitok，dsh.bundle.patch，无 dsh.client
+│  ├─ cordis.patch.yml
+│  ├─ lib\index.js    # 6 个 gitok_* 工具（纯宿主半）
+│  └─ README.md       # 认证方式对比、插件设计、踩坑记录
+├─ dsh-larkcli\       ← 插件 5：飞书 CLI 的 Windows 原生驱动（开发中）
 │  ├─ package.json    # 尚无 dsh.bundle.patch → install.ps1 会自动跳过
 │  ├─ lark.ps1 + scripts\ + lark-cli-win\
 │  └─ README.md       # 插件化路线
 └─ <单位电脑插件 N>\   ← clone 过来直接放根目录
 ```
 
-### 目录名与包名可以不同
+### 目录名与包名
 
-`dsh-getbrain\` 里的 `package.json` 叫 `@local/getnote-organize`（历史包名）。
-profile 按**包名**声明依赖，所以这类插件要在 `list.json` 里多写一个
-`"packageName"`，否则 `install.ps1` 会用目录名去查、误报「未安装」。
+**当前四个自研插件的「目录名 = 包名 = 清单 name」三者一致**（`dsh-synchub` / `dsh-getbrain` / `dsh-pixel` / `dsh-larkcli`），
+`plugpush.ps1 <名字>` 与 `install.ps1 -Only <名字>` 直接用清单 `name` 即可。
 
-改包名会断开现有链接，因此保留历史包名、靠 `packageName` 桥接。
+> 历史：`dsh-getbrain` 早期包名是 `@local/getnote-organize`（Get笔记 时代留下），当时靠 `list.json` 的
+> `packageName` 字段桥接。**2026-11-12 已统一为 `dsh-getbrain`**，`packageName` 字段删除；改名后需重跑一次
+> `install.ps1` 重建 `link:` Junction。若以后再出现「目录名 ≠ 包名」，可加回 `packageName` 字段
+> （`install.ps1 -Check` 会按包名查安装状态，避免误报「未安装」）。
+
+profile 按**包名**声明依赖，所以目录名与包名不一致时必须有桥接字段，否则 `install.ps1`
+会用目录名去查、误报「未安装」。改包名会断开现有 `link:` 链接，因此改名后必须重装。
 
 **一个插件目录能被注册，只需两个条件**：
 `package.json` 带 `dsh.bundle.patch`；`cordis.patch.yml` 有一行
@@ -207,6 +217,21 @@ git -C C:\dsh\dshplug config http.sslBackend openssl
 
 > 第 3、4 步里「装」是必需的：`link:` 需要 pnpm 建一次 Junction。
 > 但**之后改这个插件的代码就不用再装了**。
+
+## 归档区（`archive/`）
+
+完成或暂停开发的插件，连同源码、产物、工具、决策记录一起归档到 `archive\<插件名>\`。
+**归档区不是插件目录**：`install.ps1` / `plugpush.ps1` 都不读它，`list.json` 也不登记。
+
+| 归档 | 版本 | 归档日 | 说明 |
+|---|---|---|---|
+| [`dsh-preview-editor`](archive/dsh-preview-editor/README.md) | 1.0.5 | 2026-11-12 | 右侧栏文档预览编辑器：`Edit` 菜单项 + 行号 + 不可见字符标记 |
+
+每个归档目录固定包含 `README.md`（ADR + 机制备忘 + 恢复步骤）、`DEVELOPMENT-LOG.md`、
+`source\`、`packages\`、`tools\`、`reference\`。完整规则见 [`archive/README.md`](archive/README.md)。
+
+> ⚠️ `packages\` 里的 `.zip` / `.tgz` 被根 `.gitignore` 忽略，**只在本机存在**。
+> 跨机带走产物要手动传压缩包；源码与文档照常跟 git 走。
 
 ## 已知限制
 

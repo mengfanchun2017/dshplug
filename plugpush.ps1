@@ -1,4 +1,4 @@
-# plugpush · 把「指定的插件」从本地改动提交并推送到私有 Git 远端
+﻿# plugpush · 把「指定的插件」从本地改动提交并推送到私有 Git 远端
 #
 # 为什么需要它：插件用 link:（目录 Junction）装进 profile，你改源码即时生效，
 # 但**不会自动产生 git commit**。默认一切留在本机；只有你跑这条命令才上行。
@@ -6,8 +6,9 @@
 # 用法：
 #   & C:\dsh\dshplug\plugpush.ps1 dsh-synchub "增加设置面板"
 #   & C:\dsh\dshplug\plugpush.ps1 dsh-synchub "修红点逻辑" -Tag       # 同时打版本 tag
+#   & C:\dsh\dshplug\plugpush.ps1 -All "统一整理"                    # 清单里所有插件 + 根级文件
 #   & C:\dsh\dshplug\plugpush.ps1 -List                              # 看有哪些可推
-#   & C:\dsh\dshplug\plugpush.ps1 dsh-synchub "msg" -DryRun          # 只看会提交什么
+#   & C:\dsh\dshplug\plugpush.ps1 -All "msg" -DryRun                 # 只看会提交什么
 #
 # 第一次用之前（只做一次）：填好 -Remote 或先手动 git remote add origin <你的私有仓库 URL>
 #   & C:\dsh\dshplug\plugpush.ps1 dsh-synchub "init" -Remote "https://github.com/<you>/dsh-plugins.git"
@@ -38,9 +39,11 @@ if ($List) {
 if (-not $Name -and -not $All) { throw '用法：plugpush <包名> "<提交说明>"，或 -All。可用 -List 查看包名。' }
 if (-not $Message) { $Message = "update $Name" }
 
-# ---- 1. 找要推的插件目录（只认 list.json 里登记的） ----
-$entries = @($manifest.plugins | Where-Object { $_.status -eq 'active' -and ($All -or $_.name -eq $Name) })
-if ($entries.Count -eq 0) { throw "list.json 里没有这个插件：$Name（先加一条，或跑 -List）" }
+# ---- 1. 找要推的插件目录 ----
+# 注意：这里【不看 status】。list.json 里登记过的目录（含 dev）都要能推，
+# 否则开发中插件的源码改动永远同步不出去。
+# status 只由 install.ps1 用来决定「装不装」，不该决定「推不推」。
+$entries = @($manifest.plugins | Where-Object { $All -or $_.name -eq $Name })
 $paths = @()
 foreach ($e in $entries) {
   $dir = Join-Path $RepoRoot $e.dir
@@ -57,9 +60,23 @@ foreach ($p in $paths) {
   else { Write-Host "`n[$p] 没有本地改动（跳过）" }
 }
 # list.json 自身有变更也要一起带（新增插件/改版本时）
-if (& git -C $RepoRoot status --porcelain -- 'list.json') {
-  Write-Host "`n[list.json] 清单有变更，一并提交"
-  $staged += 'list.json'
+# 根级文件：仓库自己的脚本与配置，不属于任何插件目录，但必须能一起推。
+# 例：改了根 .gitignore / install.ps1 / README.md / BOOTSTRAP.md 时。
+$rootPaths = @('list.json','install.ps1','plugpush.ps1','.gitignore','.gitattributes','README.md','BOOTSTRAP.md')
+foreach ($rp in $rootPaths) {
+  if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot $rp))) { continue }
+  if (& git -C $RepoRoot status --porcelain -- $rp) {
+    Write-Host "`n[$rp] 根级文件有变更，一并提交"
+    if ($staged -notcontains $rp) { $staged += $rp }
+  }
+}
+# 兜底：根目录下任何其它已跟踪文件的改动也不漏（不含子目录路径）
+$rootChanges = & git -C $RepoRoot status --porcelain -- .
+foreach ($line in $rootChanges) {
+  if (-not $line) { continue }
+  $rel = (($line -replace '^...','') -replace '\".*','').Trim().Trim('"')
+  if (-not $rel -or $rel -match '[\\/]') { continue }
+  if ($staged -notcontains $rel) { $staged += $rel; Write-Host "  [$rel] 根级改动（兜底）" }
 }
 if ($staged.Count -eq 0) {
   # 没有「未提交」的改动，不代表没有「未推送」的提交。以前的版本在这里直接 return，

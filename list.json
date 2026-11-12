@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated": "2026-11-13",
+  "updated": "2026-11-12",
   "note": "本机自研插件清单。install.ps1 按此表决定装哪些；plugpush.ps1 按此表决定推哪些。新增插件时加一条即可。",
   "plugins": [
     {
@@ -25,13 +25,21 @@
       "name": "dsh-getbrain",
       "dir": "dsh-getbrain",
       "version": "2.2.0",
-      "packageName": "@local/getnote-organize",
       "description": "得到大脑（原 Get 笔记）整理插件：官方 OpenAPI 全量下载到统一数据目录，默认只读、写操作需确认、删除双重闸门；附 SKILL.md 整理纪律",
       "installedOn": [
         "FRANCIS-HOME-I7"
       ],
       "status": "active",
-      "note": "目录名 dsh-getbrain 与包名 @local/getnote-organize 不一致：包名是历史遗留，profile 里按包名声明，改名会断开现有链接，所以靠 packageName 字段桥接。"
+      "note": "目录名、包名、清单 name 已统一为 dsh-getbrain（2026-11-12 去掉历史包名 @local/getnote-organize）。改名后需重跑 install.ps1 重建 link: Junction。"
+    },
+    {
+      "name": "dsh-gitok",
+      "dir": "dsh-gitok",
+      "version": "0.1.0",
+      "description": "Git 认证一站式管理：doctor 体检 / list 查看 / verify 端到端验证 / login 触发 GCM / adopt 让 WSL 借用 Windows 凭据 / revoke 精确撤销。凭据统一收敛到 Windows 凭据管理器（DPAPI，出机器不可用），输出全程脱敏。",
+      "installedOn": [],
+      "status": "dev",
+      "note": "未在 npm 发布，未安装到任何 profile。无浏览器半（不声明 dsh.client），纯模型工具插件。开发工作区：C:\\dsh\\dshplug\\dsh-gitok。"
     },
     {
       "name": "dsh-larkcli",
