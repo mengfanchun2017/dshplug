@@ -6,7 +6,7 @@
     {
       "name": "dsh-synchub",
       "dir": "dsh-synchub",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "description": "同步中心：会话/工作区/附件/技能/配置层 → 各自私有 Git 仓库；同步面分级 + 危险目录守卫 + 环境切换检测 + 一键同步",
       "installedOn": ["FRANCIS-HOME-I7"],
       "status": "active"

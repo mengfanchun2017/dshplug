@@ -1,6 +1,6 @@
 {
   "name": "dsh-synchub",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "description": "同步中心：把 DSH 的会话、工作区、附件、技能与配置层同步到各自的私有 Git 仓库；提供同步面分级、危险目录守卫、环境切换检测与一键同步。",
