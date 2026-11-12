@@ -1,46 +1,47 @@
 /**
- * dsh-synchub · 宿主半
+ * dsh-synchub · 宿主半（v0.3.0）
  *
- * 只做三件事，绝不自己实现同步逻辑：
- *   1) 汇总状态：工作区 Git 仓库的 ahead/behind/dirty + 本机插件版本 vs npm latest；
- *      chatsync / dsh-config-manager 的状态由浏览器半直接 fetch 它们各自的只读接口。
- *   2) 转发动作：把「一键同步」转发到各插件既有接口；工作区仓库只做 pull/push。
- *   3) 心跳信标：在用户自己的工作区仓库里写 sync-beacon/<machine>.json，
- *      让另一台机器能看出「这边的插件/DSH 版本是不是旧的」。
+ * 定位变了：从「状态看板」升级为**同步引擎**。
+ * 0.2.0 只聚合 chatsync / config-manager 的状态；0.3.0 自己直接管同步：
  *
- * 边界：不直写 $DSH_HOME 配置、不持有凭据、不读密钥文件、不连私有同步仓库。
+ *   本机 $DSH_HOME  ──stage──▶  私有仓库 payload/  ──commit/push──▶  origin
+ *   本机 $DSH_HOME  ◀──apply──  私有仓库 payload/  ◀──pull/ff────  origin
+ *
+ * 为什么用 git 当传输层（而不是自己写 manifest + 上传）：
+ *   1) 版本历史、可回滚，天然有「上一次一致状态」；
+ *   2) 内容寻址去重，附件池只有一份；
+ *   3) 冲突由 git 检测，我们绝不做 force，一律 ff-only；
+ *   4) 不需要另存一份「谁改了哪个文件」的登记表 —— **HEAD 的 tree 就是权威清单**，
+ *      两台机器各写各的 `synchub/machine.json`，永远不冲突。
+ *
+ * 三条硬规则（可靠性来源）：
+ *   ① 落后远端时**禁止**写本机（必须先 pull），避免制造分叉；
+ *   ② 写本机前一律**备份**被覆盖/删除的文件；
+ *   ③ 任何破坏性动作（force、prune 全删）都必须显式传参，默认不做。
+ *
+ * 边界：不读密钥文件、不把凭据放进任何通道、不碰用户工作区自己的 .git。
  */
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 
 const execFileAsync = promisify(execFile);
+
 const name = 'dsh-synchub';
 const inject = ['webServer'];
+const VERSION = '0.3.0';
+const BRANCH = 'main';
 
-// —— 模块级诊断：证明「本模块到底有没有被宿主 import」——
-// 与 apply() 里的诊断配合，可区分两种失败：
-//   只有 module 行 → 模块进来了但 apply 没被调用；
-//   两行都有       → 插件正常加载（问题在路由层）；
-//   一行都没有     → 模块根本没被 import（bundle 没展开）。
-try {
-  const dir = path.join(os.homedir(), '.dsh', 'logs');
-  fs.mkdirSync(dir, { recursive: true });
-  fs.appendFileSync(
-    path.join(dir, 'dsh-synchub-boot.log'),
-    JSON.stringify({ at: new Date().toISOString(), phase: 'module', pid: process.pid }) + '\n',
-  );
-} catch { /* 诊断本身绝不影响加载 */ }
+/* ------------------------------------------------------------------ 路径 */
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-/** 找到宿主 profile 目录：从本文件所在目录往上走，遇到 node_modules 就取它的父目录。
- *  装到 <profile>/node_modules/dsh-synchub/lib/ 时，node_modules 的父目录正是 profile。
- *  这样不依赖 DSH_PROFILE 环境变量，两台机器路径不同也能正确工作。 */
+/** 宿主 profile 目录：从本文件往上找 node_modules 的父目录。 */
 function resolveProfileDir() {
   if (process.env.DSH_PROFILE_DIR) return process.env.DSH_PROFILE_DIR;
   let dir = HERE;
@@ -52,18 +53,123 @@ function resolveProfileDir() {
   }
   return path.join(process.env.DSH_HOME || path.join(os.homedir(), '.dsh'), 'profiles', 'desktop');
 }
+
 const PROFILE_DIR = resolveProfileDir();
+const PROFILE = path.basename(PROFILE_DIR) || 'desktop';
 const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
-const CONFIG_FILE = path.join(DSH_HOME, 'dsh-synchub', 'config.json');
+const STATE_ROOT = path.join(DSH_HOME, 'dsh-synchub');
+const REPO_ROOT = path.join(STATE_ROOT, 'repos');
+const BACKUP_ROOT = path.join(STATE_ROOT, 'backups');
+const CACHE_FILE = path.join(STATE_ROOT, 'hash-cache.json');
+const CONFIG_FILE = path.join(STATE_ROOT, 'config.json');
+const ACTIVE_SESSION = process.env.DSH_SESSION_ID || '';
+
+/* -------------------------------------------------------------- 同步面定义 */
+
+/**
+ * 一个「同步面」= 一组要同步的路径 + 一条安全等级。
+ *
+ * tier:
+ *   safe     随便同步，坏了也能重建
+ *   caution  同步前要想一下（可能含本机特有路径 / 端点地址）
+ *   danger   默认永不同步，只在目录地图里显示，防止误传密钥
+ */
+const SURFACES = [
+  {
+    id: 'sessions',
+    channel: 'sessions',
+    label: '会话记录',
+    tier: 'safe',
+    on: true,
+    roots: ['sessions'],
+    exclude: [],
+    note: 'zstd 多帧压缩的会话日志，按工作区绝对路径编码分目录',
+  },
+  {
+    id: 'storages',
+    channel: 'sessions',
+    label: '工作区登记表 / 投影缓存',
+    tier: 'safe',
+    on: true,
+    roots: ['storages'],
+    exclude: [/\.bak-/, /\.tmp$/],
+    note: 'workspace.json 决定会话归属；两台机器工作区路径必须一致',
+  },
+  {
+    id: 'attachments',
+    channel: 'sessions',
+    label: '附件池',
+    tier: 'safe',
+    on: true,
+    roots: ['attachments'],
+    exclude: [/[\\/]tmp[\\/]/],
+    note: 'sha256 内容寻址，跨工作区共享，与路径无关',
+  },
+  {
+    id: 'skills',
+    channel: 'config',
+    label: '技能库',
+    tier: 'safe',
+    on: true,
+    roots: ['skills', 'skill-manager'],
+    exclude: [/[\\/]\.skm-backups[\\/]/],
+    note: '技能文件与工作区登记；技能本身的安装走 dsh-market / skill-manager',
+  },
+  {
+    id: 'profileConfig',
+    channel: 'config',
+    label: 'DSH 配置层',
+    tier: 'caution',
+    on: true,
+    files: [`profiles/${PROFILE}/cordis.patch.yml`, `profiles/${PROFILE}/cordis.yml`],
+    exclude: [/\.bak-/],
+    note: 'patch 层（模型/端点/UI 设置）。本机实测只含 apiKeyEnv 变量名，不含密钥；但含 baseURL 等环境特有地址',
+  },
+  {
+    id: 'profileManifest',
+    channel: 'config',
+    label: '插件清单',
+    tier: 'danger',
+    on: false,
+    files: [`profiles/${PROFILE}/package.json`, `profiles/${PROFILE}/pnpm-workspace.yaml`],
+    exclude: [],
+    note: '含 link:C:/dsh/... 绝对路径；另一台没有同一路径会导致 DSH 启动失败，默认不同步',
+  },
+];
+
+/** 永不同步的目录/文件：只在地图里显示，并解释为什么不能同步。 */
+const DANGER_PATHS = [
+  { id: 'credentials', label: '凭据', paths: ['.credentials.yaml'], note: 'API key 等凭据，绝不进任何仓库' },
+  { id: 'traeAuth', label: 'Trae 登录态', paths: ['.trae-auth.cn.json', '.trae-auth.cn.json.bak'], note: '设备令牌' },
+  { id: 'workbuddy', label: 'WorkBuddy 设备身份', paths: ['.workbuddy-device.json', '.workbuddy-device-profiles.json', '.workbuddy-host-heartbeat.json', '.workbuddy-roster-seen.cn.json'], note: '设备标识，应各机各自登录' },
+  { id: 'mobileKeys', label: '移动访问私钥', paths: ['mobile-access'], note: 'iroh TLS 私钥（ca-key.pem/server-key.pem），泄露即中间人' },
+  { id: 'runtimes', label: '运行时与依赖', paths: ['dsh-runtimes', `profiles/${PROFILE}/node_modules`, `profiles/${PROFILE}/.pnpm`], note: '可重新生成（数百 MB），同步只会拖慢且会因平台差异失效' },
+  { id: 'caches', label: '插件缓存', paths: ['plugins', 'pixel-studio', 'workbuddy-vault', 'dsh-market'], note: '本地缓存/市场状态，重建即可' },
+  { id: 'quarantine', label: '隔离与历史备份', paths: ['_sessions-quarantine-20261112'], note: '疑似损坏的历史会话，留档用，不参与同步' },
+];
+
+const ALL_SURFACES = new Map(SURFACES.map(s => [s.id, s]));
+
+/* ------------------------------------------------------------------ 配置 */
 
 const DEFAULTS = {
-  workspace: 'C:\\dsh\\workspace1',
-  staleHours: 24,
-  beacon: true,
   machine: os.hostname(),
+  workspace: 'C:\\dsh\\workspace1',
+  channels: {
+    config: { remote: '', enabled: true },
+    sessions: { remote: '', enabled: true },
+  },
+  surfaces: Object.fromEntries(SURFACES.map(s => [s.id, s.on])),
+  idlePushMinutes: 20,
+  autoPush: false,
+  staleHours: 48,
 };
 
-const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' };
+const JSON_HEADERS = {
+  'content-type': 'application/json; charset=utf-8',
+  'cache-control': 'no-store',
+  'referrer-policy': 'no-referrer',
+};
 
 function json(res, code, body) {
   res.writeHead(code, JSON_HEADERS);
@@ -84,7 +190,7 @@ async function readBody(req) {
 
 function log(ctx, level, msg) {
   try {
-    const l = ctx.logger;
+    const l = ctx && ctx.logger;
     if (typeof l === 'function') return l(`[dsh-synchub] ${msg}`);
     if (l && typeof l[level] === 'function') return l[level](`[dsh-synchub] ${msg}`);
   } catch { /* fall through */ }
@@ -93,120 +199,1053 @@ function log(ctx, level, msg) {
 
 async function readConfig() {
   try {
-    const raw = await fsp.readFile(CONFIG_FILE, 'utf8');
-    const v = JSON.parse(raw);
-    return { ...DEFAULTS, ...(v && typeof v === 'object' ? v : {}) };
+    const v = JSON.parse(await fsp.readFile(CONFIG_FILE, 'utf8'));
+    return mergeConfig(DEFAULTS, v);
   } catch (e) {
-    if (e.code !== 'ENOENT') log({ logger: null }, 'warn', `config unreadable: ${e.message}`);
-    return { ...DEFAULTS };
+    if (e.code !== 'ENOENT') log(null, 'warn', `config unreadable: ${e.message}`);
+    return structuredClone(DEFAULTS);
   }
 }
 
-/** 只接受已知键，防止把任意内容写进配置（只读预检也走这里）。 */
-function sanitizeConfig(raw) {
-  const out = {};
-  if (Object.prototype.hasOwnProperty.call(raw, 'workspace') && typeof raw.workspace === 'string') out.workspace = raw.workspace.trim();
-  if (Object.prototype.hasOwnProperty.call(raw, 'staleHours') && Number.isFinite(Number(raw.staleHours))) {
-    out.staleHours = Math.min(720, Math.max(1, Math.trunc(Number(raw.staleHours))));
+function mergeConfig(base, patch) {
+  const out = structuredClone(base);
+  if (!patch || typeof patch !== 'object') return out;
+  if (typeof patch.machine === 'string' && patch.machine.trim()) out.machine = patch.machine.trim();
+  if (typeof patch.workspace === 'string') out.workspace = patch.workspace.trim();
+  if (Number.isFinite(Number(patch.idlePushMinutes))) {
+    out.idlePushMinutes = Math.min(720, Math.max(0, Math.trunc(Number(patch.idlePushMinutes))));
   }
-  if (Object.prototype.hasOwnProperty.call(raw, 'beacon') && typeof raw.beacon === 'boolean') out.beacon = raw.beacon;
-  if (Object.prototype.hasOwnProperty.call(raw, 'machine') && typeof raw.machine === 'string') {
-    out.machine = raw.machine.trim().replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 64);
+  if (typeof patch.autoPush === 'boolean') out.autoPush = patch.autoPush;
+  if (Number.isFinite(Number(patch.staleHours))) {
+    out.staleHours = Math.min(720, Math.max(1, Math.trunc(Number(patch.staleHours))));
+  }
+  if (patch.channels && typeof patch.channels === 'object') {
+    for (const ch of ['config', 'sessions']) {
+      const src = patch.channels[ch];
+      if (!src || typeof src !== 'object') continue;
+      if (typeof src.remote === 'string') out.channels[ch].remote = src.remote.trim();
+      if (typeof src.enabled === 'boolean') out.channels[ch].enabled = src.enabled;
+    }
+  }
+  if (patch.surfaces && typeof patch.surfaces === 'object') {
+    for (const s of SURFACES) {
+      if (typeof patch.surfaces[s.id] === 'boolean') out.surfaces[s.id] = patch.surfaces[s.id];
+    }
   }
   return out;
 }
 
 async function writeConfig(patch) {
-  const next = { ...(await readConfig()), ...sanitizeConfig(patch) };
-  await fsp.mkdir(path.dirname(CONFIG_FILE), { recursive: true });
+  const next = mergeConfig(await readConfig(), patch);
+  await fsp.mkdir(STATE_ROOT, { recursive: true });
   await fsp.writeFile(CONFIG_FILE, JSON.stringify(next, null, 2), 'utf8');
   return next;
 }
 
-/**
- * 读 chatsync 的落盘配置（$DSH_HOME/dsh-sync.json）。
- * 只看两件事：有没有连私有仓库、是否仍靠「首次同步自动建仓」。
- * 不调用 chatsync 的接口 —— 自检必须是只读快照，不能触发同步副作用。
- */
-async function readChatsyncChannel() {
-  const file = path.join(DSH_HOME, 'dsh-sync.json');
+/* -------------------------------------------------------------------- git */
+
+async function git(cwd, args, timeout = 20000) {
   try {
-    const raw = JSON.parse(await fsp.readFile(file, 'utf8'));
-    return { remote: typeof raw.remote === 'string' ? raw.remote : '', autoRepo: raw.autoRepo !== false };
-  } catch {
-    return { remote: '', autoRepo: true };
+    const { stdout, stderr } = await execFileAsync('git', ['-C', cwd, ...args], {
+      timeout,
+      windowsHide: true,
+      maxBuffer: 16 * 1024 * 1024,
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: '0',
+        GIT_OPTIONAL_LOCKS: '0',
+        GIT_AUTHOR_NAME: 'dsh-synchub',
+        GIT_AUTHOR_EMAIL: 'dsh-synchub@localhost',
+        GIT_COMMITTER_NAME: 'dsh-synchub',
+        GIT_COMMITTER_EMAIL: 'dsh-synchub@localhost',
+      },
+    });
+    return { ok: true, out: String(stdout || '').trim(), err: String(stderr || '').trim() };
+  } catch (e) {
+    return {
+      ok: false,
+      out: String(e.stdout || '').trim(),
+      err: String(e.stderr || e.message || '').trim(),
+      code: e.code,
+    };
   }
 }
 
-/**
- * 读 config-manager 的活动同步通道（$DSH_HOME/dsh-config-manager/sync-profiles/<profile>/sync-config.json）。
- * 各通道地址分散在 git.repoUrl / webdav.url / s3.* / gist.* 下，这里只提炼「配没配 + 哪个通道 + 地址」。
- */
-async function readConfigManagerChannel() {
-  const profile = path.basename(PROFILE_DIR) || 'desktop';
-  const file = path.join(DSH_HOME, 'dsh-config-manager', 'sync-profiles', profile, 'sync-config.json');
-  try {
-    const raw = JSON.parse(await fsp.readFile(file, 'utf8'));
-    const transport = typeof raw.transport === 'string' ? raw.transport : '';
-    const where =
-      (raw.git && raw.git.repoUrl) ||
-      (raw.webdav && raw.webdav.url) ||
-      (raw.s3 && (raw.s3.endpoint || raw.s3.bucket)) ||
-      (raw.gist && (raw.gist.gistId || raw.gist.id)) ||
-      '';
-    return { configured: Boolean(transport && where), transport, where: String(where || '') };
-  } catch {
-    return { configured: false, transport: '', where: '' };
-  }
+function repoDir(channel) {
+  return path.join(REPO_ROOT, channel);
 }
 
-/** 只读预检：逐项说清楚「能不能用」，不写任何东西。 */
-async function checkConfig(raw) {
-  const cfg = { ...DEFAULTS, ...sanitizeConfig(raw) };
-  const checks = [];
-  const push = (id, ok, detail) => checks.push({ id, ok, detail });
-  // —— 两条跨机通道的真实配置（只读落盘文件，不调用对方接口） ——
-  const chatsync = await readChatsyncChannel();
-  const configManager = await readConfigManagerChannel();
-  push('configFile', true, CONFIG_FILE);
-  push('machine', Boolean(cfg.machine), `机器名 = ${cfg.machine || '(空)'}（两台必须不同，否则信标互相覆盖）`);
-  push('dshHome', fs.existsSync(DSH_HOME), `${DSH_HOME} ${fs.existsSync(DSH_HOME) ? '存在' : '不存在'}`);
-  const root = cfg.workspace;
-  const isDir = root ? fs.existsSync(root) : false;
-  push('workspaceDir', isDir, `${root || '(空)'} ${isDir ? '存在' : '不存在'}`);
-  const isRepo = isDir && fs.existsSync(path.join(root, '.git'));
-  push('workspaceGit', isRepo, isRepo ? '是 Git 仓库' : '不是 Git 仓库（拉取/推送/信标不可用）');
-  if (isRepo) {
-    const remote = await git(root, ['remote', 'get-url', 'origin']);
-    // 没有 origin 并不等于「无法跨机同步」：chatsync 用自己独立的影子仓库
-    // （gitdir + tree）承载工作区内容，推到私有仓库的 ws/<id> 分支，不读写工作区的 .git。
-    // 所以这里只在有 origin 时校验它是否可用，没 origin 就降级为提示而非失败，
-    // 真正的跨机通道由下面的 chatsync 自检项负责。
-    if (remote.ok) {
-      push('workspaceRemote', true, `origin = ${remote.out}`);
-    } else {
-      push('workspaceRemote', true, '无 origin（正常：工作区内容由 chatsync 经 ws/<id> 分支同步，不依赖工作区自身远端）');
+function payloadDir(channel) {
+  return path.join(repoDir(channel), 'payload');
+}
+
+/**
+ * fetch 一个可能空的远端。远端仓库刚建、一次都没推过时，
+ * `fetch origin main` 会以 `couldn't find remote ref main` 报错 ——
+ * 那不是错误，是「远端还没有这个分支」。靠先探测是否有任何 ref 来区分。
+ */
+async function fetchRemote(channel, remote) {
+  const dir = repoDir(channel);
+  const anyRef = await git(dir, ['ls-remote', '--heads', 'origin'], 120000);
+  if (!anyRef.ok) return { ok: false, empty: false, error: anyRef.err || anyRef.out };
+  if (!anyRef.out) return { ok: true, empty: true };
+  const f = await git(dir, ['fetch', '--prune', 'origin', BRANCH], 120000);
+  if (!f.ok) return { ok: false, empty: false, error: f.err || f.out };
+  const up = await git(dir, ['rev-parse', '--verify', '--quiet', `origin/${BRANCH}`]);
+  return { ok: true, empty: !up.ok, output: f.out };
+}
+
+async function ensureRepo(channel, remote) {
+  const dir = repoDir(channel);
+  const fresh = !fs.existsSync(path.join(dir, '.git'));
+  await fsp.mkdir(dir, { recursive: true });
+
+  if (fresh) {
+    let r = await git(dir, ['init', '-b', BRANCH]);
+    if (!r.ok) {
+      // 老 git 没有 -b
+      await git(dir, ['init']);
+      await git(dir, ['symbolic-ref', 'HEAD', `refs/heads/${BRANCH}`]);
     }
-  } else push('workspaceRemote', false, '跳过（工作区不是 Git 仓库）');
-  // 仓库根目录的插件清单
-  const repoRoot = path.join(DSH_HOME, '..', 'dsh-plugins');
-  const listPath = path.join('C:\\dsh', 'dsh-plugins', 'list.json');
-  push('pluginList', fs.existsSync(listPath), listPath);
-  push('profileDir', fs.existsSync(path.join(PROFILE_DIR, 'package.json')), PROFILE_DIR);
+    // 二进制安全 + Windows 长路径 + 不留 GPG 交互
+    await git(dir, ['config', 'core.autocrlf', 'false']);
+    await git(dir, ['config', 'core.longpaths', 'true']);
+    await git(dir, ['config', 'core.safecrlf', 'false']);
+    await git(dir, ['config', 'commit.gpgsign', 'false']);
+    await git(dir, ['config', 'core.quotepath', 'false']);
+    await fsp.writeFile(
+      path.join(dir, '.gitattributes'),
+      '# 同步的是二进制/原样字节，禁止任何换行与编码转换\n* -text\n',
+      'utf8',
+    );
+    await fsp.writeFile(
+      path.join(dir, '.gitignore'),
+      '# 只提交 payload/ 与 synchub/，其余是运行时产物\n/backups/\n/hash-cache.json\n',
+      'utf8',
+    );
+  }
 
-  // —— 真正的跨机通道自检：直接读 chatsync / config-manager 的落盘配置 ——
-  // 之前只看工作区有没有 origin，但那个跟跨机无关；能同步与否由这两条通道决定。
-  push('chatsyncChannel', chatsync.remote !== '', chatsync.remote !== ''
-    ? `私有仓库 = ${chatsync.remote}（工作区经 ws/<id> 分支同步）`
-    : '未连私有仓库：设置 → 同步 里填仓库地址');
-  push('configChannel', configManager.configured, configManager.configured
-    ? `通道 = ${configManager.transport}（DSH 配置快照）`
-    : '未配同步通道：设置 → 备份与迁移 → 同步');
+  if (remote) {
+    const cur = await git(dir, ['remote', 'get-url', 'origin']);
+    if (!cur.ok) await git(dir, ['remote', 'add', 'origin', remote]);
+    else if (cur.out !== remote) await git(dir, ['remote', 'set-url', 'origin', remote]);
+  } else {
+    await git(dir, ['remote', 'remove', 'origin']).catch(() => {});
+  }
 
-  return { ok: checks.every(c => c.ok), checks, config: cfg, channels: { chatsync, configManager } };
+  return { dir, fresh };
 }
 
-/** 只接受同源 / 非跨站请求，与 chatsync 的 guard 同口径。 */
+/** 首次接入远端：把远端已有历史取下来，本地工作区对齐。 */
+async function bootstrapFromRemote(channel, remote) {
+  const dir = repoDir(channel);
+  const info = await ensureRepo(channel, remote);
+  if (!remote) return { ok: false, error: '未配置远端仓库' };
+
+  const fetched = await fetchRemote(channel, remote);
+  if (!fetched.ok) return { ok: false, error: `拉取远端失败：${fetched.error}` };
+  if (fetched.empty) {
+    // 远端还没有 main（刚建的空仓库）：本地继续用现有状态，等 commit/push 建基线
+    return { ok: true, fresh: true, info };
+  }
+  const localHead = await git(dir, ['rev-parse', '--verify', '--quiet', 'HEAD']);
+  if (!localHead.ok) {
+    // 本地还没有任何提交：先把自己脚手架/旧 payload 移开，再整枝对齐远端。
+    // 不直接 -f 检查：payload 里可能有本机还没推上去的会话，不能用远端版本简单盖掉。
+    const stash = path.join(BACKUP_ROOT, 'pre-bootstrap-' + new Date().toISOString().replace(/[:.]/g, '-'));
+    let moved = 0;
+    for (const sub of ['payload', 'synchub', '.gitattributes', '.gitignore']) {
+      const from = path.join(dir, sub);
+      if (!fs.existsSync(from)) continue;
+      const acc = [];
+      const st = await fsp.lstat(from).catch(() => null);
+      if (st && st.isDirectory()) await walkFiles(from, sub, [], acc);
+      else if (st && st.isFile()) acc.push({ rel: sub });
+      if (!acc.length) continue;
+      const to = path.join(stash, sub);
+      await fsp.mkdir(path.dirname(to), { recursive: true });
+      await fsp.rename(from, to).catch(async () => {
+        await fsp.cp(from, to, { recursive: true });
+        await fsp.rm(from, { recursive: true, force: true });
+      });
+      moved += acc.length;
+    }
+    const co = await git(dir, ['checkout', '-f', '-B', BRANCH, `origin/${BRANCH}`]);
+    if (!co.ok) return { ok: false, error: `检出远端分支失败：${co.err}` };
+    return { ok: true, adopted: true, stashed: moved, stashDir: moved ? stash : null };
+  }
+  await git(dir, ['branch', '--set-upstream-to', `origin/${BRANCH}`, BRANCH]);
+  return { ok: true };
+}
+
+/** 通道当前状态。带 opts.fetch 时先去远端刷新引用 —— 否则「落后」永远是旧值。 */
+async function channelState(channel, cfg, opts = {}) {
+  const conf = cfg.channels[channel] || {};
+  const dir = repoDir(channel);
+  const out = {
+    channel,
+    remote: conf.remote || '',
+    enabled: conf.enabled !== false,
+    initialized: fs.existsSync(path.join(dir, '.git')),
+    branch: BRANCH,
+    ahead: 0,
+    behind: 0,
+    dirty: 0,
+    files: 0,
+    lastCommitAt: null,
+    lastCommit: null,
+    remoteCommitAt: null,
+    remoteMachine: null,
+    fetched: false,
+    error: null,
+  };
+  if (!out.initialized) {
+    out.error = 'not-initialized';
+    return out;
+  }
+
+  const head = await git(dir, ['rev-parse', '--verify', '--quiet', 'HEAD']);
+  if (head.ok) {
+    const last = await git(dir, ['log', '-1', '--format=%cI%x09%s']);
+    if (last.ok && last.out) {
+      const [at, ...rest] = last.out.split('\t');
+      out.lastCommitAt = at || null;
+      out.lastCommit = rest.join('\t') || null;
+    }
+    const count = await git(dir, ['ls-tree', '-r', '--name-only', 'HEAD']);
+    if (count.ok) out.files = count.out ? count.out.split('\n').filter(Boolean).length : 0;
+  }
+
+  // ⚠ 必须能区分「查过了与远端一致」与「根本没查」。
+  // 不 fetch 就直接读 origin/main，永远看到的是上次 fetch 的旧快照，
+  // 会把「另一台刚推过」误报成「与远端一致」。
+  if (out.remote) {
+    if (opts.fetch) {
+      const fr = await fetchRemote(channel, out.remote);
+      out.fetched = fr.ok;
+      if (!fr.ok) out.error = `fetch-failed: ${fr.error}`;
+      if (fr.ok && fr.empty) out.remoteEmpty = true;
+    }
+    const up = await git(dir, ['rev-parse', '--verify', '--quiet', `origin/${BRANCH}`]);
+    if (up.ok) {
+      if (head.ok) {
+        const counts = await git(dir, ['rev-list', '--left-right', '--count', `HEAD...origin/${BRANCH}`]);
+        if (counts.ok) {
+          const m = /^(\d+)\s+(\d+)/.exec(counts.out);
+          if (m) {
+            out.ahead = Number(m[1]);
+            out.behind = Number(m[2]);
+          }
+        }
+      } else {
+        // 本地无提交但远端有 → 整枝都算要拉的
+        out.behind = 1;
+      }
+      const rl = await git(dir, ['log', '-1', '--format=%cI', `origin/${BRANCH}`]);
+      if (rl.ok) out.remoteCommitAt = rl.out || null;
+      const st = await parseStamp(channel);
+      if (st) {
+        out.remoteMachine = st.machine;
+        out.remoteStampAt = st.at;
+      }
+    }
+  }
+
+  const dirty = await git(dir, ['status', '--porcelain', '-uno']);
+  if (dirty.ok) out.dirty = dirty.out ? dirty.out.split('\n').filter(Boolean).length : 0;
+  return out;
+}
+
+/* ------------------------------------------------------- 文件扫描与指纹 */
+
+const SKIP_DIRS = new Set(['node_modules', '.git', '.pnpm', '.cache', 'tmp']);
+const MAX_FILE_BYTES = 200 * 1024 * 1024;
+
+function toPosix(p) {
+  return p.split(path.sep).join('/');
+}
+
+function excluded(rel, patterns) {
+  if (!patterns || !patterns.length) return false;
+  const posix = toPosix(rel);
+  return patterns.some(re => re.test(posix) || re.test(rel));
+}
+
+async function walkFiles(absRoot, relPrefix, patterns, acc, depth = 0) {
+  if (depth > 12) return;
+  let entries;
+  try {
+    entries = await fsp.readdir(absRoot, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const ent of entries) {
+    const abs = path.join(absRoot, ent.name);
+    const rel = relPrefix ? `${relPrefix}/${ent.name}` : ent.name;
+    if (excluded(rel, patterns)) continue;
+    if (ent.isSymbolicLink()) continue; // junction / 硬链接不跟（.pnpm 全是这种）
+    if (ent.isDirectory()) {
+      if (SKIP_DIRS.has(ent.name)) continue;
+      await walkFiles(abs, rel, patterns, acc, depth + 1);
+      continue;
+    }
+    if (!ent.isFile()) continue;
+    let st;
+    try {
+      st = await fsp.lstat(abs);
+    } catch {
+      continue;
+    }
+    if (st.size > MAX_FILE_BYTES) continue;
+    acc.push({ rel, abs, size: st.size, mtimeMs: st.mtimeMs });
+  }
+}
+
+function surfaceEnabled(surface, cfg) {
+  // danger 级别（插件清单）无论开关如何都不进同步，避免把 link: 绝对路径传到另一台
+  return Boolean(cfg.surfaces[surface.id]) && surface.tier !== 'danger';
+}
+
+/** 枚举某个同步面在本机的实际文件。 */
+async function surfaceFiles(surface) {
+  const acc = [];
+  const patterns = surface.exclude || [];
+  for (const root of surface.roots || []) {
+    const abs = path.join(DSH_HOME, root);
+    await walkFiles(abs, root, patterns, acc);
+  }
+  for (const rel of surface.files || []) {
+    if (excluded(rel, patterns)) continue;
+    const abs = path.join(DSH_HOME, rel);
+    try {
+      const st = await fsp.lstat(abs);
+      if (st.isFile() && st.size <= MAX_FILE_BYTES) acc.push({ rel, abs, size: st.size, mtimeMs: st.mtimeMs });
+    } catch { /* 不存在就跳过 */ }
+  }
+  return acc;
+}
+
+/** 本机所有启用同步面的文件（rel 为 DSH_HOME 相对路径，posix 分隔）。 */
+async function enabledFiles(cfg) {
+  const all = [];
+  const perSurface = {};
+  for (const s of SURFACES) {
+    if (!surfaceEnabled(s, cfg)) {
+      perSurface[s.id] = 0;
+      continue;
+    }
+    const files = await surfaceFiles(s);
+    perSurface[s.id] = files.length;
+    for (const f of files) all.push({ ...f, surface: s.id, channel: s.channel });
+  }
+  return { files: all, perSurface };
+}
+
+let cache = null;
+async function loadCache() {
+  if (cache) return cache;
+  try {
+    cache = JSON.parse(await fsp.readFile(CACHE_FILE, 'utf8'));
+  } catch {
+    cache = {};
+  }
+  return cache;
+}
+
+async function saveCache() {
+  try {
+    await fsp.mkdir(STATE_ROOT, { recursive: true });
+    await fsp.writeFile(CACHE_FILE, JSON.stringify(cache || {}, null, 0), 'utf8');
+  } catch { /* 缓存写不了不影响正确性 */ }
+}
+
+function sha256File(abs) {
+  return new Promise((resolve, reject) => {
+    const h = crypto.createHash('sha256');
+    const s = fs.createReadStream(abs);
+    s.on('data', d => h.update(d));
+    s.on('end', () => resolve(h.digest('hex')));
+    s.on('error', reject);
+  });
+}
+
+/** 带 mtime/size 缓存的指纹；只有变动才真正重算。 */
+async function fingerprint(file) {
+  const c = await loadCache();
+  const prev = c[file.rel];
+  if (prev && prev.size === file.size && prev.mtimeMs === file.mtimeMs && prev.sha256) {
+    return prev.sha256;
+  }
+  const sha = await sha256File(file.abs);
+  c[file.rel] = { sha256: sha, size: file.size, mtimeMs: file.mtimeMs };
+  return sha;
+}
+
+/* ------------------------------------------------- 本机 ↔ payload 的差异 */
+
+/**
+ * 算「本机 → payload」要做什么。
+ * added    : 本机有、payload 没有或内容不同 → 需要写进 payload
+ * removed  : payload 有、本机没有 → 需要从 payload 删掉（同步删除动作）
+ * unchanged: 一致
+ */
+async function diffLocalToPayload(cfg, opts = {}) {
+  const { files } = await enabledFiles(cfg);
+  const added = [];
+  const unchanged = [];
+  const removed = [];
+  const renamed = [];
+
+  // payload 每通道只扫一次，后面复用（避免重复 readdir 与重复哈希）
+  const payloadIndex = { config: new Map(), sessions: new Map() };
+  for (const ch of ['config', 'sessions']) {
+    const acc = [];
+    await walkFiles(payloadDir(ch), '', [], acc);
+    for (const item of acc) payloadIndex[ch].set(toPosix(item.rel), item);
+  }
+
+  for (const f of files) {
+    const sha = await fingerprint(f);
+    const existing = payloadIndex[f.channel].get(f.rel);
+    let same = false;
+    if (existing && existing.size === f.size) {
+      same = (await sha256File(existing.abs)) === sha;
+    }
+    if (same) {
+      unchanged.push(f.rel);
+    } else {
+      added.push({ rel: f.rel, channel: f.channel, surface: f.surface, size: f.size, sha256: sha, abs: f.abs });
+    }
+  }
+
+  // payload 里有、本机没有，且属于某个启用面 → 需要从 payload 删除
+  const present = new Set(files.map(f => `${f.channel}\u0000${f.rel}`));
+  const seen = new Set();
+  for (const s of SURFACES) {
+    if (!surfaceEnabled(s, cfg)) continue;
+    for (const rel of payloadIndex[s.channel].keys()) {
+      if (present.has(`${s.channel}\u0000${rel}`)) continue;
+      if (!belongsTo(s, rel)) continue;
+      const key = `${s.channel}\u0000${rel}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      removed.push({ rel, channel: s.channel, surface: s.id });
+    }
+  }
+
+  return { added, unchanged, removed };
+}
+
+/** 判断某个 rel 是否属于该同步面（用于 prune 时只删自己的地盘）。 */
+function belongsTo(surface, rel) {
+  const patterns = surface.exclude || [];
+  if (excluded(rel, patterns)) return false;
+  for (const root of surface.roots || []) {
+    if (rel === root || rel.startsWith(`${root}/`)) return true;
+  }
+  for (const f of surface.files || []) {
+    if (rel === f) return true;
+  }
+  return false;
+}
+
+/* -------------------------------------------------------------- 动作：stage */
+
+async function stageChanges(cfg, opts = {}) {
+  const diff = await diffLocalToPayload(cfg);
+  const written = [];
+  const deleted = [];
+  const skipped = [];
+
+  for (const a of diff.added) {
+    if (opts.onlySurface && a.surface !== opts.onlySurface) {
+      skipped.push(a.rel);
+      continue;
+    }
+    const target = path.join(payloadDir(a.channel), a.rel);
+    await fsp.mkdir(path.dirname(target), { recursive: true });
+    await fsp.copyFile(a.abs, target);
+    written.push(a.rel);
+  }
+
+  for (const item of diff.removed) {
+    if (opts.onlySurface && item.surface !== opts.onlySurface) continue;
+    const target = path.join(payloadDir(item.channel), item.rel);
+    if (fs.existsSync(target)) {
+      await fsp.rm(target, { force: true });
+      deleted.push(item.rel);
+    }
+  }
+
+  await saveCache();
+
+  for (const ch of ['config', 'sessions']) {
+    const dir = repoDir(ch);
+    if (!fs.existsSync(path.join(dir, '.git'))) continue;
+    await git(dir, ['add', '-A']);
+  }
+
+  return {
+    ok: true,
+    written: written.length,
+    deleted: deleted.length,
+    sample: written.slice(0, 20),
+    deletedSample: deleted.slice(0, 20),
+    skipped: skipped.length,
+  };
+}
+
+/* ------------------------------------------------------------ 动作：commit */
+
+async function commitChanges(cfg, message) {
+  const results = {};
+  for (const ch of ['config', 'sessions']) {
+    const dir = repoDir(ch);
+    if (!fs.existsSync(path.join(dir, '.git'))) {
+      results[ch] = { ok: false, reason: 'not-initialized' };
+      continue;
+    }
+    const st = await git(dir, ['status', '--porcelain', '-uno']);
+    if (!st.ok) {
+      results[ch] = { ok: false, reason: st.err || 'status-failed' };
+      continue;
+    }
+    if (!st.out) {
+      results[ch] = { ok: true, committed: false, reason: 'nothing-to-commit' };
+      continue;
+    }
+    const msg = message || `synchub: ${cfg.machine} @ ${new Date().toISOString()}`;
+    // 尾注必须带：环境切换检测和「最近推送来自哪台」全靠它。
+    // 早先这里漏了尾注，导致 switched 永远是 false（推了也认不出是谁推的）。
+    const c = await git(dir, ['commit', '-m', msg + stampTrailer(cfg)]);
+    results[ch] = c.ok
+      ? { ok: true, committed: true }
+      : { ok: false, reason: c.err || c.out || 'commit-failed' };
+  }
+  return results;
+}
+
+/* --------------------------------------------------------- 动作：push/pull */
+
+/* 机器身份用**提交消息尾注**传达，不写共享文件。
+   早先版本把 synchub/machine.json 提交进仓库，导致两台机器每次推送都改同一个文件，
+   结果每次推送都制造一个真分叉（ff-only 永远拉不下来）。尾注方案没有共享文件：
+   各机器只写自己的提交，读时从 origin/main 的 log 里解析。 */
+const STAMP_MACHINE = 'Synchub-Machine';
+const STAMP_AT = 'Synchub-At';
+
+function stampTrailer(cfg) {
+  return `\n\n${STAMP_MACHINE}: ${cfg.machine || os.hostname()}\n${STAMP_AT}: ${new Date().toISOString()}`;
+}
+
+/**
+ * 从提交消息尾注解析「最近一次推送来自哪台」。
+ * 优先看 origin/main（= 远端现状），没有才回退 HEAD。
+ */
+async function parseStamp(channel, { remoteOnly = false } = {}) {
+  const dir = repoDir(channel);
+  if (!fs.existsSync(path.join(dir, '.git'))) return null;
+  const refs = remoteOnly ? [`origin/${BRANCH}`] : [`origin/${BRANCH}`, 'HEAD'];
+  for (const ref of refs) {
+    const r = await git(dir, ['log', '-1', '--format=%B', ref]);
+    if (!r.ok || !r.out) continue;
+    const machine = new RegExp(`^${STAMP_MACHINE}:\\s*(.+)$`, 'm').exec(r.out);
+    const at = new RegExp(`^${STAMP_AT}:\\s*(.+)$`, 'm').exec(r.out);
+    if (machine) return { machine: machine[1].trim(), at: at ? at[1].trim() : null, ref };
+  }
+  return null;
+}
+
+async function pushChannels(cfg, opts = {}) {
+  const out = {};
+  const message = opts.message || `synchub: ${cfg.machine} @ ${new Date().toISOString()}`;
+  for (const ch of ['config', 'sessions']) {
+    const conf = cfg.channels[ch] || {};
+    if (conf.enabled === false) {
+      out[ch] = { ok: true, skipped: 'disabled' };
+      continue;
+    }
+    const dir = repoDir(ch);
+    if (!fs.existsSync(path.join(dir, '.git'))) {
+      out[ch] = { ok: false, reason: 'not-initialized' };
+      continue;
+    }
+    if (!conf.remote) {
+      out[ch] = { ok: false, reason: 'no-remote' };
+      continue;
+    }
+
+    // ⚠ 顺序故意是「先 fetch 判落后 → 再 commit → 再 push」。
+    // 早先版本先 commit 再检查，落后时会先在本地凭空造一个分叉提交，
+    // 之后 ff-only 永远拉不下来 —— 只能人工 reset。
+    const f = await fetchRemote(ch, conf.remote);
+    if (!f.ok) {
+      out[ch] = { ok: false, reason: `fetch-failed: ${f.error}` };
+      continue;
+    }
+    if (!f.empty) {
+      const counts = await git(dir, ['rev-list', '--left-right', '--count', `HEAD...origin/${BRANCH}`]);
+      if (counts.ok) {
+        const m = /^(\d+)\s+(\d+)/.exec(counts.out);
+        if (m && Number(m[2]) > 0) {
+          out[ch] = { ok: false, reason: 'behind-remote', behind: Number(m[2]), hint: '先拉取再推送' };
+          continue;
+        }
+      }
+    }
+
+    await git(dir, ['add', '-A']);
+    const st = await git(dir, ['status', '--porcelain', '-uno']);
+    let committed = false;
+    if (st.ok && st.out) {
+      const c = await git(dir, ['commit', '-m', message + stampTrailer(cfg)]);
+      if (!c.ok) {
+        out[ch] = { ok: false, reason: c.err || c.out || 'commit-failed' };
+        continue;
+      }
+      committed = true;
+    }
+
+    const hasHead = await git(dir, ['rev-parse', '--verify', '--quiet', 'HEAD']);
+    if (!hasHead.ok) {
+      out[ch] = { ok: true, committed: false, reason: 'nothing-to-push' };
+      continue;
+    }
+
+    const r = await git(dir, ['push', '-u', 'origin', `${BRANCH}:${BRANCH}`], 180000);
+    out[ch] = r.ok
+      ? { ok: true, committed, output: r.err || r.out }
+      : { ok: false, reason: r.err || r.out || 'push-failed' };
+  }
+  return out;
+}
+
+async function pullChannels(cfg) {
+  const out = {};
+  for (const ch of ['config', 'sessions']) {
+    const conf = cfg.channels[ch] || {};
+    if (conf.enabled === false) {
+      out[ch] = { ok: true, skipped: 'disabled' };
+      continue;
+    }
+    const dir = repoDir(ch);
+    if (!fs.existsSync(path.join(dir, '.git'))) {
+      if (!conf.remote) {
+        out[ch] = { ok: false, reason: 'no-remote' };
+        continue;
+      }
+      const boot = await bootstrapFromRemote(ch, conf.remote);
+      out[ch] = boot.ok ? { ok: true, bootstrapped: true, boot } : { ok: false, reason: boot.error };
+      continue;
+    }
+    // 仓库已 init 但还没任何提交（= 首次运行）也要走 bootstrap，
+    // 否则下面的 ff-only merge 会撞上我们自己的 .gitattributes 脚手架。
+    const hasHead = await git(dir, ['rev-parse', '--verify', '--quiet', 'HEAD']);
+    if (!hasHead.ok) {
+      if (!conf.remote) {
+        out[ch] = { ok: false, reason: 'no-remote' };
+        continue;
+      }
+      const boot = await bootstrapFromRemote(ch, conf.remote);
+      out[ch] = boot.ok ? { ok: true, bootstrapped: true, boot } : { ok: false, reason: boot.error };
+      continue;
+    }
+    if (!conf.remote) {
+      out[ch] = { ok: false, reason: 'no-remote' };
+      continue;
+    }
+    const f = await fetchRemote(ch, conf.remote);
+    if (!f.ok) {
+      out[ch] = { ok: false, reason: `fetch-failed: ${f.error}` };
+      continue;
+    }
+    if (f.empty) {
+      out[ch] = { ok: true, emptyRemote: true };
+      continue;
+    }
+    const mb = await git(dir, ['merge', '--ff-only', `origin/${BRANCH}`]);
+    out[ch] = mb.ok
+      ? { ok: true, output: mb.out || 'up-to-date' }
+      : { ok: false, reason: `需要人工处理（非快进）：${mb.err || mb.out}` };
+  }
+  return out;
+}
+
+/* --------------------------------------------------------- 动作：apply 到本机 */
+
+/**
+ * 把 payload 写回 $DSH_HOME。
+ * - 覆盖/删除前一律备份到 backups/<ts>/
+ * - 跳过当前正在写入的会话（DSH_SESSION_ID），避免把活着的日志覆盖坏
+ */
+async function applyPayload(cfg, opts = {}) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backupDir = path.join(BACKUP_ROOT, stamp);
+  const written = [];
+  const deleted = [];
+  const skipped = [];
+  let backedUp = 0;
+
+  const skipActive = rel => Boolean(ACTIVE_SESSION) && rel.includes(ACTIVE_SESSION);
+
+  for (const s of SURFACES) {
+    if (!surfaceEnabled(s, cfg)) continue;
+    if (opts.onlySurface && s.id !== opts.onlySurface) continue;
+    const base = payloadDir(s.channel);
+    const acc = [];
+    await walkFiles(base, '', [], acc);
+    for (const item of acc) {
+      const rel = toPosix(item.rel);
+      if (!belongsTo(s, rel)) continue;
+      if (skipActive(rel)) {
+        skipped.push(rel);
+        continue;
+      }
+      const dest = path.join(DSH_HOME, rel);
+      let same = false;
+      try {
+        const st = await fsp.lstat(dest);
+        if (st.size === item.size) same = (await sha256File(dest)) === (await sha256File(item.abs));
+      } catch { /* 不存在 */ }
+      if (!same) {
+        if (fs.existsSync(dest)) {
+          const b = path.join(backupDir, rel);
+          await fsp.mkdir(path.dirname(b), { recursive: true });
+          await fsp.copyFile(dest, b);
+          backedUp += 1;
+        }
+        await fsp.mkdir(path.dirname(dest), { recursive: true });
+        await fsp.copyFile(item.abs, dest);
+        written.push(rel);
+      }
+    }
+  }
+
+  // 删除：本机有、payload 没有（只在启用面内，且必须显式传 prune）
+  if (opts.prune && !opts.onlySurface) {
+    const { files } = await enabledFiles(cfg);
+    const present = new Set(files.map(f => f.rel));
+    for (const s of SURFACES) {
+      if (!surfaceEnabled(s, cfg)) continue;
+      const base = payloadDir(s.channel);
+      const acc = [];
+      await walkFiles(base, '', [], acc);
+      const keep = new Set(acc.map(i => toPosix(i.rel)));
+      for (const rel of present) {
+        if (!belongsTo(s, rel)) continue;
+        if (keep.has(rel)) continue;
+        if (skipActive(rel)) continue;
+        const target = path.join(DSH_HOME, rel);
+        if (!fs.existsSync(target)) continue;
+        // 删除也要备份 —— 否则 prune 就是不可逆操作。
+        const b = path.join(backupDir, rel);
+        await fsp.mkdir(path.dirname(b), { recursive: true });
+        await fsp.copyFile(target, b);
+        backedUp += 1;
+        await fsp.rm(target, { force: true });
+        deleted.push(rel);
+        await pruneEmptyParents(path.dirname(target), s);
+      }
+    }
+  }
+
+/**
+ * 删文件后清掉空的父目录，但**不越过同步面根**。
+ * 不清理会留一堆空 session-xxx 目录，下次扫描/地图还会把它们当真的；
+ * 清理过头又会把用户目录删了，所以边界固定在 surface 根。
+ */
+async function pruneEmptyParents(dir, surface) {
+  const roots = (surface.roots || []).map(r => path.join(DSH_HOME, r));
+  let cur = dir;
+  for (let i = 0; i < 12; i++) {
+    if (!roots.some(r => cur === r || cur.startsWith(r + path.sep))) return;
+    if (roots.some(r => cur === r)) return;
+    const left = await fsp.readdir(cur).catch(() => null);
+    if (!left || left.length) return;
+    await fsp.rmdir(cur).catch(() => {});
+    cur = path.dirname(cur);
+  }
+}
+
+  // 覆盖后指纹缓存失效
+  cache = {};
+  await saveCache();
+
+  return {
+    ok: true,
+    written: written.length,
+    deleted: deleted.length,
+    skipped: skipped.length,
+    backedUp,
+    backupDir: written.length || deleted.length ? backupDir : null,
+    sample: written.slice(0, 20),
+  };
+}
+
+/* ------------------------------------------------------------ 环境切换检测 */
+
+async function remoteStamp(cfg) {
+  // 只看 origin/main：要回答的是「远端最近一次是谁推的」。
+  // 若都读不到尾注，返回 null，界面会显式说未知而不是假装一致。
+  // 两个通道都查，取时间戳更新的那个：可能只有会话通道被推过。
+  const a = await parseStamp('config', { remoteOnly: true });
+  const b = await parseStamp('sessions', { remoteOnly: true });
+  if (!a) return b;
+  if (!b) return a;
+  return String(b.at || '') > String(a.at || '') ? b : a;
+}
+
+/* -------------------------------------------------------------- 只读体检 */
+
+async function checkAll(cfg) {
+  const checks = [];
+  const push = (id, ok, detail, action) => checks.push({ id, ok: Boolean(ok), detail, action: action || null });
+
+  push('dshHome', fs.existsSync(DSH_HOME), `${DSH_HOME} ${fs.existsSync(DSH_HOME) ? '存在' : '不存在'}`);
+
+  const g = await git(DSH_HOME, ['--version'], 8000);
+  push('git', g.ok, g.ok ? g.out : '未找到 git，同步全部不可用');
+
+  for (const ch of ['config', 'sessions']) {
+    const conf = cfg.channels[ch] || {};
+    const st = await channelState(ch, cfg, { fetch: true });
+    const label = ch === 'config' ? '配置通道' : '会话通道';
+    push(`${ch}Remote`, Boolean(conf.remote), conf.remote || `${label}未配置远端仓库`, conf.remote ? null : `在「同步中心 · 设置」里填${label}的私有仓库地址`);
+    if (conf.remote && st.initialized) {
+      push(`${ch}Behind`, st.behind === 0, st.behind > 0 ? `落后远端 ${st.behind} 个提交` : '与远端一致（未落后）', st.behind > 0 ? '先点「拉取」再改本机' : null);
+      push(`${ch}Dirty`, st.dirty === 0, st.dirty > 0 ? `payload 有 ${st.dirty} 处未提交` : 'payload 干净', st.dirty > 0 ? '点「提交并推送」' : null);
+    }
+  }
+
+  const stamp = await remoteStamp(cfg);
+  if (stamp) {
+    const same = stamp.machine === (cfg.machine || os.hostname());
+    push('machineSwitch', same, same
+      ? `最近一次推送来自本机（${stamp.machine}）`
+      : `最近一次推送来自另一台机器 ${stamp.machine}（${stamp.at}）→ 先 pull 再开始工作`,
+      same ? null : '点「拉取并应用」把另一台的状态同步过来');
+  }
+
+  // 工作区路径一致性（方案 1：两台机器同一绝对路径）
+  const wsPath = cfg.workspace;
+  push('workspaceDir', Boolean(wsPath) && fs.existsSync(wsPath), `${wsPath || '(未设置)'} ${wsPath && fs.existsSync(wsPath) ? '存在' : '不存在'}`, wsPath && !fs.existsSync(wsPath) ? '两台机器工作区必须放在完全相同的绝对路径' : null);
+
+  // 危险项：确认没有把密钥面打开
+  const leaked = [];
+  for (const d of DANGER_PATHS) {
+    if (d.id === 'runtimes' || d.id === 'caches' || d.id === 'quarantine' || d.id === 'mobileKeys') continue;
+    for (const p of d.paths) {
+      if (fs.existsSync(path.join(DSH_HOME, p))) leaked.push(p);
+    }
+  }
+  const credInPayload = [];
+  for (const ch of ['config', 'sessions']) {
+    const base = payloadDir(ch);
+    for (const p of ['.credentials.yaml', '.trae-auth.cn.json']) {
+      if (fs.existsSync(path.join(base, p))) credInPayload.push(path.join(base, p));
+    }
+  }
+  push('noSecrets', credInPayload.length === 0,
+    credInPayload.length === 0 ? '同步目录里没有凭据文件' : `同步目录里发现凭据：${credInPayload.join(', ')}`,
+    credInPayload.length ? '立刻删除这些文件并从历史中清理' : null);
+
+  return { ok: checks.every(c => c.ok), checks };
+}
+
+/* ---------------------------------------------------------------- 目录地图 */
+
+async function mapInfo(cfg, opts = {}) {
+  const rows = [];
+  for (const s of SURFACES) {
+    const files = await surfaceFiles(s);
+    const size = files.reduce((a, f) => a + f.size, 0);
+    rows.push({
+      id: s.id,
+      label: s.label,
+      paths: (s.roots || []).concat(s.files || []),
+      tier: s.tier,
+      syncOn: surfaceEnabled(s, cfg),
+      channel: s.channel,
+      files: files.length,
+      bytes: size,
+      note: s.note,
+      exists: files.length > 0,
+    });
+  }
+  for (const d of DANGER_PATHS) {
+    let bytes = 0;
+    let files = 0;
+    let exists = false;
+    for (const p of d.paths) {
+      const abs = path.join(DSH_HOME, p);
+      if (!fs.existsSync(abs)) continue;
+      exists = true;
+      if (opts.deep && !['runtimes', 'caches'].includes(d.id)) {
+        const acc = [];
+        const st = await fsp.lstat(abs).catch(() => null);
+        if (st && st.isDirectory()) await walkFiles(abs, p, [], acc);
+        else if (st && st.isFile()) acc.push({ rel: p, size: st.size });
+        files += acc.length;
+        bytes += acc.reduce((a, f) => a + (f.size || 0), 0);
+      }
+    }
+    rows.push({
+      id: d.id,
+      label: d.label,
+      paths: d.paths,
+      tier: 'danger',
+      syncOn: false,
+      channel: null,
+      files,
+      bytes,
+      note: d.note,
+      exists,
+      deep: Boolean(opts.deep),
+    });
+  }
+  return { dshHome: DSH_HOME, profileDir: PROFILE_DIR, profile: PROFILE, stateRoot: STATE_ROOT, rows };
+}
+
+/* ------------------------------------------------------------ 待办清单 */
+
+async function preflight(cfg) {
+  const steps = [];
+  const add = (id, state, title, detail, action) => steps.push({ id, state, title, detail, action: action || null });
+
+  const channels = {
+    config: await channelState('config', cfg, { fetch: true }),
+    sessions: await channelState('sessions', cfg, { fetch: true }),
+  };
+  const stamp = await remoteStamp(cfg);
+  const switched = Boolean(stamp && stamp.machine !== (cfg.machine || os.hostname()));
+
+  add('dshHome', fs.existsSync(DSH_HOME) ? 'ok' : 'fail', 'DSH 数据目录',
+    DSH_HOME, null);
+
+  const noRemote = ['config', 'sessions'].filter(ch => !(cfg.channels[ch] || {}).remote);
+  add('remote', noRemote.length === 0 ? 'ok' : 'need',
+    '远端仓库已配置',
+    noRemote.length ? `未配置：${noRemote.join('、')}` : '配置通道与会话通道都已连到私有仓库',
+    noRemote.length ? '在设置里填仓库地址（https://github.com/<你>/<私有仓库>.git）' : null);
+
+  // 未初始化的通道不能算「与远端一致」—— 那是没查，不是查过没问题。
+  const notInit = ['config', 'sessions'].filter(ch => (cfg.channels[ch] || {}).remote && !channels[ch].initialized);
+  const behind = Math.max(channels.config.behind || 0, channels.sessions.behind || 0);
+  add('pull', behind === 0 && notInit.length === 0 ? 'ok' : 'need',
+    '先拉取远端',
+    notInit.length
+      ? `${notInit.join('、')}通道还没接入远端（首次拉取会自动建立连接）`
+      : behind === 0
+        ? '与远端一致'
+        : `落后远端 ${behind} 个提交${switched ? `（另一台 ${stamp.machine} 推过）` : ''}`,
+    behind === 0 && notInit.length === 0 ? null : '点「拉取并应用」，把远端状态取到本机');
+
+  const unpushed = Math.max(channels.config.ahead || 0, channels.sessions.ahead || 0);
+  add('push', unpushed === 0 ? 'ok' : 'need',
+    '推送本机改动',
+    unpushed === 0 ? '没有未推送的提交' : `${unpushed} 个提交未推送`,
+    unpushed === 0 ? null : '点「提交并推送」');
+
+  const dirty = (channels.config.dirty || 0) + (channels.sessions.dirty || 0);
+  add('stage', dirty === 0 ? 'ok' : 'need',
+    '暂存本机变动',
+    dirty === 0 ? 'payload 已对齐本机' : `${dirty} 处变动还没进 payload`,
+    dirty === 0 ? null : '点「扫描本机变动」或直接「提交并推送」');
+
+  const ws = cfg.workspace;
+  const wsOk = Boolean(ws && fs.existsSync(ws));
+  add('workspace', wsOk ? 'ok' : 'fail', '工作区路径',
+    wsOk ? `${ws}（两台机器必须完全相同）` : `${ws || '(未设置)'} 不存在`,
+    wsOk ? null : '把工作区放到与另一台完全相同的绝对路径');
+
+  const check = await checkAll(cfg);
+  const failed = check.checks.filter(c => !c.ok);
+  add('audit', failed.length === 0 ? 'ok' : 'warn', '只读体检',
+    failed.length === 0 ? '全部通过' : `${failed.length} 项待处理：${failed.map(f => f.id).join('、')}`,
+    failed.length ? '在设置面板点「检查」看逐项说明' : null);
+
+  const order = steps.filter(s => s.state !== 'ok');
+  return {
+    machine: cfg.machine,
+    switched,
+    stamp,
+    steps,
+    todo: order.length,
+    verdict: order.length === 0 ? '可以开始工作' : order[0].title,
+  };
+}
+
+/* ------------------------------------------------------------------ 诊断 */
+
+async function diag(extra) {
+  try {
+    const dir = path.join(DSH_HOME, 'logs');
+    await fsp.mkdir(dir, { recursive: true });
+    await fsp.appendFile(
+      path.join(dir, 'dsh-synchub-boot.log'),
+      `${JSON.stringify({ at: new Date().toISOString(), pid: process.pid, version: VERSION, ...extra })}\n`,
+      'utf8',
+    );
+  } catch { /* 诊断失败不影响插件 */ }
+}
+
+/* -------------------------------------------------------------- 空闲自动推 */
+
+const runtime = {
+  lastActivity: Date.now(),
+  lastAutoPushAt: null,
+  lastAutoResult: null,
+  timer: null,
+  busy: null,
+};
+
+function touchActivity() {
+  runtime.lastActivity = Date.now();
+}
+
+async function autoPushTick(ctx) {
+  if (runtime.busy) return;
+  const cfg = await readConfig();
+  if (!cfg.autoPush || !cfg.idlePushMinutes) return;
+  const idleMs = Date.now() - runtime.lastActivity;
+  if (idleMs < cfg.idlePushMinutes * 60 * 1000) return;
+  if (runtime.lastAutoPushAt && Date.now() - runtime.lastAutoPushAt < 5 * 60 * 1000) return;
+
+  runtime.busy = 'auto';
+  try {
+    const st = { config: await channelState('config', cfg, { fetch: true }), sessions: await channelState('sessions', cfg, { fetch: true }) };
+    const behind = Math.max(st.config.behind || 0, st.sessions.behind || 0);
+    if (behind > 0) {
+      runtime.lastAutoResult = { at: new Date().toISOString(), ok: false, reason: 'behind-remote' };
+      runtime.lastAutoPushAt = Date.now();
+      return;
+    }
+    const staged = await stageChanges(cfg);
+    if (!staged.written && !staged.deleted) {
+      runtime.lastAutoResult = { at: new Date().toISOString(), ok: true, reason: 'nothing-to-do' };
+      runtime.lastAutoPushAt = Date.now();
+      return;
+    }
+    await commitChanges(cfg, `synchub: auto @ ${new Date().toISOString()}`);
+    const pushed = await pushChannels(cfg, {});
+    const ok = ['config', 'sessions'].every(ch => {
+      const r = pushed[ch];
+      return !r || r.ok !== false || r.skipped;
+    });
+    runtime.lastAutoResult = { at: new Date().toISOString(), ok, pushed };
+    runtime.lastAutoPushAt = Date.now();
+    touchActivity();
+    log(ctx, 'info', `auto push: ${ok ? 'ok' : 'failed'} (written ${staged.written})`);
+  } catch (e) {
+    runtime.lastAutoResult = { at: new Date().toISOString(), ok: false, reason: String(e && e.message || e) };
+    runtime.lastAutoPushAt = Date.now();
+  } finally {
+    runtime.busy = null;
+  }
+}
+
+/* -------------------------------------------------------------- 路由注册 */
+
 function guard(req) {
   const h = req.headers || {};
   if (String(h['sec-fetch-site'] || '').toLowerCase() === 'cross-site') return 'cross-site';
@@ -223,227 +1262,273 @@ function guard(req) {
   return null;
 }
 
-async function git(cwd, args, timeout = 15000) {
-  try {
-    const { stdout } = await execFileAsync('git', ['-C', cwd, ...args], {
-      timeout, windowsHide: true, maxBuffer: 4 * 1024 * 1024,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
-    });
-    return { ok: true, out: String(stdout || '').trim() };
-  } catch (e) {
-    return { ok: false, out: String(e.stderr || e.stdout || e.message || '').trim(), code: e.code };
-  }
-}
-
-/** 工作区 Git 仓库状态（只读）。 */
-async function workspaceStatus(cfg) {
-  const root = cfg.workspace;
-  const base = { root, configured: false, error: null, branch: null, upstream: null, ahead: 0, behind: 0, dirty: 0, lastCommitAt: null, lastCommit: null, remote: null };
-  if (!root || !fs.existsSync(path.join(root, '.git'))) {
-    return { ...base, error: 'not-a-git-repo' };
-  }
-  const branch = await git(root, ['rev-parse', '--abbrev-ref', 'HEAD']);
-  if (!branch.ok) return { ...base, error: branch.out || 'git-rev-parse-failed' };
-  base.configured = true;
-  base.branch = branch.out;
-
-  const upstream = await git(root, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}']);
-  if (upstream.ok) {
-    base.upstream = upstream.out;
-    const counts = await git(root, ['rev-list', '--left-right', '--count', 'HEAD...@{upstream}']);
-    if (counts.ok) {
-      const m = /^(\d+)\s+(\d+)/.exec(counts.out);
-      if (m) { base.ahead = Number(m[1]); base.behind = Number(m[2]); }
-    }
-  }
-  const remote = await git(root, ['remote', 'get-url', 'origin']);
-  base.remote = remote.ok ? remote.out : null;
-
-  const dirty = await git(root, ['status', '--porcelain', '-uno']);
-  if (dirty.ok) base.dirty = dirty.out ? dirty.out.split('\n').filter(Boolean).length : 0;
-
-  const last = await git(root, ['log', '-1', '--format=%cI%x09%s']);
-  if (last.ok && last.out) {
-    const [at, ...rest] = last.out.split('\t');
-    base.lastCommitAt = at || null;
-    base.lastCommit = rest.join('\t') || null;
-  }
-  return base;
-}
-
-/** 本机已装插件版本（只读 node_modules 里的 package.json）。 */
-function localVersions() {
-  const out = {};
-  for (const pkg of ['chatsync', 'dsh-config-manager', 'dsh-synchub', 'dshmarket']) {
-    try {
-      const p = path.join(PROFILE_DIR, 'node_modules', pkg, 'package.json');
-      out[pkg] = JSON.parse(fs.readFileSync(p, 'utf8')).version;
-    } catch { out[pkg] = null; }
-  }
-  out.dsh = process.env.DSH_VERSION || null;
-  return out;
-}
-
-let versionCache = { at: 0, data: null };
-async function npmLatest(pkg) {
-  try {
-    const r = await fetch(`https://registry.npmjs.org/${encodeURIComponent(pkg)}/latest`, {
-      signal: AbortSignal.timeout(5000), headers: { Accept: 'application/json' },
-    });
-    if (!r.ok) return null;
-    const j = await r.json();
-    return typeof j.version === 'string' ? j.version : null;
-  } catch { return null; }
-}
-
-function newer(latest, current) {
-  const p = v => /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(String(v || ''));
-  const a = p(latest), b = p(current);
-  if (!a || !b || a[4]) return false;
-  for (let i = 1; i <= 3; i++) if (Number(a[i]) !== Number(b[i])) return Number(a[i]) > Number(b[i]);
-  return Boolean(b[4]);
-}
-
-async function versions() {
-  if (versionCache.data && Date.now() - versionCache.at < 30 * 60 * 1000) return versionCache.data;
-  const local = localVersions();
-  const pkgs = ['chatsync', 'dsh-config-manager', 'dshmarket'];
-  const latest = {};
-  await Promise.all(pkgs.map(async p => { latest[p] = await npmLatest(p); }));
-  const outdated = {};
-  for (const p of pkgs) outdated[p] = Boolean(latest[p] && local[p] && newer(latest[p], local[p]));
-  const data = { local, latest, outdated, checkedAt: new Date().toISOString() };
-  versionCache = { at: Date.now(), data };
-  return data;
-}
-
-/** 读工作区仓库里所有机器留下的信标（只读）。 */
-async function readBeacons(cfg) {
-  const dir = path.join(cfg.workspace, 'sync-beacon');
-  const out = { dir, machines: [], error: null };
-  if (!cfg.beacon) return { ...out, error: 'disabled' };
-  if (!fs.existsSync(dir)) return { ...out, error: 'no-beacon-dir' };
-  try {
-    for (const f of await fsp.readdir(dir)) {
-      if (!f.endsWith('.json')) continue;
-      try {
-        const v = JSON.parse(await fsp.readFile(path.join(dir, f), 'utf8'));
-        if (v && typeof v === 'object') out.machines.push(v);
-      } catch { /* skip broken beacon */ }
-    }
-  } catch (e) { out.error = e.message; }
-  return out;
-}
-
-/** 写本机信标（只在用户显式发起同步后调用）。 */
-async function writeBeacon(cfg, versionsData) {
-  if (!cfg.beacon) return { ok: false, reason: 'disabled' };
-  const dir = path.join(cfg.workspace, 'sync-beacon');
-  await fsp.mkdir(dir, { recursive: true });
-  const safe = String(cfg.machine || os.hostname()).replace(/[^A-Za-z0-9_.-]/g, '_');
-  const file = path.join(dir, `${safe}.json`);
-  const payload = {
-    machine: cfg.machine || os.hostname(),
-    at: new Date().toISOString(),
-    dsh: versionsData.local.dsh || null,
-    plugins: versionsData.local,
+async function statusPayload(cfg) {
+  const [config, sessions] = await Promise.all([
+    channelState('config', cfg, { fetch: true }),
+    channelState('sessions', cfg, { fetch: true }),
+  ]);
+  const stamp = await remoteStamp(cfg);
+  const enabled = {};
+  for (const s of SURFACES) enabled[s.id] = surfaceEnabled(s, cfg);
+  return {
+    ok: true,
+    version: VERSION,
+    machine: cfg.machine,
+    hostname: os.hostname(),
+    dshHome: DSH_HOME,
+    profile: PROFILE,
+    activeSession: ACTIVE_SESSION || null,
+    channels: { config, sessions },
+    stamp,
+    switched: Boolean(stamp && stamp.machine !== (cfg.machine || os.hostname())),
+    surfaces: SURFACES.map(s => ({ id: s.id, label: s.label, tier: s.tier, on: Boolean(cfg.surfaces[s.id]), channel: s.channel, note: s.note })),
+    auto: {
+      enabled: Boolean(cfg.autoPush),
+      idlePushMinutes: cfg.idlePushMinutes,
+      idleMinutes: Math.round((Date.now() - runtime.lastActivity) / 60000),
+      lastAt: runtime.lastAutoPushAt ? new Date(runtime.lastAutoPushAt).toISOString() : null,
+      lastResult: runtime.lastAutoResult,
+      busy: Boolean(runtime.busy),
+    },
   };
-  await fsp.writeFile(file, JSON.stringify(payload, null, 2), 'utf8');
-  const add = await git(cfg.workspace, ['add', '--', 'sync-beacon/' + safe + '.json']);
-  if (!add.ok) return { ok: false, reason: add.out };
-  const commit = await git(cfg.workspace, ['commit', '-m', `sync-beacon: ${payload.machine} @ ${payload.at}`]);
-  // 没有新变化时 commit 会失败，这不是错误
-  return { ok: true, committed: commit.ok, file, payload };
 }
 
-/** 写一条启动诊断（JSON Lines）。绝不抛错，绝不写入任何配置内容。 */
-function diag(extra) {
-  try {
-    const dir = path.join(os.homedir(), '.dsh', 'logs');
-    fs.mkdirSync(dir, { recursive: true });
-    fs.appendFileSync(
-      path.join(dir, 'dsh-synchub-boot.log'),
-      JSON.stringify({ at: new Date().toISOString(), pid: process.pid, ...extra }) + '\n',
-      'utf8',
-    );
-  } catch { /* 诊断失败不影响插件 */ }
-}
-
-function apply(ctx) {
-  // —— 启动诊断：把加载事实写盘，便于排查「插件到底有没有被宿主加载」。 ——
-  diag({
-    phase: 'apply',
-    version: process.versions?.node,
-    hasCtx: !!ctx,
-    hasWebServer: !!(ctx && ctx.webServer),
-    webServerRegisterType: typeof (ctx && ctx.webServer && ctx.webServer.register),
-    ctxKeys: ctx ? Object.keys(ctx).slice(0, 40) : [],
-    dshHome: process.env.DSH_HOME || null,
-    profile: process.env.DSH_PROFILE || null,
-  });
-
-  const routes = [
+function routesFor() {
+  return [
     {
-      kind: 'exact', path: '/api/dsh-synchub/config', handler: async (req, res) => {
+      kind: 'exact',
+      path: '/api/dsh-synchub/config',
+      handler: async (req, res) => {
         try {
-          if (req.method === 'PUT') return json(res, 200, { ok: true, config: await writeConfig(await readBody(req)) });
+          if (req.method === 'PUT') {
+            const next = await writeConfig(await readBody(req));
+            return json(res, 200, { ok: true, config: next });
+          }
           return json(res, 200, { ok: true, config: await readConfig() });
-        } catch (e) { return json(res, 400, { ok: false, error: String(e.message || e) }); }
+        } catch (e) {
+          return json(res, 400, { ok: false, error: String(e.message || e) });
+        }
       },
     },
     {
-      kind: 'exact', path: '/api/dsh-synchub/check', handler: async (req, res) => {
+      kind: 'exact',
+      path: '/api/dsh-synchub/status',
+      handler: async (_req, res) => {
         try {
-          // GET = 用当前落盘配置做只读体检；POST = 拿表单里的草稿先体检，不落盘。
-          const raw = req.method === 'POST' ? await readBody(req) : await readConfig();
-          return json(res, 200, { ok: true, ...(await checkConfig(raw)) });
-        } catch (e) { return json(res, 400, { ok: false, error: String(e.message || e) }); }
+          return json(res, 200, await statusPayload(await readConfig()));
+        } catch (e) {
+          return json(res, 500, { ok: false, error: String(e.message || e) });
+        }
       },
     },
     {
-      kind: 'exact', path: '/api/dsh-synchub/status', handler: async (_req, res) => {
+      kind: 'exact',
+      path: '/api/dsh-synchub/map',
+      handler: async (req, res) => {
         try {
           const cfg = await readConfig();
-          const [workspace, vers, beacons, chatsyncCh, configCh] = await Promise.all([
-            workspaceStatus(cfg), versions(), readBeacons(cfg),
-            readChatsyncChannel(), readConfigManagerChannel(),
-          ]);
+          const url = new URL(req.url || '/', 'http://127.0.0.1');
+          return json(res, 200, { ok: true, ...(await mapInfo(cfg, { deep: url.searchParams.get('deep') === '1' })) });
+        } catch (e) {
+          return json(res, 500, { ok: false, error: String(e.message || e) });
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/api/dsh-synchub/preflight',
+      handler: async (_req, res) => {
+        try {
+          return json(res, 200, { ok: true, ...(await preflight(await readConfig())) });
+        } catch (e) {
+          return json(res, 500, { ok: false, error: String(e.message || e) });
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/api/dsh-synchub/check',
+      handler: async (req, res) => {
+        try {
+          const cfg = req.method === 'POST' ? mergeConfig(await readConfig(), await readBody(req)) : await readConfig();
+          return json(res, 200, { ok: true, ...(await checkAll(cfg)) });
+        } catch (e) {
+          return json(res, 400, { ok: false, error: String(e.message || e) });
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/api/dsh-synchub/scan',
+      handler: async (_req, res) => {
+        try {
+          touchActivity();
+          const cfg = await readConfig();
+          const diff = await diffLocalToPayload(cfg);
           return json(res, 200, {
-            ok: true, machine: cfg.machine, staleHours: cfg.staleHours,
-            workspace, versions: vers, beacons,
-            channels: { chatsync: chatsyncCh, configManager: configCh },
+            ok: true,
+            changed: diff.added.length,
+            removed: diff.removed.length,
+            unchanged: diff.unchanged.length,
+            sample: diff.added.slice(0, 30).map(a => ({ rel: a.rel, surface: a.surface, size: a.size })),
+            removedSample: diff.removed.slice(0, 30),
           });
-        } catch (e) { return json(res, 500, { ok: false, error: String(e.message || e) }); }
+        } catch (e) {
+          return json(res, 500, { ok: false, error: String(e.message || e) });
+        }
       },
     },
     {
-      kind: 'exact', path: '/api/dsh-synchub/workspace/pull', handler: async (_req, res) => {
-        const cfg = await readConfig();
-        if (!cfg.workspace || !fs.existsSync(path.join(cfg.workspace, '.git'))) return json(res, 400, { ok: false, error: '工作区不是 Git 仓库' });
-        const r = await git(cfg.workspace, ['pull', '--ff-only'], 60000);
-        return json(res, 200, { ok: r.ok, output: r.out });
+      kind: 'exact',
+      path: '/api/dsh-synchub/stage',
+      handler: async (_req, res) => {
+        try {
+          touchActivity();
+          const cfg = await readConfig();
+          const r = await stageChanges(cfg);
+          return json(res, 200, r);
+        } catch (e) {
+          return json(res, 500, { ok: false, error: String(e.message || e) });
+        }
       },
     },
     {
-      kind: 'exact', path: '/api/dsh-synchub/workspace/push', handler: async (_req, res) => {
-        const cfg = await readConfig();
-        if (!cfg.workspace || !fs.existsSync(path.join(cfg.workspace, '.git'))) return json(res, 400, { ok: false, error: '工作区不是 Git 仓库' });
-        const r = await git(cfg.workspace, ['push'], 60000);
-        return json(res, 200, { ok: r.ok, output: r.out });
+      kind: 'exact',
+      path: '/api/dsh-synchub/pull',
+      handler: async (req, res) => {
+        try {
+          touchActivity();
+          const cfg = await readConfig();
+          const body = req.method === 'POST' ? await readBody(req).catch(() => ({})) : {};
+          const pulled = await pullChannels(cfg);
+          const failed = Object.entries(pulled).filter(([, v]) => v.ok === false);
+          if (failed.length) {
+            return json(res, 200, { ok: false, pulled, error: failed.map(([k, v]) => `${k}: ${v.reason}`).join('；') });
+          }
+          if (body.apply === false) return json(res, 200, { ok: true, pulled, applied: null });
+          const applied = await applyPayload(cfg, { prune: body.prune === true });
+          return json(res, 200, { ok: true, pulled, applied });
+        } catch (e) {
+          return json(res, 500, { ok: false, error: String(e.message || e) });
+        }
       },
     },
     {
-      kind: 'exact', path: '/api/dsh-synchub/beacon', handler: async (_req, res) => {
+      kind: 'exact',
+      path: '/api/dsh-synchub/push',
+      handler: async (req, res) => {
+        try {
+          touchActivity();
+          const cfg = await readConfig();
+          const body = req.method === 'POST' ? await readBody(req).catch(() => ({})) : {};
+          for (const ch of ['config', 'sessions']) {
+            const conf = cfg.channels[ch] || {};
+            if (conf.enabled !== false && conf.remote) {
+              const dir = repoDir(ch);
+              if (!fs.existsSync(path.join(dir, '.git'))) await bootstrapFromRemote(ch, conf.remote);
+            }
+          }
+          const staged = await stageChanges(cfg);
+          const committed = await commitChanges(cfg, body.message || `synchub: ${cfg.machine} @ ${new Date().toISOString()}`);
+          const pushed = await pushChannels(cfg, {});
+          const ok = Object.values(pushed).every(v => v.ok !== false);
+          return json(res, 200, { ok, staged, committed, pushed });
+        } catch (e) {
+          return json(res, 500, { ok: false, error: String(e.message || e) });
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/api/dsh-synchub/sync',
+      handler: async (req, res) => {
+        try {
+          touchActivity();
+          const cfg = await readConfig();
+          const body = req.method === 'POST' ? await readBody(req).catch(() => ({})) : {};
+          const report = { at: new Date().toISOString(), steps: [] };
+          const step = (id, r) => report.steps.push({ id, ok: r.ok !== false, detail: r });
+
+          if (body.pullFirst !== false) {
+            const pulled = await pullChannels(cfg);
+            step('pull', pulled);
+            const failed = Object.entries(pulled).filter(([, v]) => v.ok === false);
+            if (failed.length) {
+              return json(res, 200, { ok: false, stage: 'pull', error: failed.map(([k, v]) => `${k}: ${v.reason}`).join('；'), report });
+            }
+            const applied = await applyPayload(cfg, { prune: body.prune === true });
+            step('apply', applied);
+          }
+
+          const staged = await stageChanges(cfg);
+          step('stage', staged);
+          const committed = await commitChanges(cfg, body.message || `synchub: ${cfg.machine} @ ${new Date().toISOString()}`);
+          step('commit', committed);
+          const pushed = await pushChannels(cfg, {});
+          step('push', pushed);
+
+          const ok = Object.values(pushed).every(v => v.ok !== false);
+          return json(res, 200, { ok, report });
+        } catch (e) {
+          return json(res, 500, { ok: false, error: String(e.message || e) });
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/api/dsh-synchub/auto',
+      handler: async (req, res) => {
         try {
           const cfg = await readConfig();
-          const result = await writeBeacon(cfg, await versions());
-          return json(res, 200, { ok: result.ok, ...result });
-        } catch (e) { return json(res, 500, { ok: false, error: String(e.message || e) }); }
+          if (req.method !== 'POST') {
+            return json(res, 200, {
+              ok: true,
+              enabled: Boolean(cfg.autoPush),
+              idlePushMinutes: cfg.idlePushMinutes,
+              idleMinutes: Math.round((Date.now() - runtime.lastActivity) / 60000),
+              lastAt: runtime.lastAutoPushAt ? new Date(runtime.lastAutoPushAt).toISOString() : null,
+              lastResult: runtime.lastAutoResult,
+            });
+          }
+          touchActivity();
+          const r = await autoPushTickManually(cfg);
+          return json(res, 200, r);
+        } catch (e) {
+          return json(res, 500, { ok: false, error: String(e.message || e) });
+        }
       },
     },
   ];
+}
 
+async function autoPushTickManually(cfg) {
+  runtime.busy = 'manual';
+  try {
+    const staged = await stageChanges(cfg);
+    await commitChanges(cfg, `synchub: manual auto @ ${new Date().toISOString()}`);
+    const pushed = await pushChannels(cfg, {});
+    return { ok: Object.values(pushed).every(v => v.ok !== false), staged, pushed };
+  } finally {
+    runtime.busy = null;
+  }
+}
+
+/* ------------------------------------------------------------------ 入口 */
+
+function apply(ctx) {
+  diag({
+    phase: 'apply',
+    node: process.versions && process.versions.node,
+    hasWebServer: Boolean(ctx && ctx.webServer),
+    registerType: typeof (ctx && ctx.webServer && ctx.webServer.register),
+    dshHome: DSH_HOME,
+    profile: PROFILE,
+    activeSession: ACTIVE_SESSION || null,
+  });
+
+  const routes = routesFor();
   const disposers = [];
+
   if (ctx.webServer && typeof ctx.webServer.register === 'function') {
     try {
       for (const route of routes) {
@@ -456,23 +1541,33 @@ function apply(ctx) {
           },
         }));
       }
-      log(ctx, 'info', `registered ${routes.length} routes`);
       diag({ phase: 'routes-ok', count: routes.length });
+      log(ctx, 'info', `registered ${routes.length} routes (v${VERSION})`);
     } catch (e) {
-      // 注册失败必须留痕：否则表现就是「接口全 401」，无从判断。
       diag({ phase: 'routes-failed', error: String((e && e.stack) || e) });
       log(ctx, 'error', `路由注册失败: ${String((e && e.message) || e)}`);
     }
   } else {
-    diag({ phase: 'no-webserver', hasCtx: !!ctx, webServerType: typeof (ctx && ctx.webServer) });
+    diag({ phase: 'no-webserver', hasCtx: Boolean(ctx) });
     log(ctx, 'warn', 'webServer 不可用：状态接口未注册');
   }
-  // ⚠️ effect(fn) 会「立即调用 fn」，并把 fn 的返回值当作清理函数 ——
-  // 绝不能把注销逻辑写进 fn 本体（那会在注册完成后立刻把路由全部撤销，
-  // 于是 exact 表始终为空，请求落到 /api 前缀路由 → 全部 401）。
+
+  // 空闲自动推送：单一定时器，60s 一跳；无任何副作用除非 autoPush 开启。
   try {
-    ctx.effect(() => () => { for (const d of disposers) { try { d?.(); } catch { /* noop */ } } });
+    runtime.timer = setInterval(() => { autoPushTick(ctx).catch(() => {}); }, 60_000);
+    if (runtime.timer.unref) runtime.timer.unref();
+  } catch { /* 定时器失败不影响主功能 */ }
+
+  // ⚠️ ctx.effect(fn) 会立即调用 fn，并把返回值当清理函数 —— 必须返回闭包。
+  try {
+    ctx.effect(() => () => {
+      if (runtime.timer) clearInterval(runtime.timer);
+      for (const d of disposers) {
+        try { d?.(); } catch { /* noop */ }
+      }
+    });
   } catch { /* 老版本 Cordis 无 effect 时忽略 */ }
 }
 
 export { name, inject, apply };
+export const VERSION_INFO = VERSION;

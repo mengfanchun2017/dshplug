@@ -1,13 +1,13 @@
 {
   "schema": 1,
-  "updated": "2026-11-11",
+  "updated": "2026-11-12",
   "note": "本机自研插件清单。install.ps1 按此表决定装哪些；plugpush.ps1 按此表决定推哪些。新增插件时加一条即可。",
   "plugins": [
     {
       "name": "dsh-synchub",
       "dir": "dsh-synchub",
-      "version": "0.2.0",
-      "description": "同步中心：状态聚合 + 一键同步 + 设置面板(状态/目录/改配置/自检) + 旧版本红点",
+      "version": "0.3.0",
+      "description": "同步中心：会话/工作区/附件/技能/配置层 → 各自私有 Git 仓库；同步面分级 + 危险目录守卫 + 环境切换检测 + 一键同步",
       "installedOn": ["FRANCIS-HOME-I7"],
       "status": "active"
     }

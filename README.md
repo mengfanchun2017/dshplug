@@ -1,33 +1,38 @@
-# dsh-plugins · 自研 DSH 插件仓库
+# dshplug · 自研 DSH 插件仓库
 
 一个 Git 仓库，**根目录直接放插件目录**（没有多余的 `plugins/` 层）。
 `list.json` 是注册表：新增插件加一条即可。每台机器可以只装自己需要的那几个。
 
-这是两台机器上的**第 3 个仓库**（另两个是会话同步仓 `dsh-sessions`、配置同步仓 `dsh-config`）。
+## 现在有几个仓库
 
-## 三个仓库各管什么（不要混）
+**两个**，不是三个。0.3 起会话与配置合并到同一个同步引擎下，但**仍分两个 Git 仓库**：
 
 | 仓库 | 内容 | 谁写 | 谁读 |
 |---|---|---|---|
-| **`dsh-plugins`**（本仓库） | 自研插件**源码** | 你显式跑 `plugpush.ps1` | 另一台 `git pull` |
-| `dsh-config` | DSH 配置快照（设置/插件清单/MCP/技能，不含密钥） | `dsh-config-manager` 自动推 | 另一台自动拉 |
-| `dsh-sessions` | 会话日志、附件、工作区映射 | `chatsync` 自动推 | 另一台自动拉 |
+| **`dshplug`**（本仓库） | 自研插件**源码** | 你显式跑 `plugpush.ps1` | 另一台 `git pull` |
+| `dsh-sessions` | 会话日志、工作区登记表、附件 | `dsh-synchub` 自动推 | 另一台自动拉 |
+| `dsh-config` | 技能文件、DSH 配置层（不含密钥） | `dsh-synchub` 自动推 | 另一台自动拉 |
 
-工作区源码（`3d-forge` 等）归各自项目仓，不进这三个。
+> 之前的 `dsh-config` / `dsh-sessions` 由 `dsh-config-manager` 和 `chatsync` 分别写。
+> **0.3 起这两个插件都被 `dsh-synchub` 取代**（`chatsync` 已废弃）。
+> `dsh-synchub` **不**同步插件——插件由 `dsh-market` 管。
+
+工作区源码（`3d-forge` 等）归各自项目仓，不进这些。
 **可再生成的 3D 产物 / 密钥都不进任何仓库。**
 
 ## 目录约定（扁平）
 
 ```
-C:\dsh\dsh-plugins\
+C:\dsh\dshplug\
 ├─ list.json          ← 插件注册表（新增插件就改这里）
 ├─ install.ps1        ← 按 list.json 装全部 / -Only 装单个 / -List / -Check
 ├─ plugpush.ps1       ← 显式「提交 + 推送」指定插件
 ├─ .gitignore
 ├─ README.md
-├─ dsh-synchub\       ← 插件 1：同步中心
-│  ├─ package.json     # 必须有 dsh.bundle.patch + dsh.client
+├─ dsh-synchub\       ← 插件 1：同步中心（同步引擎）
+│  ├─ package.json    # 必须有 dsh.bundle.patch + dsh.client
 │  ├─ cordis.patch.yml
+│  ├─ README.md       # 架构、同步面分级、状态机、API
 │  └─ lib\ {index.js, client.js}
 ├─ <单位电脑插件 1>\   ← clone 过来直接放根目录
 └─ <单位电脑插件 2>\
@@ -55,8 +60,8 @@ C:\dsh\dsh-plugins\
 
 为什么不用 `file:`：`file:` 是**按文件硬链接**。任何「删除+重建」的保存方式
 （`write`/`edit` 工具、IDE 原子改名、git checkout、解压覆盖）都会换 inode → 断链，
-已安装副本停在旧代码。这是上一版「改了没生效」的真实根因，我实测复现过
-（`package.json`、`lib/*.js` 断链后安装副本仍是 0.1.0）。
+已安装副本停在旧代码。这是早前「改了没生效」的真实根因，实测复现过
+（`package.json`、`lib/*.js` 断链后安装副本仍是旧版本）。
 
 改 `link:` 之后实测三种写入方式（原地写 / 删除重建 / 原子改名）**全部即时生效**，
 inode 变了也不影响。
@@ -64,7 +69,7 @@ inode 变了也不影响。
 > 只有三种情况需要跑 `install.ps1`：新机器首次、新增/删除插件、`list.json` 改动。
 > 日常改代码不在其中。`-Force` 可强制重装。
 
-### `install.ps1 -Check` 会检出四类问题并给出修复命令
+### `install.ps1 -Check` 会检出五类问题并给出修复命令
 
 ```
 link-junction   正常，改代码即时生效
@@ -81,75 +86,93 @@ missing         声明了但没装出来        → 跑 install.ps1
 
 ```powershell
 # 看清单
-& "C:\dsh\dsh-plugins\install.ps1" -List
-& "C:\dsh\dsh-plugins\plugpush.ps1" -List
+& "C:\dsh\dshplug\install.ps1" -List
+& "C:\dsh\dshplug\plugpush.ps1" -List
 
 # 检查每个插件目录是否合格、是否已装
-& "C:\dsh\dsh-plugins\install.ps1" -Check
+& "C:\dsh\dshplug\install.ps1" -Check
 
 # 装（新机器 / 新增插件）
-& "C:\dsh\dsh-plugins\install.ps1"
-& "C:\dsh\dsh-plugins\install.ps1" -Only dsh-synchub
+& "C:\dsh\dshplug\install.ps1"
+& "C:\dsh\dshplug\install.ps1" -Only dsh-synchub
 
 # 推（只有你明确要同步时才推）
-& "C:\dsh\dsh-plugins\plugpush.ps1" dsh-synchub "增加设置面板"
-& "C:\dsh\dsh-plugins\plugpush.ps1" dsh-synchub "修红点逻辑" -Tag
-& "C:\dsh\dsh-plugins\plugpush.ps1" dsh-synchub "看看会提交啥" -DryRun
+& "C:\dsh\dshplug\plugpush.ps1" dsh-synchub "增加设置面板"
+& "C:\dsh\dshplug\plugpush.ps1" dsh-synchub "修红点逻辑" -Tag
+& "C:\dsh\dshplug\plugpush.ps1" dsh-synchub "看看会提交啥" -DryRun
 ```
 
 `-Tag` 会按 `package.json` 的 `version` 打一个 `<包名>-v<版本>` 的 tag——
 **版本由你决定何时 bump**，不是「一改就自动提交」。
 
+> 两个脚本的 `-RepoRoot` 默认取**脚本自身所在目录**，不再写死路径。
+> （早前默认写死 `C:\dsh\dsh-plugins`，而仓库实际克隆在 `C:\dsh\dshplug`，
+> 结果开箱就报「找不到清单」。）
+
 ## 第一次配远端 + 认证（只做一次）
 
-本机已装 Git for Windows 的 **Git Credential Manager**（`credential.helper=manager-core`），
+本机已装 Git for Windows 的 **Git Credential Manager**，
 HTTPS + PAT 会弹一次系统登录窗并记住，不用把 token 写进任何文件。
 
-1. 去 GitHub 建一个**私有**仓库 `dsh-plugins`
+1. 去 GitHub 建一个**私有**仓库 `dshplug`
 2. Settings → Developer settings → **Fine-grained token**，只授权这个仓库、只给 `Contents: Read and write`
 3. 首次推送（`-Remote` 会顺手把 `origin` 配好）：
 
 ```powershell
-& "C:\dsh\dsh-plugins\plugpush.ps1" dsh-synchub "init" `
-  -Remote "https://github.com/<你的用户名>/dsh-plugins.git"
+& "C:\dsh\dshplug\plugpush.ps1" dsh-synchub "init" `
+  -Remote "https://github.com/<你的用户名>/dshplug.git"
 ```
 
 第一次 `git push` 时 GCM 会弹窗，用户名填 GitHub 账号、**密码栏粘贴 PAT**（不是账号密码），
 之后凭据存进 Windows 凭据管理器，两台机各做一次。
-（你实测 SSH 全被墙，所以走 HTTPS；`git@github.com:` 那种地址不要用。）
+（SSH 实测全被墙，所以走 HTTPS；`git@github.com:` 那种地址不要用。）
+
+### 本机必须的 git 设置（只有一项）
+
+这台机器上 MinGit 默认的 schannel 后端会失败
+（`ACQUIRE_CREDENTIALS_HANDLE_FAILED: SEC_E_NO_CREDENTIALS 0x8009030e`），
+必须换 OpenSSL。这是**仓库级**设置，不改全局：
+
+```powershell
+git -C C:\dsh\dshplug config http.sslBackend openssl
+```
+
+> **不要配代理。** 之前仓库里写过 `http.proxy = http://127.0.0.1:7897`，
+> 实测那个代理现在已经失效，反而会把直连能通的连接搞成
+> `TLS connect error: unexpected eof while reading`。
+> 已清除仓库级代理配置；`ls-remote` 直连正常。
+> 如果哪天直连真被墙了再加回来，但**先测**：
+> ```powershell
+> git -C C:\dsh\dshplug ls-remote --heads origin
+> ```
 
 ## 两台机器的安装顺序（重要）
 
-`file:` 规格会把**绝对路径**写进 `profile/package.json`，而这个文件会被
-`dsh-config-manager` 同步到另一台。那边没有同一路径 → **DSH 启动失败**。
+`link:` 规格会把**绝对路径**写进 `profile/package.json`，
+而这个文件的跨机同步由 `dsh-synchub` 明确**排除**（它是 danger 级，永不同步），
+因为另一台没有同一路径 → **DSH 启动失败**。
 
 ```
-1. 两台机都把本仓库放在同一个绝对路径 C:\dsh\dsh-plugins（clone 或拷贝）
-2. 每台各跑一次  & C:\dsh\dsh-plugins\install.ps1
+1. 两台机都把本仓库放在同一个绝对路径 C:\dsh\dshplug（clone 或拷贝）
+2. 每台各跑一次  & C:\dsh\dshplug\install.ps1
 3. 完全退出 DSH 再打开
-4. 之后才让 dsh-config-manager 开始同步配置
+4. 再用 dsh-synchub 配好两个同步仓的远端
 ```
 
 > 之后改源码**即时生效**（`link:` Junction），不用再跑 install；
 > 只有「另一台也要拿到」时才跑 `plugpush.ps1` + 那边 `git pull`。
 
-## 与 config-manager 的「本地插件打包」关系（重要）
+## 插件同步 vs 状态同步（边界）
 
-`dsh-config-manager@0.8.0` 内建 `localPluginPack`：导出 `plugins` 分区时会对
-`link:` / `file:` 插件跑 `npm pack`，把 tarball 塞进配置快照，并在导入时**重写 spec 为本机绝对路径**。
+| 东西 | 归谁管 | 为什么 |
+|---|---|---|
+| 插件源码 + 清单 | **本仓库**（`plugpush.ps1` 显式推） | 需要版本、tag、可回滚 |
+| 插件的**安装**（profile 里的 `package.json`） | `dsh-market` | 它管 registry 与 profile 依赖 |
+| 会话 / 工作区 / 附件 / 技能文件 / 配置层 | **`dsh-synchub`** | 一套引擎、一份历史、一个面板 |
+| 密钥、设备身份、运行时、缓存 | **谁都不管** | 泄露或失效风险，各机各自生成 |
 
-所以自研插件其实有**两条**跨机通道：
-
-| 通道 | 触发 | 版本 | 建议 |
-|---|---|---|---|
-| 本仓库 + `plugpush.ps1` | 你显式 | Git commit/tag，**有版本、可回滚** | ✅ **主通道** |
-| config-manager 的 `localPluginPack` | 它的自动/手动导出 | 快照里的 tarball，**会重写 spec** | ⚠️ 会与你手写的 `file:C:/dsh/...` 打架 |
-
-**建议**：在 config-manager 的同步分区里**不要勾 `plugins` 分区**（或至少不勾 `pluginFiles`），
-让「插件清单 + 本地插件」只由本仓库管。否则它把 spec 重写成 `dsh-config-manager/local-plugins/...`
-下的解包路径，`install.ps1` 写的 `file:C:/dsh/dsh-plugins/...` 就被覆盖了。
-（如果你希望重装后连插件都自动回来，那反过来：让 config-manager 管插件，本仓库只当源码存档——
-但那样就没有 Git 版本历史了。二选一，别两条一起跑。）
+`dsh-synchub` **不同步** `profiles/desktop/package.json`——那里含 `link:C:/dsh/...`
+绝对路径，跨机搬运会让 DSH 起不来。插件清单请用 `install.ps1` 在每台机上各自生成。
 
 ## 新增一个插件的步骤
 
@@ -164,8 +187,7 @@ HTTPS + PAT 会弹一次系统登录窗并记住，不用把 token 写进任何�
 
 ## 已知限制
 
-- 路径必须两台一致（`C:\dsh\dsh-plugins`）。单位电脑若 DSH 工作区也在 `C:\dsh`，天然满足。
+- 路径必须两台一致（`C:\dsh\dshplug`）。单位电脑若 DSH 工作区也在 `C:\dsh`，天然满足。
 - 0.x 的 caret 不跨 minor：插件若锁 `engines.dsh`，升级 DSH 后要同步更新。
-- `npm pack` 本地插件超过 100 MB 会被 config-manager 跳过并警告——本仓库只放源码，不会到这个量级。
 - `list.json` 只是本机注册表，不是 npm registry；`dsh plugin add <包名>` 仍会去 npm 找，
-  所以自研插件一律用 `install.ps1`（`file:` 路径）。
+  所以自研插件一律用 `install.ps1`（`link:` 路径）。

@@ -19,7 +19,7 @@
 param(
   [string]$Profile = 'desktop',
   [string]$Only = '',
-  [string]$RepoRoot = 'C:\dsh\dsh-plugins',
+  [string]$RepoRoot = '',
   [switch]$List,
   [switch]$Check,
   [switch]$Force
@@ -27,6 +27,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $dsh = Join-Path $env:LOCALAPPDATA 'Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd'
+# RepoRoot 默认取脚本自己所在目录（即 dshplug 仓库根），不要写死路径：
+# 早先默认写死 C:\dsh\dsh-plugins，而仓库实际在 C:\dsh\dshplug，
+# 结果开箱就报「找不到清单」，还得每次手动传 -RepoRoot。
+if (-not $RepoRoot) { $RepoRoot = $PSScriptRoot }
 $listFile = Join-Path $RepoRoot 'list.json'
 $profileDir = Join-Path $env:USERPROFILE ".dsh\profiles\$Profile"
 

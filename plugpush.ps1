@@ -4,18 +4,18 @@
 # 但**不会自动产生 git commit**。默认一切留在本机；只有你跑这条命令才上行。
 #
 # 用法：
-#   & C:\dsh\dsh-plugins\plugpush.ps1 dsh-synchub "增加设置面板"
-#   & C:\dsh\dsh-plugins\plugpush.ps1 dsh-synchub "修红点逻辑" -Tag       # 同时打版本 tag
-#   & C:\dsh\dsh-plugins\plugpush.ps1 -List                              # 看有哪些可推
-#   & C:\dsh\dsh-plugins\plugpush.ps1 dsh-synchub "msg" -DryRun          # 只看会提交什么
+#   & C:\dsh\dshplug\plugpush.ps1 dsh-synchub "增加设置面板"
+#   & C:\dsh\dshplug\plugpush.ps1 dsh-synchub "修红点逻辑" -Tag       # 同时打版本 tag
+#   & C:\dsh\dshplug\plugpush.ps1 -List                              # 看有哪些可推
+#   & C:\dsh\dshplug\plugpush.ps1 dsh-synchub "msg" -DryRun          # 只看会提交什么
 #
 # 第一次用之前（只做一次）：填好 -Remote 或先手动 git remote add origin <你的私有仓库 URL>
-#   & C:\dsh\dsh-plugins\plugpush.ps1 dsh-synchub "init" -Remote "https://github.com/<you>/dsh-plugins.git"
+#   & C:\dsh\dshplug\plugpush.ps1 dsh-synchub "init" -Remote "https://github.com/<you>/dsh-plugins.git"
 param(
   [string]$Name = '',
   [string]$Message = '',
   [string]$Remote = '',
-  [string]$RepoRoot = 'C:\dsh\dsh-plugins',
+  [string]$RepoRoot = '',
   [string]$Branch = 'main',
   [switch]$Tag,
   [switch]$All,
@@ -24,6 +24,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# RepoRoot 默认取脚本自身所在目录（仓库根），避免写死路径与实际克隆位置不一致。
+if (-not $RepoRoot) { $RepoRoot = $PSScriptRoot }
 $listFile = Join-Path $RepoRoot 'list.json'
 # 变量名不能叫 $list —— 与 -List 开关同名会冲突
 $manifest = Get-Content -LiteralPath $listFile -Raw -Encoding utf8 | ConvertFrom-Json
@@ -93,7 +95,7 @@ if ($Remote) {
   else { & git -C $RepoRoot remote add origin $Remote; Write-Host "已设置 origin = $Remote" }
 }
 $origin = & git -C $RepoRoot remote get-url origin 2>$null
-if (-not $origin) { throw '还没配远端。先跑一次带 -Remote 的命令，或手动：git -C C:\dsh\dsh-plugins remote add origin <私有仓库 URL>' }
+if (-not $origin) { throw '还没配远端。先跑一次带 -Remote 的命令，或手动：git -C C:\dsh\dshplug remote add origin <私有仓库 URL>' }
 Write-Host "远端：$origin"
 
 # ---- 4. 只暂存这个插件，不碰别的插件 / 不碰 DSH 配置 ----
@@ -130,5 +132,5 @@ Write-Host "`n推送到 $origin ($Branch) ..."
 if ($LASTEXITCODE -ne 0) { throw "push 失败（exit $LASTEXITCODE）。commit 已在本机，可稍后重试：git -C $RepoRoot push" }
 
 Write-Host "`n完成。另一台机器执行："
-Write-Host "  git -C C:\dsh\dsh-plugins pull"
+Write-Host "  git -C C:\dsh\dshplug pull"
 Write-Host "  （改源码无需重装——link: Junction 即时生效；仅新增/删除插件时才需要 install.ps1）"

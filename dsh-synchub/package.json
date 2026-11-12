@@ -1,10 +1,10 @@
 {
   "name": "dsh-synchub",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "同步中心：侧边栏 + 设置面板，汇总 chatsync / dsh-config-manager / 工作区 Git 的同步状态，一键发起同步，改配置与自检，旧版本红点提醒。",
-  "keywords": ["dsh", "dsh-plugin", "sync", "dashboard", "sidebar"],
+  "description": "同步中心：把 DSH 的会话、工作区、附件、技能与配置层同步到各自的私有 Git 仓库；提供同步面分级、危险目录守卫、环境切换检测与一键同步。",
+  "keywords": ["dsh", "dsh-plugin", "sync", "git", "session", "backup", "sidebar"],
   "license": "MIT",
   "engines": {
     "node": ">=22.19.0",
