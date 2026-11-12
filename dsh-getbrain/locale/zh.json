@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "得到大脑 · 笔记整理",
+    "description": "正式 Cordis 插件（已装进 profile）：通过官方 OpenAPI 整理得到大脑（原 Get笔记），全文字下载到可配置统一数据目录，默认只读、写操作需确认、删除双重闸门。在「设置 → Getnote」侧边栏配置 API Key/Client ID 等（见 getnote/README.md 第 9 节）；保存即时生效、无需重启。"
+  }
+}

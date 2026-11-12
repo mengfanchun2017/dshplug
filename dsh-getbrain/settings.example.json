@@ -1,0 +1,23 @@
+{
+  "_comment": "复制本文件为 settings.json。非敏感偏好，可入库/可打进导出包。secret 请放 config.local.json 或环境变量，不要写在这里（除非你明确接受明文）。",
+  "dataDir": "getnote/data",
+  "_dataDir_note": "统一数据目录：下载、中间产物、快照、日志、审计、计划都归它。相对路径相对工作区根；可改绝对路径。插件 Config 的 dataDir 会覆盖这里。",
+
+  "apiBase": "https://openapi.biji.com",
+  "apiKey": "",
+  "clientId": "",
+  "_credential_note": "留空则回退到环境变量 GETNOTE_API_KEY / GETNOTE_CLIENT_ID，或 config.local.json。也可只填 apiKeyFile（相对工作区或绝对路径）指向本地 json，避免明文进组合树。",
+  "apiKeyFile": "",
+
+  "minInterval": 0.55,
+  "_minInterval_note": "每次请求最小间隔秒数（约 1/interval QPS）。官方约 2 QPS，0.55 已留余量。",
+
+  "media": {
+    "text": true,
+    "audio": false,
+    "video": false,
+    "images": false
+  },
+  "_media_note": "默认只取全文字。音频/视频二进制为硬约束永不下载（写 true 也会被忽略）；图片需显式 true 或 download --with-images。",
+  "_flow_note": "流程：download 把全文字落到 dataDir/downloads → 人分析决策 → 生成 plan.json → apply 改线上。"
+}

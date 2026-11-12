@@ -1,0 +1,27 @@
+{
+  "name": "@local/dsh-larkcli",
+  "version": "0.0.1",
+  "private": true,
+  "description": "DeepSeek Harness plugin (in development): drive the official Lark/Feishu CLI natively on Windows, without WSL or a system Node.js install.",
+  "type": "module",
+  "scripts": {
+    "lark": "pwsh -NoProfile -File ./lark.ps1",
+    "fetch-binary": "pwsh -NoProfile -File ./scripts/fetch-lark-cli.ps1"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "plugin",
+    "feishu",
+    "lark",
+    "lark-cli",
+    "windows"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "dsh": {
+    "plugin": true
+  }
+}

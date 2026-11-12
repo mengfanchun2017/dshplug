@@ -1,0 +1,6 @@
+{
+  "_comment": "复制本文件为 config.local.json 并填入真实值。API Key 在 https://www.biji.com/openapi 创建应用后只显示一次；切勿提交 config.local.json 到任何仓库或贴进聊天。也可改用环境变量 GETNOTE_API_KEY / GETNOTE_CLIENT_ID / GETNOTE_API_URL。",
+  "api_key": "gk_live_在这里填你的API_Key",
+  "client_id": "cli_在这里填你的Client_ID",
+  "api_base": "https://openapi.biji.com"
+}

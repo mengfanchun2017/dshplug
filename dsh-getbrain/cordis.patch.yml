@@ -1,0 +1,33 @@
+# getnote-organize —— 插件层补丁
+#
+# 安装本 bundle 后插入 getnote 插件行，注册 getnote_doctor / getnote_download /
+# getnote_backup / getnote_list / getnote_search / getnote_topics / getnote_plan /
+# getnote_apply 这些模型工具（全部通过 getnote/gn.py 走官方 OpenAPI）。
+# client.js 另在「设置」里注册一个顶层侧边栏分区 Getnote（settings.section）。
+#
+# config 里的所有字段都标了 volatile，可在「设置 → Getnote」侧边栏里改；保存即时生效（无需重启）。
+# 安全提示：apiKey/clientId 不要写在这个文件里（会明文入组合树）。
+# 改用「设置 → Getnote」→「账号凭据」→「保存凭据」（写入 $DSH_HOME/.credentials.yaml，
+# 仅本机该用户可读），或环境变量 GETNOTE_API_KEY / GETNOTE_CLIENT_ID，
+# 或 apiKeyFile 指向本地 json。
+- insert:
+    - id: getnote
+      name: '@local/getnote-organize'
+      config:
+        # —— 凭据（三选一，优先级：环境变量 > apiKey/clientId > apiKeyFile）——
+        apiKey: ''
+        clientId: ''
+        # 注意：相对路径相对**工作区根**解析（不是插件目录）。
+        apiKeyFile: ''
+        apiBase: 'https://openapi.biji.com'
+        # —— 统一数据目录：下载 / 中间产物 / 快照 / 日志 / 审计 / 计划全归它 ——
+        # 迁移到 C:\dsh\dsh-getbrain 后，工作区根 = C:\dsh，
+        # 所以数据落在 C:\dsh\getbraindata（与代码目录分离，便于打包发布）。
+        dataDir: 'getbraindata'
+        # —— 下载策略：默认只取全文字；音频/视频硬约束不下载；图片需显式开 ——
+        media:
+          images: false
+        minInterval: 0.55
+        # —— Python 解释器（留空=gn.ps1 自动查找）——
+        pythonPath: ''
+        pythonTimeoutMs: 600000

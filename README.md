@@ -34,9 +34,25 @@ C:\dsh\dshplug\
 │  ├─ cordis.patch.yml
 │  ├─ README.md       # 架构、同步面分级、状态机、API
 │  └─ lib\ {index.js, client.js}
-├─ <单位电脑插件 1>\   ← clone 过来直接放根目录
-└─ <单位电脑插件 2>\
+├─ dsh-getbrain\      ← 插件 2：得到大脑（原 Get 笔记）整理
+│  ├─ package.json    # name 是 @local/getnote-organize（历史包名）
+│  ├─ cordis.patch.yml
+│  ├─ index.js + client.js + gn.py / gn.ps1
+│  └─ SKILL.md        # 整理纪律
+├─ dsh-larkcli\       ← 插件 3：飞书 CLI 的 Windows 原生驱动（开发中）
+│  ├─ package.json    # 尚无 dsh.bundle.patch → install.ps1 会自动跳过
+│  ├─ lark.ps1 + scripts\ + lark-cli-win\
+│  └─ README.md       # 插件化路线
+└─ <单位电脑插件 N>\   ← clone 过来直接放根目录
 ```
+
+### 目录名与包名可以不同
+
+`dsh-getbrain\` 里的 `package.json` 叫 `@local/getnote-organize`（历史包名）。
+profile 按**包名**声明依赖，所以这类插件要在 `list.json` 里多写一个
+`"packageName"`，否则 `install.ps1` 会用目录名去查、误报「未安装」。
+
+改包名会断开现有链接，因此保留历史包名、靠 `packageName` 桥接。
 
 **一个插件目录能被注册，只需两个条件**：
 `package.json` 带 `dsh.bundle.patch`；`cordis.patch.yml` 有一行

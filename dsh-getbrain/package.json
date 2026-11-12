@@ -1,0 +1,58 @@
+{
+  "name": "@local/getnote-organize",
+  "version": "2.2.0",
+  "private": true,
+  "description": "正式 Cordis 插件（Bundle）：通过官方 OpenAPI 整理得到大脑（原 Get笔记），全文字下载到可配置统一数据目录，默认只读、写操作需确认、删除双重闸门；附 SKILL.md 整理纪律。在「设置 → Getnote」侧边栏配置 API Key/Client ID/dataDir 等（见 README 第 9 节），保存即时生效、无需重启。",
+  "type": "module",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "client.js",
+    "gn.py",
+    "gn.ps1",
+    "cordis.patch.yml",
+    "config.example.json",
+    "settings.example.json",
+    "README.md",
+    "SKILL.md",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": ["dsh", "dsh-plugin", "cordis", "getnote", "biji", "notes", "knowledge-base", "pkm"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/<your-account>/dsh-getbrain.git",
+    "directory": "dsh-getbrain"
+  },
+  "homepage": "https://github.com/<your-account>/dsh-getbrain#readme",
+  "bugs": {
+    "url": "https://github.com/<your-account>/dsh-getbrain/issues"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-general",
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-layout"
+      ]
+    }
+  }
+}

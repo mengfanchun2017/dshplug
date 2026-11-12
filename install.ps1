@@ -105,8 +105,9 @@ if ($List -or $Check) {
     $exists = Test-Path -LiteralPath $dir
     $bundle = if ($exists) { Test-Bundle $dir } else { $false }
     $ver = if ($exists) { try { (Get-Content (Join-Path $dir 'package.json') -Raw | ConvertFrom-Json).version } catch { '?' } } else { '-' }
-    $state = Get-InstallState $p.name
-    $broken = if ($exists -and $state -eq 'file-hardlink') { Test-BrokenLink $p.name $dir } else { $false }
+    $pkgName = if ($p.packageName) { $p.packageName } else { $p.name }
+    $state = Get-InstallState $pkgName
+    $broken = if ($exists -and $state -eq 'file-hardlink') { Test-BrokenLink $pkgName $dir } else { $false }
     $flag = ''
     if ($state -eq 'file-hardlink') { $flag = '  ⚠ 用 file: 硬链接，可能断链' ; if ($broken) { $flag = '  ✗ 已断链，需修复'; $bad++ } }
     elseif ($state -eq 'missing') { $flag = '  · 未安装' }
@@ -142,8 +143,10 @@ foreach ($p in $targets) {
   $dir = Join-Path $RepoRoot $p.dir
   if (-not (Test-Path -LiteralPath $dir)) { Write-Host "跳过 $($p.name)：目录不存在 $dir" -ForegroundColor Yellow; continue }
   if (-not (Test-Bundle $dir)) { Write-Host "跳过 $($p.name)：不是 bundle（缺 dsh.bundle.patch）" -ForegroundColor Yellow; continue }
-
-  $state = Get-InstallState $p.name
+  # 目录名与包名可以不同（例：dsh-getbrain 目录里包名是 @local/getnote-organize）。
+  # profile 里声明的是**包名**，所以查安装状态必须用包名，不能用清单里的 name。
+  $pkgName = if ($p.packageName) { $p.packageName } else { $p.name }
+  $state = Get-InstallState $pkgName
   $need = $Force.IsPresent
   $reason = ''
   if (-not $need) {

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Get Notes Organizer",
+    "description": "Installed Cordis bundle: organize 得到大脑/Get笔记 via official OpenAPI. Full-text download into a configurable data directory, read-only by default, confirmation-gated writes, double-gated deletion. Configure API Key/Client ID in the Settings → Getnote sidebar (see getnote/README.md §9); restart the app after changes."
+  }
+}
