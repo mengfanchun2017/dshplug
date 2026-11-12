@@ -89,6 +89,9 @@ surfaceEnabled(surface, cfg) => Boolean(cfg.surfaces[surface.id]) && surface.tie
 | `runtimes` | `dsh-runtimes`、`node_modules`、`.pnpm` | 可重建，数百 MB，跨平台失效 |
 | `caches` | `plugins`、`pixel-studio`、`workbuddy-vault`、`dsh-market` | 本地缓存，重建即可 |
 | `quarantine` | `_sessions-quarantine-*` | 疑似损坏的历史会话，留档用 |
+| `logs` | `logs` | 本机运行时日志，同步过去只会误导排障 |
+| `profileOther` | `profiles/` 除那两份 yml 之外 | 还包括 `node_modules`、`.pnpm`、缓存的登录态 |
+| `deviceId` | `.anonymous-user-id` | 每台机一个身份；同步会让两台机互相冒充 |
 
 插件清单不同步是刻意的：**插件由 `dsh-market` 管**，
 而 `link:` 规格里的绝对路径本来就不能跨机搬运。
@@ -202,22 +205,29 @@ statusPayload():
 
 ## 6. 目录一览（面板里能看到的就是这些）
 
-`GET /api/dsh-synchub/map` 返回 13 行：6 个可同步面 + 7 个危险目录。
+`GET /api/dsh-synchub/map` 返回 16 行：6 个可同步面 + 10 个不同步目录。
 每行含 `paths / tier / syncOn / files / bytes / note / exists`。
 
-危险目录默认**不统计大小**（`deep=1` 才算，且排除 `runtimes`/`caches` 这类几十万文件的目录）。
-界面在未统计时显示 `—` 而不是 `0`——避免把「没数」看成「是空的」。
+后 4 行（`logs` / `profileOther` / `deviceId` / `quarantine`）是补上的：
+每个机器上的目录都必须能回答「为什么它不在里面」，否则下次迁移时又得重新猜。
 
+危险目录默认**不统计大小**（`deep=1` 才算，且排除 `runtimes` / `caches` /
+`profileOther` / `logs` 这类畸大或无穷尽的目录）。
+界面在未统计时显示 `—` 而不是 `0`——避免把「没数」看成「是空的」。
 本机实测规模（`FRANCIS-HOME-I7`，2026-11-12）：
 
 ```
 sessions         71 文件    52.8 MB
 storages         73 文件     3.9 MB
 attachments      45 文件     3.3 MB
-skills           20 文件    47.3 KB
-profileConfig     2 文件    55.7 KB
+skills           20 文件    46.2 KB   ← 含 skill-manager/library
+profileConfig     2 文件    54.4 KB
 profileManifest   2 文件     1.4 KB   ← 不同步
 ```
+
+不同步的部分只是列出来给你确认「它确实被排除在外」，不是让你去算它多大。
+其中 `mobile-access` 的 21 个文件里有 14.2 MB 是 iroh TLS 私钥——
+这是整个 `~/.dsh` 里最不能进仓库的东西，deep 模式下能看到它被单独标出来。
 
 ---
 
@@ -237,6 +247,15 @@ profileManifest   2 文件     1.4 KB   ← 不同步
 
 插件路径同样要一致：`link:` 规格把绝对路径写进 `profile/package.json`。
 
+### 分支不写死：main / master 都行
+
+早期版本把 `BRANCH = 'main'` 写死，这在你这台机器上会直接出事：
+`dsh-config` 远端只有 `master`，写死 `main` 会推上去一个**平行的空历史分支**，
+两台机器各看一半，而旧提交全在 `master` 上——等于凭空丢了历史。
+
+现在的顺序是：`config.channels[ch].branch` → `ls-remote --symref origin HEAD` → `main`。
+尚未初始化的仓库，`status` 报 `branch: null` 而不是 `main`——
+**「未知」不能伪装成「默认值」**，否则你会以为分支已经确定了。
 ### 导入是**并集合并**，不是覆盖
 
 这是 DSH 自己的语义，同步引擎必须顺着它：
@@ -342,9 +361,10 @@ GitHub 只接受 HTTPS + PAT（本机实测 SSH 全被墙）。
 > ```powershell
 > git -C C:\dsh\dshplug config http.sslBackend openssl
 > ```
-> **不要配代理**：仓库级 `http.proxy` 已清除。实测那个代理已失效，
-> 反而把直连能通的连接搞成 `TLS connect error: unexpected eof while reading`。
-> 直连正常；真被墙再加回来，但先用 `git ls-remote --heads origin` 测一下。
+> **网络是间歇的**：直连会 `Connection was reset`，代理（7897 确实在听）
+> 会 `TLS connect error: unexpected eof while reading`，两边都可能挂。
+> 当前仓库级没配代理；失败先重试 2~3 次，不要把单次失败当结论。
+> 真需要代理时临时加回 `http.proxy`，用完可 `--unset` 删掉。
 
 ---
 

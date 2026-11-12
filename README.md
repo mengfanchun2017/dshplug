@@ -137,14 +137,21 @@ HTTPS + PAT 会弹一次系统登录窗并记住，不用把 token 写进任何�
 git -C C:\dsh\dshplug config http.sslBackend openssl
 ```
 
-> **不要配代理。** 之前仓库里写过 `http.proxy = http://127.0.0.1:7897`，
-> 实测那个代理现在已经失效，反而会把直连能通的连接搞成
+> **网络是间歇的，别把临时状态当结论。**
+> 实测同一分钟里：直连一会 `Connection was reset`、一会 25s 后成功；
+> 代理（verge-mihomo 在 7897 确实听着）则稳定报
 > `TLS connect error: unexpected eof while reading`。
-> 已清除仓库级代理配置；`ls-remote` 直连正常。
-> 如果哪天直连真被墙了再加回来，但**先测**：
+> 两者都会失败，**谁觉得快用谁**，别写死。
+>
+> 当前仓库级没配代理（直连重试基本能通）。如果你那阵子直连全挂，
+> 临时加回来就行，用完可以再拿掉：
 > ```powershell
-> git -C C:\dsh\dshplug ls-remote --heads origin
+> git -C C:\dsh\dshplug config http.proxy http://127.0.0.1:7897
+> # 修好了就删：
+> git -C C:\dsh\dshplug config --unset http.proxy
 > ```
+> 判断标准就一条：`git -C C:\dsh\dshplug ls-remote --heads origin` 能返回 ref
+> 就算通；失败先重试 2~3 次再换路 —— 单次失败在这台机器上不代表网络不通。
 
 ## 两台机器的安装顺序（重要）
 

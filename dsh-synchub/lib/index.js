@@ -35,7 +35,28 @@ const execFileAsync = promisify(execFile);
 const name = 'dsh-synchub';
 const inject = ['webServer'];
 const VERSION = '0.3.0';
-const BRANCH = 'main';
+/* 分支不能写死。远端仓库可能是 master（GitHub 旧默认）也可能是 main，
+   写死一个就会在已有仓库上推出一个**平行的空历史分支**。
+   优先级：config.channels[ch].branch → 远端 HEAD 指向的分支 → DEFAULT_BRANCH。 */
+const DEFAULT_BRANCH = 'main';
+const BRANCH_CACHE = new Map();
+
+function branchOf(channel) {
+  return BRANCH_CACHE.get(channel) || DEFAULT_BRANCH;
+}
+
+/** 探测远端默认分支并缓存；失败则保持现状。 */
+async function probeBranch(channel) {
+  const dir = repoDir(channel);
+  const r = await git(dir, ['ls-remote', '--symref', 'origin', 'HEAD'], 120000);
+  if (!r.ok || !r.out) return null;
+  const m = /^ref:\s+refs\/heads\/(\S+)\s+HEAD/m.exec(r.out);
+  if (m) {
+    BRANCH_CACHE.set(channel, m[1]);
+    return m[1];
+  }
+  return null;
+}
 
 /* ------------------------------------------------------------------ 路径 */
 
@@ -146,6 +167,9 @@ const DANGER_PATHS = [
   { id: 'runtimes', label: '运行时与依赖', paths: ['dsh-runtimes', `profiles/${PROFILE}/node_modules`, `profiles/${PROFILE}/.pnpm`], note: '可重新生成（数百 MB），同步只会拖慢且会因平台差异失效' },
   { id: 'caches', label: '插件缓存', paths: ['plugins', 'pixel-studio', 'workbuddy-vault', 'dsh-market'], note: '本地缓存/市场状态，重建即可' },
   { id: 'quarantine', label: '隔离与历史备份', paths: ['_sessions-quarantine-20261112'], note: '疑似损坏的历史会话，留档用，不参与同步' },
+  { id: 'logs', label: '日志', paths: ['logs'], note: '本机运行时日志，只对排障本机有意义，同步过去只会误导' },
+  { id: 'profileOther', label: '配置目录的非同步部分', paths: ['profiles'], note: '只有 cordis.patch.yml / cordis.yml 进仓库；同目录下 node_modules、.pnpm、缓存的登录态均不同步' },
+  { id: 'deviceId', label: '匿名设备 ID', paths: ['.anonymous-user-id'], note: '每台机器一个身份，同步会让两台机器互相冒充（统计/配额会算错）' },
 ];
 
 const ALL_SURFACES = new Map(SURFACES.map(s => [s.id, s]));
@@ -289,10 +313,14 @@ async function fetchRemote(channel, remote) {
   const anyRef = await git(dir, ['ls-remote', '--heads', 'origin'], 120000);
   if (!anyRef.ok) return { ok: false, empty: false, error: anyRef.err || anyRef.out };
   if (!anyRef.out) return { ok: true, empty: true };
-  const f = await git(dir, ['fetch', '--prune', 'origin', BRANCH], 120000);
+
+  // 先探默认分支（master/main 都可能），再 fetch 它 —— 不探就会 fetch 错分支。
+  await probeBranch(channel);
+  const br = branchOf(channel);
+  const f = await git(dir, ['fetch', '--prune', 'origin', br], 120000);
   if (!f.ok) return { ok: false, empty: false, error: f.err || f.out };
-  const up = await git(dir, ['rev-parse', '--verify', '--quiet', `origin/${BRANCH}`]);
-  return { ok: true, empty: !up.ok, output: f.out };
+  const up = await git(dir, ['rev-parse', '--verify', '--quiet', `origin/${br}`]);
+  return { ok: true, empty: !up.ok, branch: br, output: f.out };
 }
 
 async function ensureRepo(channel, remote) {
@@ -301,11 +329,11 @@ async function ensureRepo(channel, remote) {
   await fsp.mkdir(dir, { recursive: true });
 
   if (fresh) {
-    let r = await git(dir, ['init', '-b', BRANCH]);
+    let r = await git(dir, ['init', '-b', DEFAULT_BRANCH]);
     if (!r.ok) {
       // 老 git 没有 -b
       await git(dir, ['init']);
-      await git(dir, ['symbolic-ref', 'HEAD', `refs/heads/${BRANCH}`]);
+      await git(dir, ['symbolic-ref', 'HEAD', `refs/heads/${DEFAULT_BRANCH}`]);
     }
     // 二进制安全 + Windows 长路径 + 不留 GPG 交互
     await git(dir, ['config', 'core.autocrlf', 'false']);
@@ -370,11 +398,13 @@ async function bootstrapFromRemote(channel, remote) {
       });
       moved += acc.length;
     }
-    const co = await git(dir, ['checkout', '-f', '-B', BRANCH, `origin/${BRANCH}`]);
+    const br = fetched.branch || branchOf(channel);
+    const co = await git(dir, ['checkout', '-f', '-B', br, `origin/${br}`]);
     if (!co.ok) return { ok: false, error: `检出远端分支失败：${co.err}` };
     return { ok: true, adopted: true, stashed: moved, stashDir: moved ? stash : null };
   }
-  await git(dir, ['branch', '--set-upstream-to', `origin/${BRANCH}`, BRANCH]);
+  const brDone = fetched.branch || branchOf(channel);
+  await git(dir, ['branch', '--set-upstream-to', `origin/${brDone}`, brDone]);
   return { ok: true };
 }
 
@@ -387,7 +417,7 @@ async function channelState(channel, cfg, opts = {}) {
     remote: conf.remote || '',
     enabled: conf.enabled !== false,
     initialized: fs.existsSync(path.join(dir, '.git')),
-    branch: BRANCH,
+    branch: branchOf(channel),
     ahead: 0,
     behind: 0,
     dirty: 0,
@@ -400,6 +430,9 @@ async function channelState(channel, cfg, opts = {}) {
     error: null,
   };
   if (!out.initialized) {
+    // 尚未初始化：分支是「未知」，不是默认值。
+    // 报 main 会让人误以为已经确定了分支，而实际远端可能是 master。
+    out.branch = null;
     out.error = 'not-initialized';
     return out;
   }
@@ -425,11 +458,13 @@ async function channelState(channel, cfg, opts = {}) {
       out.fetched = fr.ok;
       if (!fr.ok) out.error = `fetch-failed: ${fr.error}`;
       if (fr.ok && fr.empty) out.remoteEmpty = true;
+      if (fr.ok && fr.branch) out.branch = fr.branch;
     }
-    const up = await git(dir, ['rev-parse', '--verify', '--quiet', `origin/${BRANCH}`]);
+    const br = branchOf(channel);
+    const up = await git(dir, ['rev-parse', '--verify', '--quiet', `origin/${br}`]);
     if (up.ok) {
       if (head.ok) {
-        const counts = await git(dir, ['rev-list', '--left-right', '--count', `HEAD...origin/${BRANCH}`]);
+        const counts = await git(dir, ['rev-list', '--left-right', '--count', `HEAD...origin/${br}`]);
         if (counts.ok) {
           const m = /^(\d+)\s+(\d+)/.exec(counts.out);
           if (m) {
@@ -441,7 +476,7 @@ async function channelState(channel, cfg, opts = {}) {
         // 本地无提交但远端有 → 整枝都算要拉的
         out.behind = 1;
       }
-      const rl = await git(dir, ['log', '-1', '--format=%cI', `origin/${BRANCH}`]);
+      const rl = await git(dir, ['log', '-1', '--format=%cI', `origin/${br}`]);
       if (rl.ok) out.remoteCommitAt = rl.out || null;
       const st = await parseStamp(channel);
       if (st) {
@@ -745,7 +780,8 @@ function stampTrailer(cfg) {
 async function parseStamp(channel, { remoteOnly = false } = {}) {
   const dir = repoDir(channel);
   if (!fs.existsSync(path.join(dir, '.git'))) return null;
-  const refs = remoteOnly ? [`origin/${BRANCH}`] : [`origin/${BRANCH}`, 'HEAD'];
+  const br = branchOf(channel);
+  const refs = remoteOnly ? [`origin/${br}`] : [`origin/${br}`, 'HEAD'];
   for (const ref of refs) {
     const r = await git(dir, ['log', '-1', '--format=%B', ref]);
     if (!r.ok || !r.out) continue;
@@ -784,7 +820,7 @@ async function pushChannels(cfg, opts = {}) {
       continue;
     }
     if (!f.empty) {
-      const counts = await git(dir, ['rev-list', '--left-right', '--count', `HEAD...origin/${BRANCH}`]);
+      const counts = await git(dir, ['rev-list', '--left-right', '--count', `HEAD...origin/${f.branch || branchOf(ch)}`]);
       if (counts.ok) {
         const m = /^(\d+)\s+(\d+)/.exec(counts.out);
         if (m && Number(m[2]) > 0) {
@@ -812,7 +848,8 @@ async function pushChannels(cfg, opts = {}) {
       continue;
     }
 
-    const r = await git(dir, ['push', '-u', 'origin', `${BRANCH}:${BRANCH}`], 180000);
+    const brPush = f.branch || branchOf(ch);
+    const r = await git(dir, ['push', '-u', 'origin', `${brPush}:${brPush}`], 180000);
     out[ch] = r.ok
       ? { ok: true, committed, output: r.err || r.out }
       : { ok: false, reason: r.err || r.out || 'push-failed' };
@@ -863,7 +900,8 @@ async function pullChannels(cfg) {
       out[ch] = { ok: true, emptyRemote: true };
       continue;
     }
-    const mb = await git(dir, ['merge', '--ff-only', `origin/${BRANCH}`]);
+    const brPull = f.branch || branchOf(ch);
+    const mb = await git(dir, ['merge', '--ff-only', `origin/${brPull}`]);
     out[ch] = mb.ok
       ? { ok: true, output: mb.out || 'up-to-date' }
       : { ok: false, reason: `需要人工处理（非快进）：${mb.err || mb.out}` };
@@ -1080,7 +1118,9 @@ async function mapInfo(cfg, opts = {}) {
       const abs = path.join(DSH_HOME, p);
       if (!fs.existsSync(abs)) continue;
       exists = true;
-      if (opts.deep && !['runtimes', 'caches'].includes(d.id)) {
+      // profileOther 指向整个 profiles，深度遍历会扫到 node_modules（数百 MB）；
+      // logs 也可能很大。这两类只报「存在」，不统计体积。
+      if (opts.deep && !['runtimes', 'caches', 'profileOther', 'logs'].includes(d.id)) {
         const acc = [];
         const st = await fsp.lstat(abs).catch(() => null);
         if (st && st.isDirectory()) await walkFiles(abs, p, [], acc);
