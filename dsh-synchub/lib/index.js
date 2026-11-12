@@ -304,6 +304,20 @@ function payloadDir(channel) {
 }
 
 /**
+ * 不依赖本地仓库状态，直接问远端「你到底存不存在」。
+ * 未初始化的通道没法 fetch，但「仓库根本没建」和「仓库已建只是本地还没接」
+ * 对用户的下一步完全不同：前者要去 GitHub 建，后者直接点拉取就行。
+ */
+async function probeRemoteExists(channel, remote) {
+  if (!remote) return { ok: false };
+  const r = await git(REPO_ROOT, ['ls-remote', '--heads', remote], 90000);
+  if (r.ok) return { ok: true, missing: false };
+  const why = r.err || r.out || '';
+  const missing = /not found|does not appear|Repository not found|404|not exist/i.test(why);
+  return { ok: false, missing, error: why };
+}
+
+/**
  * fetch 一个可能空的远端。远端仓库刚建、一次都没推过时，
  * `fetch origin main` 会以 `couldn't find remote ref main` 报错 ——
  * 那不是错误，是「远端还没有这个分支」。靠先探测是否有任何 ref 来区分。
@@ -311,7 +325,13 @@ function payloadDir(channel) {
 async function fetchRemote(channel, remote) {
   const dir = repoDir(channel);
   const anyRef = await git(dir, ['ls-remote', '--heads', 'origin'], 120000);
-  if (!anyRef.ok) return { ok: false, empty: false, error: anyRef.err || anyRef.out };
+  // ls-remote 失败 = 仓库根本不存在 / 没权限，和「仓库存在但为空」是两件事。
+  // 前者拉一百次也不会自动建好，必须明说，不能引导用户去点拉取。
+  if (!anyRef.ok) {
+    const why = anyRef.err || anyRef.out || '';
+    const missing = /not found|does not appear|Repository not found|404/i.test(why);
+    return { ok: false, empty: false, missing, error: why };
+  }
   if (!anyRef.out) return { ok: true, empty: true };
 
   // 先探默认分支（master/main 都可能），再 fetch 它 —— 不探就会 fetch 错分支。
@@ -427,6 +447,7 @@ async function channelState(channel, cfg, opts = {}) {
     remoteCommitAt: null,
     remoteMachine: null,
     fetched: false,
+    remoteMissing: false,
     error: null,
   };
   if (!out.initialized) {
@@ -456,7 +477,8 @@ async function channelState(channel, cfg, opts = {}) {
     if (opts.fetch) {
       const fr = await fetchRemote(channel, out.remote);
       out.fetched = fr.ok;
-      if (!fr.ok) out.error = `fetch-failed: ${fr.error}`;
+      if (fr.missing) out.remoteMissing = true;
+      if (!fr.ok) out.error = fr.missing ? 'remote-missing' : `fetch-failed: ${fr.error}`;
       if (fr.ok && fr.empty) out.remoteEmpty = true;
       if (fr.ok && fr.branch) out.branch = fr.branch;
     }
@@ -1169,16 +1191,47 @@ async function preflight(cfg) {
     noRemote.length ? '在设置里填仓库地址（https://github.com/<你>/<私有仓库>.git）' : null);
 
   // 未初始化的通道不能算「与远端一致」—— 那是没查，不是查过没问题。
-  const notInit = ['config', 'sessions'].filter(ch => (cfg.channels[ch] || {}).remote && !channels[ch].initialized);
+  // 但「未初始化」不等于「要拉取」：仓库可能压根没建。
+  // 对未初始化的通道先探一下远端存不存在，否则会把「仓库没建」误报成「首次拉取会自动建立」。
+  const notInitRaw = ['config', 'sessions'].filter(ch => (cfg.channels[ch] || {}).remote && !channels[ch].initialized);
+  for (const ch of notInitRaw) {
+    const probe = await probeRemoteExists(ch, cfg.channels[ch].remote);
+    if (probe.missing) {
+      channels[ch].remoteMissing = true;
+      channels[ch].fetched = false;
+    } else if (probe.ok) {
+      channels[ch].fetched = true;
+    }
+  }
+  const notInit = notInitRaw.filter(ch => !channels[ch].remoteMissing);
+  // 同理：fetch 失败也不能算一致。behind 会停在 0，看上去像「追平了」。
+  const fetchFail = ['config', 'sessions'].filter(ch => {
+    const st = channels[ch];
+    return (cfg.channels[ch] || {}).remote && st.initialized && st.fetched === false;
+  });
   const behind = Math.max(channels.config.behind || 0, channels.sessions.behind || 0);
-  add('pull', behind === 0 && notInit.length === 0 ? 'ok' : 'need',
-    '先拉取远端',
-    notInit.length
-      ? `${notInit.join('、')}通道还没接入远端（首次拉取会自动建立连接）`
-      : behind === 0
-        ? '与远端一致'
-        : `落后远端 ${behind} 个提交${switched ? `（另一台 ${stamp.machine} 推过）` : ''}`,
-    behind === 0 && notInit.length === 0 ? null : '点「拉取并应用」，把远端状态取到本机');
+  // 仓库根本没建好，和「本地还没接上」是两回事：后者拉一下就成，
+  // 前者拉一百次也不会自动建。必须分开放前面说。
+  const missing = ['config', 'sessions'].filter(ch => channels[ch].remoteMissing);
+  const pullOk = behind === 0 && notInit.length === 0 && fetchFail.length === 0 && missing.length === 0;
+  add('pull', pullOk ? 'ok' : 'need',
+    missing.length ? '远端仓库不存在' : '先拉取远端',
+    missing.length
+      ? `${missing.join('、')}通道的仓库在远端找不到（没建或没权限），拉取无法自己把它变出来`
+      : notInit.length
+        ? `${notInit.join('、')}通道还没接入远端（首次拉取会自动建立连接）`
+        : fetchFail.length
+          ? `${fetchFail.join('、')}通道无法访问远端（网络或权限），无法判断是否落后`
+          : behind === 0
+            ? '与远端一致'
+            : `落后远端 ${behind} 个提交${switched ? `（另一台 ${stamp.machine} 推过）` : ''}`,
+    pullOk ? null
+      : missing.length
+        ? '在 GitHub 上建一个空私有仓库，把地址填到设置里；建好后点「拉取并应用」'
+        : fetchFail.length
+          ? '先确认网络能访问 GitHub，再重试'
+          : '点「拉取并应用」，把远端状态取到本机');
+
 
   const unpushed = Math.max(channels.config.ahead || 0, channels.sessions.ahead || 0);
   add('push', unpushed === 0 ? 'ok' : 'need',
@@ -1257,6 +1310,13 @@ async function autoPushTick(ctx) {
     const behind = Math.max(st.config.behind || 0, st.sessions.behind || 0);
     if (behind > 0) {
       runtime.lastAutoResult = { at: new Date().toISOString(), ok: false, reason: 'behind-remote' };
+      runtime.lastAutoPushAt = Date.now();
+      return;
+    }
+    // fetch 失败时 behind 会停在 0，不能误以为追平了就去写。
+    const unreachable = ['config', 'sessions'].filter(ch => st[ch].initialized && st[ch].fetched === false);
+    if (unreachable.length) {
+      runtime.lastAutoResult = { at: new Date().toISOString(), ok: false, reason: `remote-unreachable: ${unreachable.join(',')}` };
       runtime.lastAutoPushAt = Date.now();
       return;
     }
