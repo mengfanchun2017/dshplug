@@ -35,6 +35,19 @@ Git 认证一站式管理插件：**检查 / 建议 / 配置 / 验证 / 撤销**
 新手不用知道 `gitok_*` 工具名，看卡片 + 点按钮就够。
 
 ---
+
+## 三份文档的分工
+
+| 文件 | 讲什么 | 什么时候读 |
+|---|---|---|
+| **README.md**（本文件） | **现在怎么用**：面板长什么样、六个工具干什么、六种认证方式怎么选、安全边界 | 第一次接触 / 要决定用哪种认证 |
+| [`BOOTSTRAP.md`](./BOOTSTRAP.md) | **怎么做**：安装、三层验证、日常开发循环、发布、迁移、报错对照表 | 装机 / 换机器 / 出事排障 |
+| [`ADR.md`](./ADR.md) | **为什么这么定**：七条决策的理由、反面代价、已否决方案 | 要改设计 / 要反驳某个约束 |
+
+原始审计数据：[`docs/git-auth-audit-2026-11-12.md`](./docs/git-auth-audit-2026-11-12.md)
+
+---
+
 ## 目录
 
 - [1. 为什么做这个](#1-为什么做这个)
@@ -42,10 +55,11 @@ Git 认证一站式管理插件：**检查 / 建议 / 配置 / 验证 / 撤销**
 - [3. 六种认证方式对比](#3-六种认证方式对比)
 - [4. 插件设计](#4-插件设计)
 - [5. 安全模型](#5-安全模型)
-- [6. 安装与开发](#6-安装与开发)
+- [6. 安装与开发](#6-安装与开发) → 完整命令见 [BOOTSTRAP.md](./BOOTSTRAP.md)
 - [7. 待办与已知限制](#7-待办与已知限制)
 - [8. 踩坑记录](#8-踩坑记录)
 - [9. 换工作区继续开发](#9-换工作区继续开发交接清单)
+- [10. 相关文档](#10-相关文档)
 
 ---
 
@@ -292,72 +306,63 @@ Windows 凭据管理器的底层是 **DPAPI**，用当前用户的 master key �
 
 ```
 C:\dsh\dshplug\dsh-gitok\
-├─ package.json        # name = dsh-gitok，dsh.bundle.patch 指向 cordis.patch.yml
+├─ package.json        # dsh.bundle.patch → cordis.patch.yml；dsh.client → 浏览器半
 ├─ cordis.patch.yml    # - insert: - id: gitok / name: dsh-gitok
-├─ lib\index.js        # 宿主半，导出 { name, inject, Config, apply }
-└─ README.md           # 本文件
+├─ lib\index.js        # 宿主半：6 个工具 + /plugins/gitok/status 路由
+├─ lib\client.js       # 浏览器半：设置里的「Git 认证」分区
+├─ README.md           # 本文件（现在怎么用）
+├─ BOOTSTRAP.md        # 命令行手册（怎么做）
+├─ ADR.md              # 架构决策记录（为什么）
+└─ docs\git-auth-audit-2026-11-12.md   # 原始审计数据
 ```
 
-**没有 `lib/client.js`**：本插件不声明 `dsh.client`，纯模型工具插件，没有浏览器半、没有侧栏面板。
+v0.1.0 时**没有** `lib/client.js`，是纯模型工具插件。v0.2.0 新增了浏览器半（ADR-004）。
 
-### 6.2 安装
+### 6.2~6.5 安装 / 开发 / 验证 / 发布
+
+这四节已整体移到 **[`BOOTSTRAP.md`](./BOOTSTRAP.md)**（命令行手册），这里只留最短版本：
 
 ```powershell
-# 装（link: 目录 Junction，改代码即时生效）
+# 装
 & C:\dsh\dshplug\install.ps1 -Only dsh-gitok
+# → 完全退出 DSH 再打开
 
-# 完全退出 DSH 再打开（首次加载新 bundle 必须）
+# 改了 package.json 的 dsh.client / files（必须 -Force，否则不更新元数据）
+& C:\dsh\dshplug\install.ps1 -Only dsh-gitok -Force
+
+# 验证（最有价值的一条：mock ctx，不依赖重启）
+$node = "$env:USERPROFILE\AppData\Local\Programs\DeepSeek Harness\resources\runtime\primary-runtime\dependencies\node\bin\node.exe"
+& $node --check C:\dsh\dshplug\dsh-gitok\lib\index.js
+& $node --check C:\dsh\dshplug\dsh-gitok\lib\client.js
+
+# 发布（注意 plugpush 会带上仓库根级文件，详见 BOOTSTRAP §4.1）
+& C:\dsh\dshplug\plugpush.ps1 -Name dsh-gitok -DryRun
+& C:\dsh\dshplug\plugpush.ps1 -Name dsh-gitok -Message "说明"
 ```
+
+三条最容易误判的：
+
+1. **宿主半改了只刷页面不生效** —— 必须完全退出 DSH 再打开。
+2. **加/改 `dsh.client` 后只重启不够** —— 必须先 `-Force` 重装。
+3. **`gitok_*` 不是命令** —— 在 PowerShell 里敲会报「无法识别为 cmdlet」，它只能由 AI 会话调用。
 
 > 别用 `dsh plugin add` —— 自研插件不在 npm，会去 registry 找然后 404。
 
-装完后 `& C:\dsh\dshplug\install.ps1 -Check` 应显示 `link-junction`。
-
-### 6.3 开发循环
-
-```powershell
-# 改 lib\index.js → 保存 → 完全退出 DSH 再打开（宿主半改动需重启）
-# 改 cordis.patch.yml 的 config: → 必须重启 App
-```
-
-`link:` 是目录 Junction，任何写入方式（原地写 / 删除重建 / 原子改名）都即时生效。
-只有三种情况要重跑 `install.ps1`：新机器首次、新增/删除插件、`list.json` 改动。
-
-### 6.4 本地验证（不起 DSH 也能测）
-
-```powershell
-$node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
-
-# 语法
-& $node --check C:\dsh\dshplug\dsh-gitok\lib\index.js
-
-# 加载 + Config 解析
-$env:DSH_HOME="C:\Users\franc\.dsh"; $env:DSH_PROFILE="desktop"
-& $node -e "import('file:///C:/dsh/dshplug/dsh-gitok/lib/index.js').then(m=>console.log(m.name, typeof m.Config))"
-```
-
-跑工具本体需要 mock ctx（`ctx.effect` / `ctx.tools.register`），可参考 `dsh-pixel\test\`。
-
-### 6.5 发布
-
-```powershell
-& C:\dsh\dshplug\plugpush.ps1 dsh-gitok "说明" -DryRun   # 先看会提交什么
-& C:\dsh\dshplug\plugpush.ps1 dsh-gitok "说明"
-& C:\dsh\dshplug\plugpush.ps1 dsh-gitok "v0.1.0" -Tag    # 打版本 tag
-```
-
+完整的开发循环、三层验证脚本、报错对照表 → `BOOTSTRAP.md`。
 ---
 
 ## 7. 待办与已知限制
 
 ### 7.1 已验证可用（2026-11-12 实测）
 
-- ✅ `gitok_doctor` 在 Windows + claude 两个端点上输出正确
+- ✅ `gitok_doctor` 在 Windows 端点输出正确；开发期也在 `claude` 上验过（该端点现已从默认 `targets` 移除）
 - ✅ `gitok_verify` 两端点 `ls-remote` 均返回 `38e1b73f...`
 - ✅ `gitok_list` 正确显示凭据条目与 GCM 账号
 - ✅ `gitok_revoke` 不传 `confirm` 时拒绝执行
 - ✅ `gitok_adopt` 接管 claude 后 helper 只剩一条，且端到端仍可用
 - ✅ 修复后已把 claude 的 `.gitconfig` 还原（493 字节，与原始一致）
+- ✅ `runDoctor` + `parseStatus` 在真实体检输出上验证：`level=ok`、`creds=1`
+- ✅ mock ctx 验证：6 个工具 + `/plugins/gitok/status` 均能注册
 
 ### 7.2 待办
 
@@ -599,27 +604,35 @@ git clone https://github.com/mengfanchun2017/dshplug.git C:\dsh\dshplug
 之后新会话的 `cwd` 就在插件目录，右侧终端打开即是，不用 `cd`。
 （会话 cwd 硬绑定绝对路径，两台机器要保持逐字符一致。）
 
-### 9.3 新机器要做的三件事
+### 9.3 迁移步骤看 BOOTSTRAP
+
+完整的迁移步骤（含验收清单、会丢什么、新机器缺什么）已移到
+**[`BOOTSTRAP.md` §5](./BOOTSTRAP.md#5-迁移到另一个工作区用户下一步要做的)**。
+
+最短版本：
 
 ```powershell
-# ① 装插件（建 link: Junction）
-& C:\dsh\dshplug\install.ps1 -Only dsh-gitok
+# ① 拉最新（代码已在仓库且已推送 8276917，不是「搬过去」）
+cd C:\dsh\dshplug; & git pull --ff-only
 
-# ② 完全退出 DSH 再打开
+# ② 换工作区后强制刷一次元数据
+& C:\dsh\dshplug\install.ps1 -Only dsh-gitok -Force
 
-# ③ 验收
-& C:\dsh\dshplug\install.ps1 -Check    # 期望 dsh-gitok 是 link-junction
+# ③ 完全退出 DSH 再打开
+
+# ④ 验收
+& C:\dsh\dshplug\install.ps1 -Check    # 期望 link-junction / active
 ```
-
 ### 9.4 起手先读什么
 
 | 顺序 | 读什么 | 为什么 |
 |---|---|---|
-| 1 | 本文件 §8 踩坑记录 | 六个坑，每个都能浪费你几小时 |
-| 2 | 本文件 §5 安全模型 | 别在实现里破坏「不接收 token / 不落盘」 |
-| 3 | `docs\git-auth-audit-2026-11-12.md` | 原始盘点报告，含全部实测数据与命令 |
-| 4 | `lib\index.js` 顶部注释 | 设计目标与安全铁律写在文件头 |
-| 5 | `~\.dsh\AGENTS.md` | 全局开发/归档约定 |
+| 1 | [`ADR.md`](./ADR.md) 的 ADR-002 / ADR-006 | 这两条决定了能改什么：不接触密钥、WSL 默认关 |
+| 2 | 本文件 §8 踩坑记录 | **十个**坑，每个都能浪费几小时 |
+| 3 | 本文件 §5 安全模型 | 别在实现里破坏「不接收 token / 不落盘」 |
+| 4 | [`BOOTSTRAP.md` §2.2](./BOOTSTRAP.md) | mock ctx 验证，最快的健全性检查 |
+| 5 | `docs\git-auth-audit-2026-11-12.md` | 原始盘点报告，含全部实测数据与命令 |
+| 6 | `lib\index.js` 顶部注释 | 设计目标与安全铁律写在文件头 |
 
 ### 9.5 本机当前 git 认证状态（2026-11-12 收尾）
 
@@ -629,13 +642,21 @@ git clone https://github.com/mengfanchun2017/dshplug.git C:\dsh\dshplug
 | Windows 凭据 | ✅ GCM `wincredman`，`git:https://github.com`，用户 `mengfanchun2017` |
 | WSL `claude` | ⏸ **未改动**，仍用 gh helper + 明文 PAT（按用户要求保持原样） |
 | WSL `u26claude4` | ⏸ **未改动**，仍有空口令 SSH 私钥（待后续处理） |
-| 本插件 | `status: dev`，未装进 profile |
-
+| 本插件 | ✅ `status: active`，已装进 `desktop`（v0.2.0，link-junction） |
+| 设置面板 | ✅ 代码已完成（宿主路由 + 浏览器半）；需重启 DSH 后在界面上确认 |
 ---
 
 ## 10. 相关文档
 
+本插件自己的三份（按用途分）：
+
+- **README.md**（本文件）—— 现在怎么用
+- [`BOOTSTRAP.md`](./BOOTSTRAP.md) —— 怎么做（安装/验证/排错/迁移）
+- [`ADR.md`](./ADR.md) —— 为什么（七条决策 + 反面代价 + 已否决方案）
+- [`docs/git-auth-audit-2026-11-12.md`](docs/git-auth-audit-2026-11-12.md) —— 原始盘点报告
+
+仓库级：
+
 - 仓库总览：[`../README.md`](../README.md)
-- 命令行操作手册：[`../BOOTSTRAP.md`](../BOOTSTRAP.md)
-- 原始盘点报告：[`docs/git-auth-audit-2026-11-12.md`](docs/git-auth-audit-2026-11-12.md)
+- 仓库命令行手册：[`../BOOTSTRAP.md`](../BOOTSTRAP.md)
 - 全局规则（含归档/开发约定）：`~/.dsh/AGENTS.md`

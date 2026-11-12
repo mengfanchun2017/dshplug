@@ -39,11 +39,15 @@ C:\dsh\dshplug\
 │  ├─ cordis.patch.yml
 │  ├─ index.js + client.js + gn.py / gn.ps1
 │  └─ SKILL.md        # 整理纪律
-├─ dsh-gitok\        ← 插件 4：Git 认证一站式管理（开发中）
-│  ├─ package.json    # name = dsh-gitok，dsh.bundle.patch，无 dsh.client
+├─ dsh-gitok\        ← 插件 4：Git 认证一站式管理（v0.2.0 active）
+│  ├─ package.json    # dsh.bundle.patch + dsh.client（有浏览器半）
 │  ├─ cordis.patch.yml
-│  ├─ lib\index.js    # 6 个 gitok_* 工具（纯宿主半）
-│  └─ README.md       # 认证方式对比、插件设计、踩坑记录
+│  ├─ lib\index.js    # 6 个 gitok_* 工具 + /plugins/gitok/status 路由
+│  ├─ lib\client.js   # 设置里的「Git 认证」面板
+│  ├─ README.md       # 现在怎么用（面板/工具/认证方式对比）
+│  ├─ BOOTSTRAP.md    # 怎么做（安装/验证/排错/迁移）
+│  ├─ ADR.md          # 为什么（七条决策 + 反面代价）
+│  └─ docs\git-auth-audit-2026-11-12.md
 ├─ dsh-larkcli\       ← 插件 5：飞书 CLI 的 Windows 原生驱动（开发中）
 │  ├─ package.json    # 尚无 dsh.bundle.patch → install.ps1 会自动跳过
 │  ├─ lark.ps1 + scripts\ + lark-cli-win\
