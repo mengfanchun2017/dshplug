@@ -37,9 +37,11 @@
       "dir": "dsh-gitok",
       "version": "0.1.0",
       "description": "Git 认证一站式管理：doctor 体检 / list 查看 / verify 端到端验证 / login 触发 GCM / adopt 让 WSL 借用 Windows 凭据 / revoke 精确撤销。凭据统一收敛到 Windows 凭据管理器（DPAPI，出机器不可用），输出全程脱敏。",
-      "installedOn": [],
-      "status": "dev",
-      "note": "未在 npm 发布，未安装到任何 profile。无浏览器半（不声明 dsh.client），纯模型工具插件。开发工作区：C:\\dsh\\dshplug\\dsh-gitok。"
+      "installedOn": [
+        "REDMIPRO"
+      ],
+      "status": "active",
+      "note": "未在 npm 发布，用 link: 装进 desktop profile。无浏览器半（不声明 dsh.client），纯模型工具插件。开发工作区：C:\\dsh\\dshplug\\dsh-gitok。WSL 功能默认关闭（targets 只含 windows）。"
     },
     {
       "name": "dsh-larkcli",

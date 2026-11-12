@@ -304,7 +304,8 @@ $env:DSH_HOME="C:\Users\franc\.dsh"; $env:DSH_PROFILE="desktop"
 
 - [ ] `gitok_login` 未做真实登录实测（会弹浏览器，需人工在场）
 - [ ] 没有 mock ctx 的自动化测试（`test/` 目录还没建）
-- [ ] 未装进任何 profile，`list.json` 里 `status: dev`、`installedOn: []`
+- [x] ✅ **已装进 `desktop` profile**（2026-11-12，`list.json` 里 `status: active`、`installedOn: ["REDMIPRO"]`）
+- [ ] 装完后**尚未重启 DSH 验证工具真的出现在会话里**（需人工完全退出再打开）
 - [ ] `gitok_adopt` 没有 `--dry-run` 选项，只能靠备份回滚
 - [ ] 没处理 `gitok_revoke` 之后「其他仓库还在用旧凭据」的提示
 
@@ -318,6 +319,23 @@ $env:DSH_HOME="C:\Users\franc\.dsh"; $env:DSH_PROFILE="desktop"
   用户 2026-11-12 明确「WSL 的都先不动，后续再改，只改 Windows」。
   要启用时把发行版名加回 `targets`（`claude` / `u26claude4`），或用工具参数临时指定
   （如 `gitok_doctor targets=["claude"]`）——注意 `gitok_adopt` 会**真改** WSL 配置
+
+### 7.4 安装状态（2026-11-12）
+
+| 项 | 值 |
+|---|---|
+| profile | `desktop` |
+| 安装形态 | `link-junction` → `C:\dsh\dshplug\dsh-gitok` |
+| profile 依赖 | `dsh-gitok@link:../../../../../dsh/dshplug/dsh-gitok` |
+| 激活方式 | 自身 `dsh.bundle.patch`，**不**往 profile 的 `cordis.patch.yml` 写 insert |
+| 生效条件 | **完全退出 DSH 再打开**（宿主半首次加载必须重启） |
+
+验证过的事项：
+
+- `install.ps1 -Check` → `link-junction`
+- 透过 Junction 能读到源码目录全部 5 个文件（改代码即时生效）
+- 从 profile 的 `node_modules` 能解析并 `import`，导出 `{name:'gitok', inject:['tools'], Config, apply}` 完整
+- `cordis.patch.yml` YAML 可解析，`id: gitok` 与导出的 `name` 一致
 
 ---
 
