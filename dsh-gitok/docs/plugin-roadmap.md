@@ -258,7 +258,8 @@ useHttpPath: false                # ← 注释「推荐 true」与值矛盾，�
 | 1 | **轮换 Claude 文档里泄露的明文 PAT**，确认 `C:\claudefiles\` 不在任何仓库/同步面 | 安全 | 人工，与本插件无关但最急 | ⬜ 待用户 |
 | 2 | 处理 `u26claude4` **空口令 SSH 私钥**（删除或 `ssh-keygen -p` 加口令） | 安全 | 人工；已被监控项 c 自动报 `error` | ⬜ 待用户 |
 | 3 | **`gitok_login` 真实登录实测** | Init | 无代码；解锁后续全部 | ✅ 已验（GCM 返回 `oauth, len=40`） |
-| 4 | **面板在界面上实际确认渲染**（README §7.2） | Monitor | `client.js` 刷新页面即可 | ⬜ 待用户点一下 |
+| 4 | **面板在界面上实际确认渲染**（README §7.2） | Monitor | `client.js` 刷新页面即可 | ⬜ 待用户点一下（已用 mock ctx + 最小 hooks 运行时验证两个态都不报错，只差真人看一眼） |
+| 4b | **面板内置 WSL 落地说明**（原理 + 实时端点状态 + 可复制命令） | Monitor | `lib/client.js` + `lib/index.js` → 刷新页面 | ✅ 完成（2026-11-13） |
 | 5 | 新增 `gitok_bootstrap`（S0~S4、`dryRun`、可重入） | Init | `lib/index.js` → 重启 | ✅ 完成 |
 | 6 | S0 环境自检项，含**系统级+用户级** gitconfig、GCM/代理/sslBackend/interop | Init | 同上 | ✅ 完成（含 `effectiveProxy()`） |
 | 7 | `gitok_adopt` 加 `dryRun` | Manage | `lib/index.js` → 重启 | ✅ 完成 |
