@@ -20,6 +20,10 @@ settings.json
 *.secret
 *.key
 getbraindata/
+# 技能默认数据位：C:\dsh\data-<短名> 不进仓库，也不应该进；
+# 万一有人把它建在仓库里（或误拷贝），这条兜底。
+data-*/
+current/
 data/
 snapshots/
 audit/

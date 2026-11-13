@@ -1,8 +1,8 @@
-# getnote-organize —— 插件层补丁
+# dsh-getbrain —— 插件层补丁
 #
 # 安装本 bundle 后插入 getnote 插件行，注册 getnote_doctor / getnote_download /
 # getnote_backup / getnote_list / getnote_search / getnote_topics / getnote_plan /
-# getnote_apply 这些模型工具（全部通过 getnote/gn.py 走官方 OpenAPI）。
+# getnote_apply 这些模型工具（全部通过 dsh-getbrain/gn.py 走官方 OpenAPI）。
 # client.js 另在「设置」里注册一个顶层侧边栏分区 Getnote（settings.section）。
 #
 # config 里的所有字段都标了 volatile，可在「设置 → Getnote」侧边栏里改；保存即时生效（无需重启）。
@@ -12,7 +12,7 @@
 # 或 apiKeyFile 指向本地 json。
 - insert:
     - id: getnote
-      name: '@local/getnote-organize'
+      name: 'dsh-getbrain'
       config:
         # —— 凭据（三选一，优先级：环境变量 > apiKey/clientId > apiKeyFile）——
         apiKey: ''
@@ -21,9 +21,14 @@
         apiKeyFile: ''
         apiBase: 'https://openapi.biji.com'
         # —— 统一数据目录：下载 / 中间产物 / 快照 / 日志 / 审计 / 计划全归它 ——
-        # 迁移到 C:\dsh\dsh-getbrain 后，工作区根 = C:\dsh，
-        # 所以数据落在 C:\dsh\getbraindata（与代码目录分离，便于打包发布）。
-        dataDir: 'getbraindata'
+        # 留空 = 用代码推导的默认值「仓库同级 data-getbrain」，本机即 C:\dsh\data-getbrain。
+        # 推导规则（index.js / gn.py 各一份，保持一致）：
+        #   插件 C:\dsh\dshplug\dsh-getbrain → 工作区根 C:\dsh\dshplug（= Git 仓库）
+        #   → 默认数据 = 仓库的**同级**目录 data-<短名> = C:\dsh\data-getbrain
+        # 放仓库外的好处：不进 Git、不进插件包、用户本机自己掌控；目录首次运行自动创建。
+        # 想换地方就在「设置 → Getnote」里填绝对路径（或相对路径，相对工作区根 = 仓库根）。
+        # 历史：2026-11-12 之前这里写死绝对路径 C:\dsh\getbraindata，正是因为旧默认值落在仓库里。
+        dataDir: ''
         # —— 下载策略：默认只取全文字；音频/视频硬约束不下载；图片需显式开 ——
         media:
           images: false

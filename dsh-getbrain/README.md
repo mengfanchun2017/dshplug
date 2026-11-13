@@ -14,28 +14,45 @@
 ## 0. 当前位置（2026-11-11 迁移）
 
 本包已从 `default-workspace/getnote` 迁到 **`C:\dsh\dshplug\dsh-getbrain`**（2026-11-12 并入 dshplug 仓库），
-数据搬到 **`C:\dsh\getbraindata`**（与代码目录分离，便于打包发布）。
+数据在 **`C:\dsh\data-getbrain`**（2026-11-12 起：默认就在仓库外侧，与代码分离）。
 
 ```
 C:\dsh\dshplug\dsh-getbrain\  代码（在 dshplug 仓库内，随仓库同步）
    index.js                 Host 侧插件 + 3 个 HTTP 路由
    client.js                客户端 UI（设置页 + 侧边栏工作台）
    gn.py / gn.ps1           CLI 实现（Python 标准库，无第三方依赖）
-   cordis.patch.yml         插件层补丁（数据目录等默认值在这里）
+   cordis.patch.yml         插件层补丁（dataDir 留空 → 用代码默认值）
 
-C:\dsh\getbraindata\       数据（.gitignore 已排除，永不入库）
-   current\                 4321 篇 Markdown 镜像
+C:\dsh\data-getbrain\       数据（仓库的同级目录，天然不进 Git，永不入库）
+   current\                 笔记 Markdown 镜像
    snapshots\ logs\ state\ ...
 ```
 
-**路径怎么算的**：`WORKSPACE = path.dirname(插件目录)` = `C:\dsh`，
-默认 `dataDir = 'getbraindata'` 相对工作区根解析 → `C:\dsh\getbraindata`。
+**路径怎么算的（2026-11-12 起改为代码推导，不再写死绝对路径）**：
 
-⚠️ **改数据目录时有两个地方要同步改**（这是我迁移时踩到的坑）：
+```
+BUNDLE_DIR  = C:\dsh\dshplug\dsh-getbrain   （插件目录）
+WORKSPACE   = 上一级 = C:\dsh\dshplug        （= Git 仓库根本身）
+DEFAULT_DATA_DIR = WORKSPACE 的上一级 + data-getbrain = C:\dsh\data-getbrain
+```
 
-1. `cordis.patch.yml` 里的 `dataDir` —— **它才是运行时真正的默认值**，
-   优先级高于 `index.js` / `gn.py` 里的常量。只改代码里的默认值不生效。
-2. `index.js` 的 `DEFAULT_DATA_DIR` 与 `gn.py` 的 `DEFAULT_DATA_DIR`（给兜底和工具描述用）。
+旧版本默认写 `dataDir = 'getbraindata'`，它是**相对 WORKSPACE** 解析的，于是落到仓库里
+`C:\dsh\dshplug\getbraindata`，只能靠 `cordis.patch.yml` 写死绝对路径 `C:\dsh\getbraindata`
+（当时还配了一个 Junction）把数据拽出仓库。现在默认值改到**仓库同级**，patch 里留空即可，
+换机器、换目录都不用再改配置。
+
+**命名约定**：`C:\dsh\data-<技能短名>` 是本机技能的默认数据位（本插件 = `data-getbrain`），
+首次运行**自动创建**（幂等）。它不在任何 Git 仓库里 → 不进同步、不进插件包，
+**用户数据完全在本机自己掌控**。想换位置就在「设置 → Getnote」里把 `dataDir` 改成绝对路径。
+
+⚠️ **改数据目录时改一处就够**（这是 2026-11-12 的简化）：
+
+1. 首选在「设置 → Getnote」→「下载与目录」→ `统一数据目录` 里改（即时生效，无需重启）。
+2. 若要改**默认值**本身：`index.js` 的 `DEFAULT_DATA_DIR` 与 `gn.py` 的 `DEFAULT_DATA_DIR`
+   （两处推导规则必须一致）；`cordis.patch.yml` 的 `dataDir` 保持留空，让推导生效。
+
+> 历史坑（仍适用）：`cordis.patch.yml` 的 `config:` 在**行激活时**读取，非空值会**覆盖**
+> 代码里的默认值。以前正因为那里写死了绝对路径，只改代码里的常量不生效。
 
 ---
 
@@ -56,18 +73,19 @@ C:\dsh\getbraindata\       数据（.gitignore 已排除，永不入库）
 { "api_key": "gk_live_你的key", "client_id": "cli_你的clientid", "api_base": "https://openapi.biji.com" }
 
 // settings.json（非敏感偏好，可入库）
-{ "dataDir": "getnote/data", "minInterval": 0.55,
-  "media": { "text": true, "audio": false, "video": false, "images": false } }
+// settings.json（非敏感偏好，可入库）—— dataDir 留空就用默认值
+{ "dataDir": "", "minInterval": 0.55,
 ```
 
 **C. 环境变量**（最高优先）：`GETNOTE_API_KEY` / `GETNOTE_CLIENT_ID` / `GETNOTE_API_URL` /
 `GETNOTE_DATA_DIR` / `GETNOTE_MIN_INTERVAL` / `GETNOTE_MEDIA_IMAGES` / `GETNOTE_CONFIG_FILE`。
 
-**不要把凭据贴进聊天、不要提交仓库**；`.gitignore` 已排除 `config.local.json`、`settings.json`、`data/` 与全部运行产物。
+**不要把凭据贴进聊天、不要提交仓库**；仓库根 `.gitignore` 已排除 `config.local.json`、`settings.json`、`data/` 与全部运行产物（导出 zip 内由 `gn.py` 动态生成一份同规则的 `.gitignore`）。
 
 ### 统一数据目录 dataDir
 
-默认 `getnote/data`，可改（相对路径相对工作区根，或绝对路径）。其下：
+默认 = **仓库同级的 `data-getbrain`**（本机 `C:\dsh\data-getbrain`，首次运行自动创建）；
+可在设置里改成绝对路径，或写相对路径（相对工作区根 = 仓库根）。其下：
 
 | 子目录 | 内容 |
 |---|---|
@@ -93,7 +111,7 @@ C:\dsh\getbraindata\       数据（.gitignore 已排除，永不入库）
 | 模式 | 命令 | 行为 | 什么时候用 |
 |---|---|---|---|
 | 快照（默认） | `getnote_download()` | 新建 `downloads/<时间戳>/`，全量重下 | 想留一份“某一刻”的不可变快照 |
-| 增量 | `getnote_download(into="getnote/data/current")` | 写回同一目录，只重写 `updated_at` 变了的 | **日常用这个** |
+| 增量 | `getnote_download(into="current")` | 写回同一目录（相对**数据目录**），只重写 `updated_at` 变了的 | **日常用这个** |
 
 **默认行为其实不适合日常用。** 每次全量重下既慢又费配额，还会在 `downloads/` 里
 攒一堆 90% 重复的目录。日常一律传 `into`。
@@ -107,7 +125,7 @@ C:\dsh\getbraindata\       数据（.gitignore 已排除，永不入库）
 
 ```
 # 第一段（跑到超时或你手动停）
-getnote_download(into="getnote/data/current")
+getnote_download(into="current")   # 相对路径以 dataDir 为基准，不必写全路径
 # 已经写进目录的笔记会保留；下次自动接着下剩下的
 ```
 
@@ -245,25 +263,26 @@ note_save / note_update / note_delete`。所有 ID 用字符串。
 
 ## 7. 移植 / 导出安装 / 跨 session
 
-`getnote/` 同时具备**两种身份**（这是本工具包的设计要点）：
+`dsh-getbrain/` 同时具备**两种身份**（这是本工具包的设计要点）：
 
 - **正式 Cordis 插件（Bundle）**：见第 8 节。已通过 `install_bundle` 装进当前 desktop profile，
   注册 `getnote_*` 模型工具，影响该 profile 的所有工作区与会话。
 - **可独立运行的 CLI**：`gn.py` 零第三方依赖、只用 Python 3.9+，把 `getnote/` 文件夹拷到任何机器、
-  不装插件也能直接 `python getnote/gn.py ...`。
+  不装插件也能直接 `python dsh-getbrain/gn.py ...`。
 
 两者共用**同一份代码、同一份配置、同一个 dataDir**，不冲突；插件只是给 CLI 套了一层「DSH 内可配置 + 模型工具」的壳。
 
 ### 导出 / 装到另一台 DSH
 
-运行 `./getnote/gn.ps1 export` 生成 `getnote-toolkit-<时间戳>.zip`（**默认不含任何 Key**），包内附 `INSTALL.txt`。
-解压得到 `getnote/`，然后二选一：
+运行 `./dsh-getbrain/gn.ps1 export` 生成 `dsh-getbrain-toolkit-<时间戳>.zip`（**默认不含任何 Key**），包内附 `INSTALL.txt`。
+解压得到 `dsh-getbrain/`，然后二选一：
 
-- **当插件装**（推荐）：在目标 DSH 会话里 `plugin_manager action: install_bundle target: <getnote 绝对路径>` → 重启应用 → 填 Key（见第 9 节）。
+- **当插件装**（推荐）：在目标 DSH 会话里 `plugin_manager action: install_bundle target: <dsh-getbrain 绝对路径>` → 重启应用 → 填 Key（见第 9 节）。
 - **只当 CLI 用**：复制 `config.example.json` → `config.local.json` 填 Key，`settings.example.json` → `settings.json` 改偏好，直接跑 `gn.ps1`。
 
 `gn.ps1` 按 `GETNOTE_PYTHON` → PATH 的 `python`/`py` → `$DSH_HOME` 自带 Python 找解释器（无硬编码用户名）；
-非 Windows 用 `python3 getnote/gn.py ...`。`gn.py` 用 `Path(__file__).parent` 相对定位，拷到哪里就在哪里生效。
+非 Windows 用 `python3 dsh-getbrain/gn.py ...`。`gn.py` 用 `Path(__file__).parent` 定位代码，拷到哪里就在哪里生效；
+**数据目录默认跟着走**（= 代码目录的上一级 + `data-getbrain`，首次运行自动创建）。
 
 ### Key / ID 存在哪里？——五处，优先级从高到低
 
@@ -272,8 +291,8 @@ note_save / note_update / note_delete`。所有 ID 用字符串。
 | **DSH 凭据库**（面板输入）`$DSH_HOME/.credentials.yaml` | **1（最高）** | 「设置 → Getnote」两个安全输入框写这里；**不进组合树、不进配置导出、不进日志** |
 | 环境变量 `GETNOTE_API_KEY` / `GETNOTE_CLIENT_ID` | 2 | 插件 Config 也注入到这里；适合多机共用 |
 | 插件行 Config 的 `apiKey` / `clientId` | 3 | 已弃用明文槽（仍可用）；**明文落组合树** |
-| `getnote/settings.json` 的 `apiKey` / `clientId` / `apiKeyFile` | 4 | 非敏感偏好文件；`apiKeyFile` 指向本地 json |
-| `getnote/config.local.json` | 5（最低） | `.gitignore` 已排除；复制 `config.example.json` 填入 `api_key`/`client_id` |
+| `dsh-getbrain/settings.json` 的 `apiKey` / `clientId` / `apiKeyFile` | 4 | 非敏感偏好文件；`apiKeyFile` 指向本地 json |
+| `dsh-getbrain/config.local.json` | 5（最低） | 仓库根 `.gitignore`（及导出包内动态生成的 `.gitignore`）已排除；复制 `config.example.json` 填入 `api_key`/`client_id` |
 
 **优先级实测（2026-11-10，用 stub `creds.resolve` + 真 `apply()` + 真 `gn.py`）**：
 
@@ -300,10 +319,10 @@ note_save / note_update / note_delete`。所有 ID 用字符串。
   `--include-key` 虽可把 Key 打进 zip，但那个 zip 就等同明文凭据，用完即删或去开放平台作废。
 
 > 一句话：**插件管「在 DSH 里可配置 + 自动带纪律」，CLI 管「独立可移植」，
-> 凭据管「钥匙」，SKILL.md 管「决策纪律」** —— 四者共用同一份 `getnote/` 代码。
+> 凭据管「钥匙」，SKILL.md 管「决策纪律」** —— 四者共用同一份 `dsh-getbrain/` 代码。
 ## 8. 作为正式 Cordis 插件（Bundle）
 
-`getnote/` 目录**本身就是 bundle**（`package.json` + `cordis.patch.yml` + `index.js` +
+`dsh-getbrain/` 目录**本身就是 bundle**（`package.json` + `cordis.patch.yml` + `index.js` +
 `client.js` + `locale/` + `icon.svg` + `SKILL.md`）。安装后：
 
 - 该 **profile 的所有工作区 / 所有会话**都获得 `getnote_*` 模型工具；
@@ -333,10 +352,11 @@ note_save / note_update / note_delete`。所有 ID 用字符串。
 
 ```
 plugin_manager  action: install_bundle
-target: C:\Users\franc\Documents\deepseek-harness\default-workspace\getnote
+target: C:\dsh\dshplug\dsh-getbrain
 ```
 
-（把上面的绝对路径换成目标机 `getnote/` 的实际路径。）
+（把上面的绝对路径换成目标机 `dsh-getbrain/` 的实际路径。本机已在 profile 里以 `link:` 装好，不需要再装；
+重新装用 `& C:\dsh\dshplug\install.ps1 -Only dsh-getbrain`。）
 
 ### 配置项（「设置 → Getnote」侧边栏 = `cordis.patch.yml` 的 `config`）
 
@@ -347,7 +367,7 @@ target: C:\Users\franc\Documents\deepseek-harness\default-workspace\getnote
 | `apiKey` / `clientId` | 空 | 可直接粘 key，但**明文落组合树**；留空更安全 |
 | `apiKeyFile` | `getnote/config.local.json` | 本地 json 后备（含 `api_key`/`client_id`）。**只在凭据库没给全时才生效**；路径写错会在自检里显式报警 |
 | `apiBase` | `https://openapi.biji.com` | OpenAPI 地址 |
-| `dataDir` | `getnote/data` | 统一数据目录 |
+| `dataDir` | 空（→ 仓库同级 `data-getbrain`） | 统一数据目录。留空 = 代码推导的默认值；填值则优先 |
 | `media.images` | `false` | 图片二进制开关；audio/video 恒不下载 |
 | `minInterval` | `0.55` | 请求最小间隔秒 |
 | `pythonPath` | 空 | 留空自动找 Python |
@@ -425,8 +445,8 @@ target: C:\Users\franc\Documents\deepseek-harness\default-workspace\getnote
   JS 语法、ESM 导入、**10 个工具**离线 `apply()` 注册、manifest/locale/SVG/YAML、Python 编译；
   **线上实测（2026-11-10，带签名 cookie 拉真实首页）**：`__DSH_BOOT__` 共 **85 个条目**，getnote 完整条目：
   ```json
-  {"id":"@local/getnote-organize",
-   "url":"plugins/??@local/getnote-organize/client.js&rev=1a1a060c64f0",
+  {"id":"dsh-getbrain",
+   "url":"plugins/??dsh-getbrain/client.js&rev=1a1a060c64f0",
    "rev":"1a1a060c64f0",
    "inject":["@deepseek-ai/dsh-client-ui-settings",
              "@deepseek-ai/dsh-client-ui-settings-general",
@@ -581,7 +601,7 @@ target: C:\Users\franc\Documents\deepseek-harness\default-workspace\getnote
 > `--confirm CONFIRM` + `--i-understand-deletion-may-be-permanent` 双重闸门。
 
 #### 路径 B：写本地文件（最安全的兜底，100% 找得到）
-100% 可靠、不依赖任何 GUI。直接在工作区建文件 **`getnote/config.local.json`**（复制 `config.example.json` 改）：
+100% 可靠、不依赖任何 GUI。直接在工作区建文件 **`dsh-getbrain/config.local.json`**（复制 `config.example.json` 改）：
 
 ```json
 {
@@ -591,13 +611,13 @@ target: C:\Users\franc\Documents\deepseek-harness\default-workspace\getnote
 }
 ```
 
-- 文件在工作区根的 `getnote/` 下；`.gitignore` 已排除，不会入库。
-- 插件 `cordis.patch.yml` 里 `apiKeyFile: 'getnote/config.local.json'` 默认就指向它 ——
+- 文件在 `C:\dsh\dshplug\dsh-getbrain\config.local.json`；仓库根 `.gitignore`（及导出包内动态生成的 `.gitignore`）已排除，不会入库。
+- 插件 `cordis.patch.yml` 里 `apiKeyFile: ''` 时，`index.js` 的默认值 `dsh-getbrain/config.local.json` 就指向它 ——
   插件读不到 Config 里的 Key 时会回退到这个文件。
 - **不用重启**：面板保存的 volatile 值会就地写回运行中的插件（已实测）。
-- 验证：`getnote_doctor(live=true)`，或 `./getnote/gn.ps1 doctor --live`。
+- 验证：`getnote_doctor(live=true)`，或 `./dsh-getbrain/gn.ps1 doctor --live`。
 
-> 想改目录/限速/图片开关，另建 **`getnote/settings.json`**（复制 `settings.example.json`），
+> 想改目录/限速/图片开关，另建 **`dsh-getbrain/settings.json`**（复制 `settings.example.json`），
 > 改 `dataDir`、`minInterval`、`media.images`。这是非敏感偏好，可入库。
 
 
@@ -606,7 +626,7 @@ target: C:\Users\franc\Documents\deepseek-harness\default-workspace\getnote
 插件行注册了 `Config` schema（含 `apiKey` / `clientId` / `dataDir` / `media.images` 等），Plugin Manager 会为它渲染一份表单。界面入口：
 
 1. 打开 **设置 → 插件**（Plugin Manager）。
-2. 在「已安装」列表找 **「得到大脑 · 笔记整理」**（包名 `@local/getnote-organize`）。
+2. 在「已安装」列表找 **「得到大脑 · 笔记整理」**（包名 `dsh-getbrain`）。
 3. 展开该 bundle → 找到行 **`getnote`** → 点行上的 **「配置 getnote」/齿轮**按钮，进入该行配置表单。
 4. 表单里填 `apiKey`（=API Key）、`clientId`（=Client ID）、`dataDir`、`media.images` 等 → 保存。
 5. 保存即生效（volatile 字段就地写回，不用重启）。
@@ -792,7 +812,7 @@ const watcher = watch(...);    // ← 永远走不到
 
 ### 验证填对了
 
-填好直接跑：`getnote_doctor(live=true)` 或 `./getnote/gn.ps1 doctor --live`（面板填的不用重启；如走环境变量则需重启）。
+填好直接跑：`getnote_doctor(live=true)` 或 `.\dsh-getbrain\gn.ps1 doctor --live`（面板填的不用重启；如走环境变量则需重启）。
 看到 `✅ 连通成功` 即生效；常见报错：
 - `10201 not_member` → 非会员；
 - `10001` → Key/Client ID 填错或已作废；
@@ -866,7 +886,7 @@ Set-Content $env:TEMP/c.cjs $js -Encoding UTF8; & $node $env:TEMP/c.cjs; Remove-
 
 ### 当前状态
 
-`getnote/config.local.json` **不存在**，`$DSH_HOME/.credentials.yaml` 里**也没有 `GETNOTE_*` 记录** —— 还没有任何凭据被保存（截至 2026-11-10 验证）。
+`dsh-getbrain/config.local.json` **不存在**，`$DSH_HOME/.credentials.yaml` 里**也没有 `GETNOTE_*` 记录** —— 还没有任何凭据被保存（截至 2026-11-10 验证）。
 填好后：`getnote_doctor(live=true)` → `getnote_download` → （人分析）→ `getnote_backup` → dry-run 报告 → 你确认 → `getnote_apply`。
 
 ## 10. 左侧边栏工作台（2026-11-10 新增）

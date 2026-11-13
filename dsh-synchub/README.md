@@ -69,7 +69,12 @@ surfaceEnabled(surface, cfg) => Boolean(cfg.surfaces[surface.id]) && surface.tie
 | `sessions` | `sessions/**` | zstd 多帧压缩的会话日志，目录名是工作区绝对路径的编码 |
 | `storages` | `storages/**` | `workspace.json` 决定会话归属哪个工作区；`session_projcache` 存 `cwd` |
 | `attachments` | `attachments/**` | sha256 内容寻址，与路径无关，跨工作区共享 |
-| `skills` | `skills/**`、`skill-manager/**` | 技能文件本体；技能的**安装**仍走 dsh-market |
+| `skills` | `skills/**` | 技能文件本体；技能的**安装**仍走 dsh-market |
+
+> `~/.dsh/skills/<名>/` 里的技能目录**不是插件目录**。
+> 插件（`dsh-rag` / `dsh-preview-editor`）在 `profiles/desktop/node_modules/`，
+> 技能是独立复制的 markdown 文档，**不是软链，也不从插件包里读**。同名是因为
+> 这个插件的用法值得写成可加载的文档。详见 [`../ARCHITECTURE.md`](../ARCHITECTURE.md) §1。
 
 ### caution（默认开，但要看一眼再开）
 
@@ -77,12 +82,17 @@ surfaceEnabled(surface, cfg) => Boolean(cfg.surfaces[surface.id]) && surface.tie
 |---|---|---|
 | `profileConfig` | `profiles/<p>/cordis.patch.yml`、`cordis.yml` | 本机实测只含 `apiKeyEnv` 的**变量名**（`OFFICE_API_KEY` 等）和 baseURL，不含密钥。但 baseURL 是环境特有的，换网络可能连不上 |
 
+> **MCP 配置就在这一层**：一条 server = 一行 `@deepseek-ai/dsh-mcp-client`，不存在全局 `mcp.json`。
+> 它会跟着 `profileConfig` 走——所以跨机前先看 `url` / `command` 是不是本机特有。
+> 更稳的做法是把 MCP 行写进本仓库某个插件的 `cordis.patch.yml`，跟着 `plugpush` 走。
+> 详见 [`../ARCHITECTURE.md`](../ARCHITECTURE.md) §2。
+
 ### danger（**永远不同步**，不可开启）
 
 | id | 内容 | 后果 |
 |---|---|---|
 | `profileManifest` | `profiles/<p>/package.json`、`pnpm-workspace.yaml` | 含 `link:C:/dsh/...` 绝对路径。另一台没有同一路径 → **DSH 启动失败** |
-| `credentials` | `.credentials.yaml` | API key，进仓库即泄露 |
+| `credentials` | `.credentials.yaml` | API key，进仓库即泄露。**MCP 的 key 也存在这里**（或环境变量/`.env`），优先级：凭据文件 > 环境变量 > 项目 `.env` > home `.env`。配置里只出现 `!!js` 引用，不出现明文 |
 | `traeAuth` | `.trae-auth.*.json` | 设备令牌 |
 | `workbuddy` | `.workbuddy-*.json` | 设备身份，应各机各自登录 |
 | `mobileKeys` | `mobile-access/**` | iroh TLS 私钥，泄露即中间人 |
@@ -220,7 +230,7 @@ statusPayload():
 sessions         71 文件    52.8 MB
 storages         73 文件     3.9 MB
 attachments      45 文件     3.3 MB
-skills           20 文件    46.2 KB   ← 含 skill-manager/library
+skills           19 文件    45.7 KB   ← 仅 skills/（2026-11-12 移除了 skill-manager）
 profileConfig     2 文件    54.4 KB
 profileManifest   2 文件     1.4 KB   ← 不同步
 ```

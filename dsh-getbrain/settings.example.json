@@ -1,7 +1,7 @@
 {
   "_comment": "复制本文件为 settings.json。非敏感偏好，可入库/可打进导出包。secret 请放 config.local.json 或环境变量，不要写在这里（除非你明确接受明文）。",
-  "dataDir": "getnote/data",
-  "_dataDir_note": "统一数据目录：下载、中间产物、快照、日志、审计、计划都归它。相对路径相对工作区根；可改绝对路径。插件 Config 的 dataDir 会覆盖这里。",
+  "dataDir": "",
+  "_dataDir_note": "统一数据目录：下载、中间产物、快照、日志、审计、计划都归它。**留空 = 默认值**：本仓库同级的 data-getbrain（本机即 C:\\dsh\\data-getbrain），首次运行自动创建、不进 Git。要换地方就填绝对路径，或填相对路径（相对工作区根 = 仓库根）。插件 Config 的 dataDir 非空时优先于这里。",
 
   "apiBase": "https://openapi.biji.com",
   "apiKey": "",

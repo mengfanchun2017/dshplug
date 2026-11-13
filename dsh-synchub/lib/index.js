@@ -132,9 +132,8 @@ const SURFACES = [
     label: '技能库',
     tier: 'safe',
     on: true,
-    roots: ['skills', 'skill-manager'],
-    exclude: [/[\\/]\.skm-backups[\\/]/],
-    note: '技能文件与工作区登记；技能本身的安装走 dsh-market / skill-manager',
+    roots: ['skills'],
+    note: '技能文件本体；技能的安装走 dsh-market'
   },
   {
     id: 'profileConfig',

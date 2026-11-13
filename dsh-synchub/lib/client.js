@@ -617,7 +617,7 @@ window.__ModuleLoader__.load({
         e('div', { className: 'note' },
           '「不同步」的面即使打开也不会进仓库 —— 这是硬约束，不是提示。',
           '插件清单含 link:C:/... 绝对路径，两台路径不同会让另一台 DSH 起不来；',
-          '技能本身的安装走 dsh-market / skill-manager，这里只同步技能文件与登记。'));
+          '技能本身的安装走 dsh-market，这里只同步技能文件。'));
 
       const mapCard = map ? e('div', { className: 'card' },
         e('h3', null, '目录清单（本机实际位置）'),

@@ -23,7 +23,7 @@
 | 绕过 Windows keychain 的凭据配置 | ✅ `lark-cli-win/_native-config/`（**不进 git**） |
 | 纯 PowerShell 入口 | ✅ [lark.ps1](<lark.ps1>) |
 | 换机 / 授权 / 升级文档 | ✅ [lark-native-setup.md](<lark-native-setup.md>) |
-| DSH 插件骨架（package.json / .gitignore / README） | ✅ 本次建立 |
+| DSH 插件骨架（package.json / README；忽略规则统一在仓库根 `.gitignore`） | ✅ 本次建立 |
 | Cordis 插件入口、工具注册、设置面板 | ⬜ 待开发 |
 | git 仓库初始化 | ✅ 2026-11-11 已 `git init`（未 commit，留待审阅） |
 
@@ -63,7 +63,7 @@ cd C:\dsh\dshplug\dsh-larkcli
 dsh-larkcli/
 ├── README.md                     ← 本文件（插件总览）
 ├── package.json                  ← 插件骨架
-├── .gitignore                    ← 凭据 / 大二进制 / test 产物 都不进 git
+├── （无本地 .gitignore，忽略规则见仓库根）  ← 凭据 / 大二进制 / test 产物 都不进 git
 ├── lark.ps1                      ← 纯 Windows 调用入口
 ├── lark-native-setup.md          ← 换机 / 授权 / 升级
 ├── scripts/
@@ -96,5 +96,5 @@ dsh-larkcli/
   它是飞书长连接聊天通道，与本插件用途不同，保持两处分离。
 - **已并入 dshplug**：原先 `C:\dsh\dsh-larkcli\.git` 那个空仓库（无任何提交）已弃用，
   历史从现在开始由 `C:\dsh\dshplug` 统一管理（分支 `master`）。
-  `.gitignore` 已验证挡住 `_native-config/`（明文 App Secret）、`lark-cli.exe`、`*.zip`、`test/*`。
+  仓库根 `.gitignore` 已验证挡住 `_native-config/`（明文 App Secret）、`lark-cli.exe`、`*.zip`、`test/*`；子目录不再各自带 `.gitignore`（见 `dsh-synchub/ADR.md` ADR-007）。
 - 临时测试产物纪律：`test/` 下用完即删；根目录那 41 个 `t_*` 旧探针已删除。

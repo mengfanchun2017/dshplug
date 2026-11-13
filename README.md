@@ -22,6 +22,27 @@
 
 ## 目录约定（扁平）
 
+### 代码在仓库里，数据永远在仓库外
+
+**本仓库（`C:\dsh\dshplug`）只放代码。** 插件的运行数据（笔记镜像、下载、快照、日志、
+计划与执行结果）全部落在**仓库同级**的 `C:\dsh\data-<短名>\`，不进 Git、不进插件包、不进同步。
+
+```
+C:\dsh\
+├─ dshplug\            ← 本仓库（Git）：只放代码 + 文档
+└─ data-getbrain\      ← dsh-getbrain 的技能数据（自动创建，永不入库）
+    ├─ current\        笔记 Markdown 镜像
+    └─ downloads\ snapshots\ logs\ state\ intermediate\
+```
+
+- 命名约定：**`C:\dsh\data-<技能短名>`** 是本机所有技能的默认数据位，**首次运行自动创建**（幂等）。
+- 默认值由**代码推导**（插件目录 → 工作区根 → 再上一级 + `data-<短名>`），**不写死绝对路径** ——
+  换机器、换克隆目录都自动适配。
+- 想换位置：在插件设置里把 `dataDir` 填绝对路径（相对路径则相对工作区根）。
+- 为什么不在仓库里：旧版 `dsh-getbrain` 默认落在 `C:\dsh\dshplug\getbraindata`，既脏 `git status`
+  又容易被打包带走，最后只能靠 `cordis.patch.yml` 写死绝对路径 `C:\dsh\getbraindata` 硬拽出来。
+  2026-11-12 已彻底改为「仓库外同级目录」（见 `dsh-getbrain/README.md` 第 0 节）。
+
 ```
 C:\dsh\dshplug\
 ├─ list.json          ← 插件注册表（新增插件就改这里）
@@ -201,13 +222,16 @@ git -C C:\dsh\dshplug config http.sslBackend openssl
 
 ## 插件同步 vs 状态同步（边界）
 
+**skill / MCP / AGENTS.md 到底存在哪、谁管、界面在哪 —— 见 [ARCHITECTURE.md](ARCHITECTURE.md)。**
+那份文档写死了 2026-11-12 的证据快照（技能扫描根、MCP 配置行、凭据库优先级），
+本仓库任何涉及这三者的讨论都先从那页开始。
+
 | 东西 | 归谁管 | 为什么 |
 |---|---|---|
 | 插件源码 + 清单 | **本仓库**（`plugpush.ps1` 显式推） | 需要版本、tag、可回滚 |
 | 插件的**安装**（profile 里的 `package.json`） | `dsh-market` | 它管 registry 与 profile 依赖 |
 | 会话 / 工作区 / 附件 / 技能文件 / 配置层 | **`dsh-synchub`** | 一套引擎、一份历史、一个面板 |
 | 密钥、设备身份、运行时、缓存 | **谁都不管** | 泄露或失效风险，各机各自生成 |
-
 `dsh-synchub` **不同步** `profiles/desktop/package.json`——那里含 `link:C:/dsh/...`
 绝对路径，跨机搬运会让 DSH 起不来。插件清单请用 `install.ps1` 在每台机上各自生成。
 

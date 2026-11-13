@@ -1,8 +1,8 @@
 {
-  "name": "@local/getnote-organize",
-  "version": "2.2.0",
+  "name": "dsh-getbrain",
+  "version": "2.3.0",
   "private": true,
-  "description": "正式 Cordis 插件（Bundle）：通过官方 OpenAPI 整理得到大脑（原 Get笔记），全文字下载到可配置统一数据目录，默认只读、写操作需确认、删除双重闸门；附 SKILL.md 整理纪律。在「设置 → Getnote」侧边栏配置 API Key/Client ID/dataDir 等（见 README 第 9 节），保存即时生效、无需重启。",
+  "description": "正式 Cordis 插件（Bundle）：通过官方 OpenAPI 整理得到大脑（原 Get笔记），全文字下载到统一数据目录（默认 = 仓库同级 data-getbrain，自动创建、不进 Git），默认只读、写操作需确认、删除双重闸门；附 SKILL.md 整理纪律。在「设置 → Getnote」侧边栏配置 API Key/Client ID/dataDir 等，保存即时生效、无需重启。",
   "type": "module",
   "main": "index.js",
   "files": [

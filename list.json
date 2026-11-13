@@ -24,13 +24,13 @@
     {
       "name": "dsh-getbrain",
       "dir": "dsh-getbrain",
-      "version": "2.2.0",
-      "description": "得到大脑（原 Get 笔记）整理插件：官方 OpenAPI 全量下载到统一数据目录，默认只读、写操作需确认、删除双重闸门；附 SKILL.md 整理纪律",
+      "version": "2.3.0",
+      "description": "得到大脑（原 Get 笔记）整理插件：官方 OpenAPI 全量下载到统一数据目录（默认 = 仓库同级 data-getbrain，自动创建、不进 Git），默认只读、写操作需确认、删除双重闸门；附 SKILL.md 整理纪律",
       "installedOn": [
         "FRANCIS-HOME-I7"
       ],
       "status": "active",
-      "note": "目录名、包名、清单 name 已统一为 dsh-getbrain（2026-11-12 去掉历史包名 @local/getnote-organize）。改名后需重跑 install.ps1 重建 link: Junction。"
+      "note": "2.3.0 起 dataDir 默认值改由代码推导 = 仓库同级 data-<短名>（本机 C:\\dsh\\data-getbrain），cordis.patch.yml 里 dataDir 留空，不再写死绝对路径；C:\\dsh\\getbraindata 已整体迁移为 C:\\dsh\\data-getbrain。目录名、包名、清单 name 统一为 dsh-getbrain（2026-11-12）。"
     },
     {
       "name": "dsh-gitok",

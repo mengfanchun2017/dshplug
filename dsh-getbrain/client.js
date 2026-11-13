@@ -1,5 +1,5 @@
 /**
- * getnote-organize —— 浏览器半区（Client 插件）
+ * dsh-getbrain —— 浏览器半区（Client 插件）
  *
  * 在 DSH「设置」里注册一个**顶层侧边栏分区 Getnote**（settings.section），
  * 分区内是一个表单，直接读写本插件行的 Config（命名空间 = patch row id "getnote"）。
@@ -78,7 +78,9 @@ const zh = {
   apiKeyFileHint: '本地 json 路径，含 {"api_key","client_id"}。只在凭据库没有完整 Key+Client ID 时才生效；两个都存了就不看这个。路径写错会在自检里报错。',
   apiBase: 'OpenAPI 地址',
   dataDir: '统一数据目录',
-  dataDirHint: '下载 / 中间产物 / 快照 / 日志 / 审计 / 计划全归它。相对路径相对工作区根。',
+  dataDirHint: '下载 / 中间产物 / 快照 / 日志 / 审计 / 计划全归它。留空 = 默认值（仓库同级的 data-getbrain，首次运行自动创建）；相对路径相对工作区根，改绝对路径则直接用。',
+  dataDirDefault: '（默认：仓库同级的 data-getbrain，首次运行自动创建）',
+  dirDefaultDerived: '留空，由代码推导 = <仓库所在目录>/data-getbrain',
   dirHead: '数据存哪里、存了什么',
   dirWhere: '配置值',
   dirResolved: '实际位置',
@@ -106,7 +108,7 @@ const zh = {
   secretEmpty: '（未设置）',
   saveFailed: '保存失败，请重试。',
   restartHint: '提示：面板保存后即时生效，无需重启；下次调用工具就用新值。',
-  guideHint: '完整说明见工作区 getnote/README.md 第 9 节。',
+  guideHint: '完整说明见插件目录里的 README.md（dsh-getbrain\\README.md），不在数据目录。',
 
   // —— 安全凭据（写入 DSH 凭据库，不进组合树）——
   credTitle: '账号凭据（安全存储）',
@@ -185,7 +187,9 @@ const en = {
   apiKeyFileHint: 'Local json path with {"api_key","client_id"}. Only used when the credential store does not supply both Key and Client ID; ignored once both are saved. A bad path is reported by the self-check.',
   apiBase: 'OpenAPI base URL',
   dataDir: 'Unified data directory',
-  dataDirHint: 'Downloads / intermediate / snapshots / logs / audit / plans all live here. Relative to workspace root.',
+  dataDirHint: 'Downloads / intermediate / snapshots / logs / audit / plans all live here. Leave empty to use the default (data-getbrain next to the repo, created on first run); a relative path resolves under the workspace root, an absolute path is used as-is.',
+  dataDirDefault: '(default: data-getbrain next to the repo, created on first run)',
+  dirDefaultDerived: 'empty — derived in code as <repo parent>/data-getbrain',
   dirHead: 'Where data lives & what it contains',
   dirWhere: 'Configured value',
   dirResolved: 'Resolved to',
@@ -213,7 +217,7 @@ const en = {
   secretEmpty: '(not set)',
   saveFailed: 'Save failed — please retry.',
   restartHint: 'Saved values apply immediately — no restart needed.',
-  guideHint: 'Full guide: getnote/README.md §9 in the workspace.',
+  guideHint: 'Full guide: README.md inside the plugin folder (dsh-getbrain\\README.md), not the data directory.',
   credTitle: 'Credentials (secure storage)',
   credExplain: 'Saved to the DSH credential store $DSH_HOME/.credentials.yaml — never written into the plugin configuration (composition tree) as plaintext, and never logged. Measured: this file has exactly the same ACL as an ordinary config file (SYSTEM / Administrators / you all have FullControl), so it is NOT an OS keychain and is not harder for another process under the same account to read; its only real benefit is staying out of the composition tree and out of config exports.',
   apiKeyHint2: 'API Key from the open platform (gk_live_…). Enter once and save; it is never echoed back.',
@@ -339,7 +343,7 @@ function styles() {
 }
 
 window.__ModuleLoader__.load({
-  id: '@local/getnote-organize',
+  id: 'dsh-getbrain',
   factory(require) {
     const React = require('react')
     const h = React.createElement
@@ -1043,9 +1047,10 @@ window.__ModuleLoader__.load({
       // 数据目录"存在哪·存什么"：不依赖 status（status 拿不到时也要能看）。
       const dirBase = (() => {
         const raw = ready ? getPath(snap.value, 'dataDir') : undefined
-        const d = (typeof raw === 'string' && raw) ? raw : 'getbraindata'
+        // dataDir 现在默认留空（由代码推导），所以空值时不能显示空白，要显示「默认」说明。
+        const d = (typeof raw === 'string' && raw) ? raw : ''
         const abs = /^[A-Za-z]:[\\/]/.test(d) || d.startsWith('/')
-        return { raw: d, abs }
+        return { raw: d || t('dataDirDefault'), abs, empty: !d }
       })()
       const dataDirExplain = h('div', { style: S.dirBox },
         h('p', { style: S.dirHead }, t('dirHead')),
@@ -1055,7 +1060,8 @@ window.__ModuleLoader__.load({
         h('p', { style: S.dirLine },
           h('span', { style: S.dirK }, t('dirResolved')),
           h('span', { style: S.dirV },
-            dirBase.abs ? t('dirAbsolute') : t('dirRelToWorkspace'))),
+            dirBase.empty ? t('dirDefaultDerived')
+              : (dirBase.abs ? t('dirAbsolute') : t('dirRelToWorkspace')))),
         h('p', { style: S.dirLine },
           h('span', { style: S.dirK }, t('dirWhat')),
           h('span', { style: S.dirV }, t('dirWhatVal'))),

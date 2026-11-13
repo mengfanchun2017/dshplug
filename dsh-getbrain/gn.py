@@ -10,10 +10,10 @@ gn.py — 得到大脑（原 Get 笔记）OpenAPI 受控客户端
   1. 默认只读。所有写操作必须显式 --apply；不带它一律只打印「将要做的事」。
   2. 删除双重闸门：--apply 之外还需 --i-understand-deletion-may-be-permanent。
      （官方 FAQ 自列 bug：「笔记删除后直接彻底删除，未进回收站」）
-  3. 每次请求写审计日志 getnote/audit/*.jsonl；凭据永不写入日志/输出。
+  3. 每次请求写审计日志 <dataDir>/logs/*.jsonl；凭据永不写入日志/输出。
 
 零第三方依赖：仅用 Python 标准库（urllib / json / argparse ...）。
-运行： <dsh-python> getnote/gn.py <command> [options]
+运行： <dsh-python> dsh-getbrain/gn.py <command> [options]
 文档： https://doc.biji.com/docs/WOxgwObNNiyMHWk1dl0cJqSxnEd
 """
 
@@ -41,13 +41,18 @@ SETTINGS_FILE = ROOT / "settings.json"          # 非敏感偏好（可入库/�
 WORKSPACE = ROOT.parent
 
 # 统一数据目录：所有下载、中间产物、快照、日志、审计、计划都归到它下面。
-# 优先级：--data-dir > settings.json.dataDir > 默认 <工作区>/getbraindata。
-# 注意：默认值放在**插件目录之外**（工作区根下），这样：
-#   1) 代码目录可以整体打包/发布而不会把 21MB 笔记一起打进去；
-#   2) 清空/重建工作区时数据不跟着丢。
-DEFAULT_DATA_DIR = WORKSPACE / "getbraindata"
+# 优先级：--data-dir > 环境变量 GETNOTE_DATA_DIR > settings.json.dataDir > 下面这个默认值。
+# 默认值 = 「仓库同级」的 data-getbrain —— 本机即 C:\dsh\data-getbrain（插件在
+# C:\dsh\dshplug\dsh-getbrain，WORKSPACE = C:\dsh\dshplug）。
+#
+# 为什么不在 WORKSPACE 里：WORKSPACE 就是 Git 仓库根，数据落进去会被 git status 弄脏、
+# 也会被打包带走。放在仓库的**同级**目录：
+#   1) 代码目录可以整体打包/发布，不会把几十 MB 笔记一起打进去；
+#   2) 天然落在仓库之外 → 不进 Git 同步，用户本机自己控制；
+#   3) 删了也不会丢数据（换机器/重建工作区不影响）。
+# 命名约定：C:\dsh\data-<插件短名> 是本机技能的默认数据位，首次运行自动创建（幂等）。
+DEFAULT_DATA_DIR = WORKSPACE.parent / "data-getbrain"
 SUBDIRS = ("downloads", "intermediate", "snapshots", "logs", "state")
-
 
 def resolve_data_dir(cli_override=None):
     raw = cli_override
@@ -68,21 +73,21 @@ def _load_settings():
     return {}
 
 
+def _layout(data_dir):
+    """只计算各子目录位置，不落盘。模块导入时用，避免建出幽灵目录。"""
+    return {sub: data_dir / sub for sub in SUBDIRS}
+
+
 def init_layout(data_dir):
     """一次性建好统一目录结构（幂等）。"""
     for sub in SUBDIRS:
         (data_dir / sub).mkdir(parents=True, exist_ok=True)
-    return {
-        "downloads": data_dir / "downloads",
-        "intermediate": data_dir / "intermediate",
-        "snapshots": data_dir / "snapshots",
-        "logs": data_dir / "logs",
-        "state": data_dir / "state",
-    }
+    return _layout(data_dir)
 
 
-# 运行时布局（由主流程在解析完参数后设置；模块级给个默认值便于导入）
-LAYOUT = init_layout(DEFAULT_DATA_DIR)
+# 运行时布局：模块导入时只计算不落盘，实际建目录发生在 reconfigure() / init_layout()。
+# 否则 `import gn` 这种纯读场景会在默认位置建出一个空的幽灵数据目录。
+LAYOUT = _layout(DEFAULT_DATA_DIR)
 SNAPSHOTS = LAYOUT["snapshots"]
 AUDIT = LAYOUT["logs"]
 STATE = LAYOUT["state"]
@@ -114,7 +119,7 @@ _MISSING_KEYFILE = []
 
 # 插件 Config.apiKeyFile 的默认值。只有当用户改成其他路径且该文件不存在时才告警，
 # 否则新用户一开面板就会看到“你指定的路径不存在”的假警报。
-DEFAULT_CONFIG_REL = "getnote/config.local.json"
+DEFAULT_CONFIG_REL = "dsh-getbrain/config.local.json"
 
 
 def _truthy(v):
@@ -196,7 +201,7 @@ def load_credentials(require=True):
 
     优先级（高 → 低）：环境变量 > settings.json 的 apiKey/clientId
                      > settings.json.apiKeyFile 指向的本地 json
-                     > getnote/config.local.json。
+                     > dsh-getbrain/config.local.json。
 
     说明：Cordis 插件的 Config 里可以直接粘 apiKey/clientId，但更安全的做法是
     用 apiKeyFile 指向一个本地文件（如 config.local.json）——组合树是明文落盘的。
@@ -235,7 +240,7 @@ def load_credentials(require=True):
                 src = f"file:{refp.name}"
         else:
             # 只有用户真的改过 apiKeyFile（跟默认值不同）才报错。
-            # 默认值 getnote/config.local.json 永远会被注入，而新用户本来就没这个文件，
+            # 默认值 dsh-getbrain/config.local.json 永远会被注入，而新用户本来就没这个文件，
             # 不区分的话每个人一打开面板就会看到一条“你指定的路径不存在”的假警报。
             # 否则只会看到「凭据未配置」，根本不知道是路径写错了。
             if ref and str(ref).replace("\\", "/").lstrip("./") != DEFAULT_CONFIG_REL:
@@ -843,7 +848,10 @@ def cmd_download(args):
     into = str(getattr(args, "into", "") or "").strip()
     if into:
         p = Path(into).expanduser()
-        out = p if p.is_absolute() else (WORKSPACE / p)
+        # 相对路径以**数据目录**为基准，而不是插件/工作区目录。
+        # 旧行为是相对 WORKSPACE（= Git 仓库根），于是 --into getbraindata/current
+        # 会把增量结果写回代码目录里，既脏仓库又跟默认数据位分家。
+        out = p if p.is_absolute() else (DATA_DIR / p)
     else:
         out = LAYOUT["downloads"] / stamp()
     out.mkdir(parents=True, exist_ok=True)
@@ -1006,7 +1014,7 @@ def cmd_download(args):
     print(f"\n✅ 下载完成：" + " / ".join(parts))
     print(f"   {out}")
     if not into:
-        print("   提示：想增量刷新同一个目录而不是每次新建快照，用 --into getnote/data/current")
+        print(f"   提示：想增量刷新同一个目录而不是每次新建快照，用 --into current（相对数据目录 {DATA_DIR}）")
     print("   文字已落地，供人先分析决策；之后再用 plan.json + apply 改线上。")
     return 0
 
@@ -1252,39 +1260,69 @@ def cmd_plan_template(args):
 # ============================ 导出 / 移植 ============================
 
 # 可移植包里应包含的文件（相对 ROOT）。凭据 config.local.json 与所有运行产物都不在内。
-# getnote/ 目录本身就是一个 Cordis Bundle：代码 + 插件入口 + SKILL.md 说明一体。
+# dsh-getbrain/ 目录本身就是一个 Cordis Bundle：代码 + 插件入口 + SKILL.md 说明一体。
 PORTABLE_FILES = [
-    "gn.py", "gn.ps1", "config.example.json", "settings.example.json", ".gitignore",
+    "gn.py", "gn.ps1", "config.example.json", "settings.example.json",
     "README.md", "SKILL.md",
     "package.json", "cordis.patch.yml", "index.js", "client.js", "icon.svg",
     "locale/en.json", "locale/zh.json",
 ]
 
+# 导出包自带的忽略规则。原先复用仓库里的 dsh-getbrain/.gitignore，
+# 但 ADR-007 把子目录 .gitignore 统一上提到仓库根后，导出包里就没有这份文件了；
+# 因此改为在打包时动态写入，保证「解压出来的 dsh-getbrain/ 目录」依然自带凭据保护。
+PORTABLE_GITIGNORE = """\
+config.local.json
+settings.json
+*.credentials*
+getbraindata/
+data-getbrain/
+data-*/
+current/
+data/
+snapshots/
+audit/
+state/
+downloads/
+intermediate/
+logs/
+*.jsonl
+*.log
+__pycache__/
+*.pyc
+.venv/
+venv/
+dist/
+*.zip
+*.tgz
+"""
+
 INSTALL_HINT = """\
 安装到别的 DSH / 工作区 / 机器（两种用法，同一份文件）：
 
 【A. 作为正式 Cordis 插件（推荐，可在 DSH 配置里填 Key / dataDir）】
-  1) 把 zip 解压到目标工作区，得到 getnote/ 目录（它本身就是一个 bundle）。
+  1) 把 zip 解压到目标工作区，得到 dsh-getbrain/ 目录（它本身就是一个 bundle）。
   2) 在目标 DSH 会话里执行：plugin_manager  action: install_bundle
-     target: <getnote 目录的绝对路径>
+     target: <dsh-getbrain 目录的绝对路径>
   3) 在「设置 → Getnote」侧边栏或插件行 config 填 apiKey / clientId（或用 apiKeyFile 指向本地 json 更安全）、
-     dataDir（统一数据目录，默认 getnote/data）、media.images（默认 false）。
+     dataDir（统一数据目录，默认 = 本仓库同级的 data-getbrain，自动创建；可改绝对路径）、media.images（默认 false）。
   4) 安装后任何会话都有 getnote_doctor / getnote_download 等工具，且 agent 会自动加载 SKILL.md 的整理纪律。
   5) 面板里改配置即时生效（volatile 字段就地写回），无需重启；仅改 index.js / dsh.client 才需重启。
 
 【B. 只用 CLI，不装插件】
-  1) 复制 getnote/config.example.json 为 getnote/config.local.json，填入 api_key / client_id；
+  1) 复制 dsh-getbrain/config.example.json 为 dsh-getbrain/config.local.json，填入 api_key / client_id；
      复制 settings.example.json 为 settings.json，按需改 dataDir / media.images / minInterval。
+     不填 dataDir 就用默认值（本仓库同级的 data-getbrain，自动创建）。
      —— 或设环境变量 GETNOTE_API_KEY / GETNOTE_CLIENT_ID / GETNOTE_DATA_DIR。
   2) 目标机需 Python 3.9+（gn.ps1 按 GETNOTE_PYTHON > PATH python/py > $DSH_HOME 自带 Python 查找）。
-     非 Windows 直接：python3 getnote/gn.py doctor --live
-  3) 自检： .\\getnote\\gn.ps1 doctor     下载全文： .\\getnote\\gn.ps1 download
-  4) 写操作仍需 --apply；删除需双重闸门。完整说明见 getnote/README.md。
+     非 Windows 直接：python3 dsh-getbrain/gn.py doctor --live
+  3) 自检： .\\dsh-getbrain\\gn.ps1 doctor     下载全文： .\\dsh-getbrain\\gn.ps1 download
+  4) 写操作仍需 --apply；删除需双重闸门。完整说明见 dsh-getbrain/README.md。
 
-统一数据目录 dataDir 下：downloads/（全文字）intermediate/（中间产物）
-  snapshots/（快照）logs/（审计）state/（计划与执行结果）。
+统一数据目录 dataDir（默认 = 本仓库同级的 data-getbrain，首次运行自动创建、不进 Git）下：
+downloads/（全文字）intermediate/（中间产物）snapshots/（快照）logs/（审计）state/（计划与执行结果）。
 默认只下载全文字，音频/视频二进制永不下载，图片需显式开启。
-Key/ID 输入：首选「设置 → Getnote」侧边栏；详见 getnote/README.md 第 9 节。
+Key/ID 输入：首选「设置 → Getnote」侧边栏；详见 dsh-getbrain/README.md。
 零第三方依赖、换用户名 / 换安装路径都能跑。
 """
 
@@ -1305,8 +1343,9 @@ def cmd_export(args):
 
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         for name in files:
-            z.write(ROOT / name, arcname=f"getnote/{name}")
-        z.writestr("getnote/INSTALL.txt", INSTALL_HINT)
+            z.write(ROOT / name, arcname=f"dsh-getbrain/{name}")
+        z.writestr("dsh-getbrain/.gitignore", PORTABLE_GITIGNORE)
+        z.writestr("dsh-getbrain/INSTALL.txt", INSTALL_HINT)
 
     print(f"[export] 已生成可移植工具包：{out}")
     print(f"[export] 包含 {len(files)} 个文件：{', '.join(files)}")
@@ -1359,7 +1398,7 @@ def build_parser():
     # 增量刷新：写回同一个目录，只重写 updated_at 变了的笔记。
     # 不传 --into 时保持旧行为（每次新建时间戳目录），便于审计“某一刻的快照”。
     dl.add_argument("--into", default="",
-                    help="增量模式：写入指定目录（如 getnote/data/current），已是最新的笔记不重写。留空=新建时间戳目录。")
+                    help="增量模式：写入指定目录（相对路径相对**数据目录**，如 current → <dataDir>/current），已是最新的笔记不重写。留空=新建时间戳目录。")
     dl.add_argument("--force", action="store_true", help="配合 --into：忽略增量判断，全部重写")
     dl.set_defaults(func=cmd_download)
 
@@ -1463,7 +1502,7 @@ def main():
     setup_io()
     args = build_parser().parse_args()
     try:
-        # 统一数据目录：--data-dir > settings.json.dataDir > getnote/data
+        # 统一数据目录：--data-dir > 环境变量 > settings.json.dataDir > 默认（仓库同级 data-getbrain）
         override = getattr(args, "data_dir", None) or os.environ.get(ENV_DATA_DIR)
         reconfigure(resolve_data_dir(override))
         # 默认目录也建好，保证 doctor / 全新解压包开箱即用

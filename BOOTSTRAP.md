@@ -195,6 +195,21 @@ git log -3 --oneline
 
 ---
 
+## 4.1 右侧文件列表的 U / M 徽标是什么（不是错误）
+
+那是 DSH「Local changes / Changes」面板（`client-ui-forge`）根据 **Git 状态**画的徽标：
+
+| 徽标 | 颜色 | 含义 |
+|---|---|---|
+| **U** | 绿色 | **Untracked**——新文件，Git 还没跟踪（`??`）；尚未 `git add` |
+| **M** | 黄色 | **Modified**——已跟踪文件被改过（` M`） |
+
+其他可能出现的：**D** 删除、**R** 重命名（悬停显示旧名）。
+这些只是提醒「哪些东西还没提交」，不影响插件运行；用 `plugpush.ps1 -All` 提交后就会消失。
+（当前 `U` 对应 `BOOTSTRAP.md` / `archive/` / `dsh-synchub/ADR.md` / `docs/`；
+`M` 对应 `.gitignore` / `README.md` / `plugpush.ps1` / `install.ps1` / `dsh-getbrain/*` 等。）
+
+---
 ## 5. 目录名 / 包名 / 清单 name：三者已统一
 
 **2026-11-12 起，四个自研插件的「目录名 = 包名 = `list.json` 的 `name`」全部一致**：

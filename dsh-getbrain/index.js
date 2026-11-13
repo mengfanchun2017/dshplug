@@ -1,7 +1,7 @@
 /**
- * getnote-organize —— DeepSeek Harness Host 插件（纯 Node，零第三方依赖）
+ * dsh-getbrain —— DeepSeek Harness Host 插件（纯 Node，零第三方依赖）
  *
- * 把 getnote/gn.py 的官方 OpenAPI 受控能力注册成模型工具，让任何会话都能：
+ * 把 dsh-getbrain/gn.py 的官方 OpenAPI 受控能力注册成模型工具，让任何会话都能：
  *   - 读整理纪律（getnote_guide，内容来自同包 SKILL.md）
  *   - 自检 / 下载全文字 / 全量只读快照 / 列表 / 语义搜索 / 知识库
  *   - 执行人工确认过的整理计划（getnote_apply；写闸门仍在 gn.py 里，绕不过）
@@ -111,11 +111,20 @@ export const inject = ['tools', 'settings']
  */
 
 const BUNDLE_DIR = path.dirname(fileURLToPath(import.meta.url))
-// 工作区根 = 插件目录的上一级。迁移到 C:\dsh\dsh-getbrain 后即 C:\dsh。
+// 工作区根 = 插件目录的上一级。插件现在位于 C:\dsh\dshplug\dsh-getbrain，
+// 所以 WORKSPACE = C:\dsh\dshplug（不是 C:\dsh）。改目录位置时这里的推算跟着变。
 const WORKSPACE = path.dirname(BUNDLE_DIR)
-// 默认数据目录：<工作区>/getbraindata（= C:\dsh\getbraindata）。
-// 用具名常量而不是到处写字符串，避免以后又改漏一处。
-const DEFAULT_DATA_DIR = 'getbraindata'
+// 默认数据目录：**仓库的同级目录** data-getbrain —— 本机即 C:\dsh\data-getbrain。
+//
+// 为什么是「同级」而不是「工作区内」：插件位于 C:\dsh\dshplug\dsh-getbrain，
+// 它的「上一级」是工作区根 C:\dsh\dshplug（就是 Git 仓库本身）。旧版本默认写
+// 'getbraindata' 相对工作区根 → 落到仓库里的 C:\dsh\dshplug\getbraindata，于是当初
+// 只能靠 cordis.patch.yml 里写死绝对路径 C:\dsh\getbraindata 把数据拽出仓库。
+// 现在默认值**由代码推导**（仓库同级 data-<名字>），patch 里留空即可，换机器不用改配置。
+//
+// 命名约定：C:\dsh\data-<插件名短名> 是本机所有技能的「默认数据位」，自动创建；
+// 存在仓库之外 → 天然不进 Git、不进插件包；想换位置在设置面板改 dataDir。
+const DEFAULT_DATA_DIR = path.join(path.dirname(WORKSPACE), 'data-getbrain')
 const GN_PY = path.join(BUNDLE_DIR, 'gn.py')
 const SKILL_MD = path.join(BUNDLE_DIR, 'SKILL.md')
 
@@ -133,9 +142,11 @@ const field = (schema, description, secret = false) => {
 const ConfigShape = z ? z.object({
   apiKey: field(z.string().default(''), '【已弃用明文槽】请用面板顶部的「API Key」安全输入框（写入凭据库）。此处仅兼容旧配置，留空即可。', true),
   clientId: field(z.string().default(''), '【已弃用明文槽】请用面板顶部的「Client ID」安全输入框（写入凭据库）。此处仅兼容旧配置，留空即可。', true),
-  apiKeyFile: field(z.string().default('getnote/config.local.json'), '本地 json 路径，含 {"api_key","client_id"}。相对路径相对工作区根。优先用它而非明文。'),
+  apiKeyFile: field(z.string().default('dsh-getbrain/config.local.json'), '本地 json 路径，含 {"api_key","client_id"}。相对路径相对工作区根。优先用它而非明文。'),
   apiBase: field(z.string().default('https://openapi.biji.com'), 'OpenAPI Base URL。官方地址固定，面板不暴露；改错只会搞坏。要覆盖请改 cordis.patch.yml 或 GETNOTE_API_URL。'),
-  dataDir: field(z.string().default(DEFAULT_DATA_DIR), '统一数据目录：下载/中间产物/快照/日志/审计/计划全归它。相对路径相对工作区根。'),
+  // 默认留空，让 cfg() 回退到代码推导的 DEFAULT_DATA_DIR（仓库同级 data-getbrain）。
+  // 这样面板里看到的是「默认」而不是一串本机绝对路径，换机器不用改任何配置。
+  dataDir: field(z.string().default(''), `统一数据目录：下载/中间产物/快照/日志/审计/计划全归它。留空 = 默认值 ${DEFAULT_DATA_DIR}（首次运行自动创建，不进 Git）；相对路径相对工作区根，绝对路径则直接用。`),
   // 注意：外层 object 不能再加 .volatile()。schemastery 会报
   // “volatile fields require a fixed object path without an enclosing volatile field”。
   // 只让叶子字段 images 自己 volatile，volatileForm 会递归找到它。
@@ -424,7 +435,7 @@ export function apply(ctx, config) {
       properties: {
         max: { type: 'number', description: '最多下载条数，0/省略=全部。' },
         withImages: { type: 'boolean', description: '额外下载图片二进制（默认 false）。' },
-        into: { type: 'string', description: '增量目录（如 getbraindata/current）。传了就写回同一目录、跳过未变化笔记；省略=新建快照目录。' },
+        into: { type: 'string', description: "增量目录。相对路径相对**数据目录**（如 'current' → <dataDir>/current）；传了就写回同一目录、跳过未变化笔记；省略=新建时间戳快照目录。" },
         force: { type: 'boolean', description: '配合 into：忽略增量判断，全部重写。' },
       },
     },
@@ -736,7 +747,7 @@ export function apply(ctx, config) {
   async function scanMirror(dataDir) {
     const fs = await import('node:fs/promises')
     const path = await import('node:path')
-    // 相对路径的基准是 WORKSPACE（= 插件目录的上一级，即 default-workspace），
+    // 相对路径的基准是 WORKSPACE（= 插件目录的上一级，现在是 C:\dsh\dshplug），
     // 不能用 process.cwd()：Host 进程的 cwd 是 profile 目录（C:\Users\franc\.dsh），
     // 不是工作区。这里与 gn.py 的 WORKSPACE = ROOT.parent 保持一致。
     const base = path.isAbsolute(dataDir) ? dataDir : path.resolve(WORKSPACE, dataDir)

@@ -1,6 +1,6 @@
 # fetch-lark-cli.ps1 — 重新拉取飞书官方 Windows 原生 lark-cli 二进制。
 #
-# .gitignore 不收录 50 MB 的 exe；clone 仓库后跑一次本脚本即可补齐。
+# 仓库根 .gitignore 不收录 50 MB 的 exe；clone 仓库后跑一次本脚本即可补齐。
 # 下载源用官方 npmmirror 二进制镜像（GitHub 直连在国内常超时），
 # 并用官方 checksums.txt 里的 SHA256 校验后才落盘。
 #
