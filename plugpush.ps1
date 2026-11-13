@@ -70,13 +70,22 @@ foreach ($rp in $rootPaths) {
     if ($staged -notcontains $rp) { $staged += $rp }
   }
 }
-# 兜底：根目录下任何其它已跟踪文件的改动也不漏（不含子目录路径）
-$rootChanges = & git -C $RepoRoot status --porcelain -- .
-foreach ($line in $rootChanges) {
-  if (-not $line) { continue }
-  $rel = (($line -replace '^...','') -replace '\".*','').Trim().Trim('"')
-  if (-not $rel -or $rel -match '[\\/]') { continue }
-  if ($staged -notcontains $rel) { $staged += $rel; Write-Host "  [$rel] 根级改动（兜底）" }
+# 兜底：先把【根目录下每一个直接子项】都扫一遍，不管它是文件还是目录。
+# 历史教训（2026-11-13）：早期这里写了 `$rel -match '[\\/]' { continue }`，
+# 结果所有目录（尤其 archive/）被静默跳过——“仓库里的东西按 git 走”这个期待就落空了。
+# 现在改成：直接子项全收，子目录内部由 git add 递归（仍然会尊重 .gitignore）。
+$rootChildren = @(Get-ChildItem -LiteralPath $RepoRoot -Force | Where-Object { $_.Name -ne '.git' })
+foreach ($child in $rootChildren) {
+  $rel = $child.Name
+  # 已作为插件目录收过的（例如 dsh-synchub）不重复收；但已收的目录下若有新文件，
+  # git add <目录> 本来就是整目录，所以这里跳过是安全的。
+  if ($staged -contains $rel) { continue }
+  if ($paths -contains $rel) { continue }
+  $st = & git -C $RepoRoot status --porcelain -- $rel
+  if (-not $st) { continue }
+  $staged += $rel
+  Write-Host "`n[$rel] 根级改动，一并提交"
+  $st | Select-Object -First 8 | ForEach-Object { Write-Host "  $_" }
 }
 if ($staged.Count -eq 0) {
   # 没有「未提交」的改动，不代表没有「未推送」的提交。以前的版本在这里直接 return，

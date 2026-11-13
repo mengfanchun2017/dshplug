@@ -1,0 +1,48 @@
+# The preview-editor bundle patch.
+#
+# One row carries both halves of this package: the Host half claims the exact
+# Fetch route on the Connection `/api` bridge, and the Client half registers the
+# `Edit` document-preview renderer over the same package's `./client` export.
+#
+# `config.extensions` replaces the built-in suffix list when present; omit it to
+# keep the code default. `config.markdown` (default true) only chooses which view
+# a .md/.markdown/.mdx/.mdown/.mkd file opens on ONCE Edit is selected: true
+# starts in the editor, false starts on the rendered view with Edit one click away.
+#
+# `config.editableAsDefault` (default FALSE) decides the priority band. By default
+# both renderers register in the shipped `builtin` band, AFTER the platform's own
+# Code / Text / Markdown viewers — the registry keeps registration order inside a
+# band, so those stay the default and Edit is the LAST entry of the viewer menu.
+# Set it to `true` to restore the old `extension` band, which outranks every
+# builtin definition and makes Edit the default viewer again.
+#
+# `config.maxBytes` caps one read or save in both halves.
+#
+# `config.highlight` (default true) paints the platform's own syntax colours in a
+# layer under an invisible textarea; `config.highlightMaxBytes` (default 256 KiB)
+# is the size past which the editor stays plain, because tokenizing runs on the
+# main thread.
+#
+# `config.lineNumbers` (default true) draws the gutter beside the editor; the
+# column is a sibling of the textarea, never inside its scrollable area.
+# `config.marks` (default true) bands the characters that cannot be seen (tabs,
+# no-break spaces, zero-width characters, trailing whitespace, control codes)
+# and marks each line ending (LF / CRLF / missing); `config.marksMaxBytes`
+# (default 256 KiB) is the size past which the buffer stays unmarked. Marks are
+# painted inside the character's own box, never substituted for it, so the caret
+# keeps its position.
+#
+# The row config below deliberately omits editableAsDefault, lineNumbers, marks,
+# and marksMaxBytes: their defaults already provide the behaviour described above.
+# Adding them here would pin the values and take the choice away from a profile's
+# patch layer.
+# Config is read at row activation: changing it needs an app restart, while a
+# change to client.js only needs a page refresh.
+
+- insert:
+    - id: preview-editor
+      name: '@local/dsh-preview-editor'
+      config:
+        markdown: true
+        maxBytes: 4194304
+        highlight: true

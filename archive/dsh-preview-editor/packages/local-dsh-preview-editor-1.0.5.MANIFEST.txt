@@ -1,0 +1,34 @@
+package      : @local/dsh-preview-editor
+version      : 1.0.5
+description  : Edit workspace text files in place from the right Sidebar's document preview
+source dir   : C:\Users\franc\Documents\deepseek-harness\default-workspace\dsh-preview-editor
+patch        : ./cordis.patch.yml
+client       : web
+built        : 2026-11-12T14:55:58
+
+local-dsh-preview-editor-1.0.5.tgz  34993 bytes  sha256=08FE261612B41659D080672603DF947513156DDD502112832CD66347B9FA631D
+local-dsh-preview-editor-1.0.5.zip  54598 bytes  sha256=6DA11A8C187375D24908D9C43F9B47877E37C7FE39537F12B55DCA534665AC72
+
+--- tarball contents (what an install actually receives) ---
+  package/client.js
+  package/index.js
+  package/locale/en.json
+  package/package.json
+  package/locale/zh.json
+  package/INSTALL.zh.md
+  package/README.md
+  package/icon.svg
+  package/cordis.patch.yml
+
+--- zip contents (full source) ---
+      57519  local-dsh-preview-editor/client.js
+       2513  local-dsh-preview-editor/cordis.patch.yml
+        509  local-dsh-preview-editor/icon.svg
+      10337  local-dsh-preview-editor/index.js
+       9166  local-dsh-preview-editor/INSTALL.zh.md
+        828  local-dsh-preview-editor/package.json
+      19175  local-dsh-preview-editor/README.md
+       4912  local-dsh-preview-editor/verify-live.mjs
+      53585  local-dsh-preview-editor/verify.mjs
+        149  local-dsh-preview-editor/locale/en.json
+        151  local-dsh-preview-editor/locale/zh.json
