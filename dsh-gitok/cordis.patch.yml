@@ -1,28 +1,41 @@
 # dsh-gitok bundle patch
 # 安装：& C:\dsh\dshplug\install.ps1 -Only dsh-gitok -RepoRoot 'C:\dsh\dshplug'
 #
-# 一行裸插件行：宿主半运行 lib/index.js，注册 6 个 gitok_* 工具。
-# 本插件没有浏览器半（无 dsh.client），全部能力在模型工具层。
+# 一个插件行：宿主半运行 lib/index.js，注册 9 个 gitok_* 工具 + 5 条 HTTP 路由；
+# 浏览器半 lib/client.js 在「设置 → Git 认证」里画状态面板（见 package.json 的 dsh.client）。
 #
 # 安全约定：本文件不含任何密钥。密钥只存在于 Windows 凭据管理器（DPAPI）。
+#
+# 【多机可移植性】下面的 config 会随 profileConfig 同步到别的机器。
+# 所以任何「本机才成立」的值都不能写死在这里，否则 A 机的配置同步到 B 机会指到
+# 不存在的代理/发行版，表现成「git 认证莫名坏了」。默认值一律取「空 = 自动探测」。
 - insert:
     - id: gitok
       name: dsh-gitok
       config:
-        # Windows 侧 GCM 可执行文件路径（留空则自动探测 MinGit / Git for Windows）
+        # Windows 侧 GCM 可执行文件路径。留空 = 自动探测 MinGit / Git for Windows 常见位置。
+        # 换机器时保持空即可，不要让本机路径跟着同步过去。
         gcmPath: ''
-        # 需要管理的端点：windows = 本机 Windows；其余字符串视为 WSL 发行版名。
+        # 需要管理的端点：windows = 本机 Windows；其余字符串视为 WSL 发行版名；
+        # 填 auto = 运行时自动发现本机全部 WSL 发行版（只用于「看」，不会自动改它们）。
         #
         # 2026-11-12：用户明确「WSL 的都先不动，后续再改，只改 Windows」，
-        # 所以这里只保留 windows。要启用 WSL 时把发行版名加回下面，
-        # 或用工具参数临时指定（如 gitok_doctor targets=["claude"]）。
-        #   - claude
-        #   - u26claude4
+        # 所以默认只保留 windows（ADR-006：保留默认端点 = 保留 adopt 误改 WSL 的机会）。
+        # 要看 WSL 时用工具参数临时指定，例如 gitok_doctor targets=["claude"]。
         targets:
           - windows
-        # 默认代理（留空则自动从系统代理读取）
-        proxy: 'http://127.0.0.1:7897'
-        # 凭据按 host+repo 路径区分（推荐 true：做到「一个仓库一个认证」）
+        # git 走的 HTTP 代理。留空 = 依次回落 git 全局 http.proxy → 系统代理 → 直连。
+        # 不要把本机代理（如 127.0.0.1:7897）硬编码在这里：换台机器就是错的。
+        proxy: ''
+        # 按 host+仓库路径区分凭据条目。
+        # 注意它只把凭据分成不同存储条目，并不会让 GCM 返回不同 token，
+        # 所以单独开它做不到「一仓一权限」；那是方案 E（每机细粒度 PAT）才有的能力。
         useHttpPath: false
-        # gitok_verify 里每条命令的超时
+        # 每条探测命令的超时毫秒数。
         probeTimeoutMs: 20000
+        # 监控项「端到端通路心跳」用的仓库 URL。留空则该项如实报 unknown（没查 ≠ 通过）。
+        heartbeatUrl: ''
+        # 周期巡检间隔（分钟）。0 = 关闭（默认）。只做本地只读检查，绝不自动 erase / login。
+        # 上限 10080（一周）不是随手写的：setInterval 延时是 32 位有符号整数，
+        # 超过 2147483647ms 会溢出成 1ms，巡检变成高频空转。
+        autoCheckMinutes: 0

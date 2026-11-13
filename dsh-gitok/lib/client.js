@@ -38,6 +38,22 @@ window.__ModuleLoader__.load({
       return r.json();
     };
 
+    // ── 触发受控写操作 ──────────────────────────────────────────────────────
+    // 只发「意图」，请求体里永远没有 token（Host 侧也会拒收）。
+    // 登录要弹浏览器、轮换要跑预检，所以给 5 分钟。
+    const postAction = async (path, body = {}, timeout = 300000) => {
+      const r = await fetch(path, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeout),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      return d.text || '';
+    };
+
     // ── 极简样式（只用主题变量，跟随亮/暗） ────────────────────────────────
     // 不引 UI 库，所以这里手写几个通用片段复用。
     const S = {
@@ -141,6 +157,9 @@ window.__ModuleLoader__.load({
       const [loading, setLoading] = useState(true);
       const [err, setErr] = useState(null);
       const [showReport, setShowReport] = useState(false);
+      // 写操作进行中时置为文案（如「等待 GCM 登录…」）；null 表示空闲。
+      const [action, setAction] = useState(null);
+      const [actionMsg, setActionMsg] = useState(null);
       // mounted 守卫：面板切走后异步回调不再 setState（React 会警告）
       const alive = useRef(true);
 
@@ -176,6 +195,46 @@ window.__ModuleLoader__.load({
 
       const st = data && data.status;
       const level = st ? st.level : err ? 'error' : 'unknown';
+      const busy = action !== null;
+
+      /**
+       * 受控写操作的统一入口。
+       * 破坏性操作（撤销 / 轮换）必须二次确认，且在置位前不改变界面上任何可见状态。
+       */
+      const act = async (kind) => {
+        if (busy) return;
+        if (kind === 'logout') {
+          const yes = window.confirm(
+            '确认从本机删除 github.com 的 git 凭据？\n\n删除后所有用 github 的仓库会重新要求登录（可以在本面板点「重新登录」恢复）。'
+          );
+          if (!yes) return;
+          setAction('撤销中…');
+          setActionMsg(null);
+          try {
+            const text = await postAction('/plugins/gitok/revoke', { host: 'github.com', confirm: true });
+            setActionMsg({ ok: true, text: text.split('\n').slice(0, 14).join('\n') });
+          } catch (e) {
+            setActionMsg({ ok: false, text: String((e && e.message) || e) });
+          } finally {
+            setAction(null);
+            load(true);
+          }
+          return;
+        }
+        const label = kind === 'login' ? '等待 GCM 登录…' : '初始化中…';
+        setAction(label);
+        setActionMsg(null);
+        try {
+          const path = kind === 'login' ? '/plugins/gitok/login' : '/plugins/gitok/bootstrap';
+          const text = await postAction(path, kind === 'login' ? { host: 'github.com' } : {});
+          setActionMsg({ ok: true, text: text.split('\n').slice(0, 20).join('\n') });
+        } catch (e) {
+          setActionMsg({ ok: false, text: String((e && e.message) || e) });
+        } finally {
+          setAction(null);
+          load(true);
+        }
+      };
 
       return react.createElement(
         'div',
@@ -208,6 +267,8 @@ window.__ModuleLoader__.load({
               'div',
               null,
               StatusRows(st),
+              CheckTable(st),
+              ActionButtons({ st, busy, act }),
             ),
 
           err &&
@@ -240,6 +301,25 @@ window.__ModuleLoader__.load({
                 showReport ? '收起原始报告' : '查看原始报告',
               ),
           ),
+
+          // 写操作的进行中提示 / 结果回显
+          action &&
+            react.createElement(
+              'p',
+              { style: { ...S.hint, color: 'var(--dsh-accent, #2f6feb)', fontWeight: 500 } },
+              action,
+            ),
+          actionMsg &&
+            react.createElement(
+              'div',
+              { style: { marginTop: 10 } },
+              react.createElement(
+                'p',
+                { style: { ...S.hint, margin: '0 0 6px', color: actionMsg.ok ? '#1a7f37' : '#cf222e', fontWeight: 500 } },
+                actionMsg.ok ? '✅ 完成' : '❌ 失败',
+              ),
+              react.createElement('pre', { style: S.pre }, actionMsg.text || '(无输出)'),
+            ),
         ),
 
         // ── 原始报告 ──
@@ -291,6 +371,66 @@ window.__ModuleLoader__.load({
       );
       push('GCM 路径', st.gcmPath);
       return rows.length ? react.createElement('div', null, rows) : null;
+    }
+
+    // 六项持续监控的表格：每项四态（ok / warn / error / unknown）
+    function CheckTable(st) {
+      const checks = st && st.checks;
+      if (!checks || !checks.length) return null;
+      const mark = (lv) => (lv === 'ok' ? '✅' : lv === 'warn' ? '⚠️' : lv === 'error' ? '❌' : '❔');
+      const color = (lv) =>
+        lv === 'ok' ? '#1a7f37' : lv === 'warn' ? '#9a6700' : lv === 'error' ? '#cf222e' : '#666';
+
+      return react.createElement(
+        'div',
+        { style: { marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--dsh-border, #e3e3e3)' } },
+        react.createElement('div', { style: { fontWeight: 600, marginBottom: 8 } }, '持续监控'),
+        checks.map((c) =>
+          react.createElement(
+            'div',
+            { key: c.id, style: { ...S.row, alignItems: 'flex-start' } },
+            react.createElement(
+              'span',
+              { style: { ...S.k, minWidth: 110, color: color(c.level), fontWeight: 500 } },
+              mark(c.level) + ' ' + c.label,
+            ),
+            react.createElement(
+              'span',
+              { style: { ...S.v, fontFamily: 'inherit', textAlign: 'left', color: 'var(--dsh-text-secondary, #777)' } },
+              c.detail,
+            ),
+          ),
+        ),
+      );
+    }
+
+    // 受控写操作的按钮组。
+    // “重新登录”只弹浏览器；“撤销”是破坏性的，必须 confirm。
+    function ActionButtons({ st, busy, act }) {
+      const hasCred = st && st.credTargets && st.credTargets.length > 0;
+      const btn = (label, onClick, primary) =>
+        react.createElement(
+          'button',
+          { style: primary ? S.btnPrimary : S.btn, disabled: busy, onClick },
+          label,
+        );
+
+      return react.createElement(
+        'div',
+        { style: { display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' } },
+        btn(hasCred ? '重新登录（换账号）' : '登录 GitHub', () => act('login'), true),
+        btn('一键初始化', () => act('bootstrap'), false),
+        hasCred &&
+          react.createElement(
+            'button',
+            {
+              style: { ...S.btn, color: '#cf222e', borderColor: '#cf222e55' },
+              disabled: busy,
+              onClick: () => act('logout'),
+            },
+            '撤销凭据',
+          ),
+      );
     }
 
     // ── 插件入口 ──────────────────────────────────────────────────────────

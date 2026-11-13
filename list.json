@@ -35,13 +35,13 @@
     {
       "name": "dsh-gitok",
       "dir": "dsh-gitok",
-      "version": "0.2.0",
-      "description": "Git 认证一站式管理：设置里有一个「Git 认证」面板（状态卡片 + 一键重检 + 原始报告），新手不用记工具名。底层 6 个 gitok_* 工具做体检/查看/验证/登录/接管/撤销，凭据收敛到 Windows 凭据管理器（DPAPI，出机器不可用）。文档三份：README（怎么用）/ BOOTSTRAP（怎么做）/ ADR（为什么，七条决策）。",
+      "version": "0.3.0",
+      "description": "Git 认证一站式管理，分 Init / Manage / Monitor 三层。设置里有一个「Git 认证」面板（四态状态卡 + 六项持续监控 + 一键初始化/重新登录/撤销按钮 + 原始报告）。底层 9 个 gitok_* 工具（doctor/list/verify/login/revoke/adopt/bootstrap/rotate/monitor），凭据收敛到 Windows 凭据管理器（DPAPI，出机器不可用），WSL 经 interop 借用不落盘。文档三份：README（怎么用）/ BOOTSTRAP（怎么做）/ ADR（为什么，含决策 D）。",
       "installedOn": [
         "REDMIPRO"
       ],
       "status": "active",
-      "note": "未在 npm 发布，用 link: 装进 desktop profile。无浏览器半（不声明 dsh.client），纯模型工具插件。开发工作区：C:\\dsh\\dshplug\\dsh-gitok。WSL 功能默认关闭（targets 只含 windows）。"
+      "note": "未在 npm 发布，用 link: 装进 desktop profile。有浏览器半（声明 dsh.client，platform=web，immediately）—— 改 lib/client.js 刷新页面即可，改 lib/index.js 或 package.json 的 dsh.client 必须完全重启 DSH。开发工作区：C:\\dsh\\dshplug\\dsh-gitok。WSL 默认不动（targets 只含 windows，ADR-006）；要看 WSL 用工具参数临时指定。"
     },
     {
       "name": "dsh-larkcli",

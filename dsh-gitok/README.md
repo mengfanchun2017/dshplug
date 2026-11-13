@@ -6,7 +6,7 @@ Git 认证一站式管理插件：**检查 / 建议 / 配置 / 验证 / 撤销**
 （DPAPI 加密、绑定用户+本机、出机器解不开）。WSL 通过 interop 直接调用 Windows 的
 `git-credential-manager.exe`，**自己一个字节的密钥都不存**。
 
-> **版本 0.2.0 ｜ 状态 active ｜ 2026-11-12**
+> **版本 0.3.0 ｜ 状态 active ｜ 2026-11-13**
 > 未发布 npm，已用 `link:` 装进 `desktop` profile（宿主机 `REDMIPRO`）。
 > 这份 README 是**交接文档**：设计、机制、实测数据、踩过的坑全在里面，换机器/换工作区照着读就能接着开发。
 
@@ -40,7 +40,7 @@ Git 认证一站式管理插件：**检查 / 建议 / 配置 / 验证 / 撤销**
 
 | 文件 | 讲什么 | 什么时候读 |
 |---|---|---|
-| **README.md**（本文件） | **现在怎么用**：面板长什么样、六个工具干什么、六种认证方式怎么选、安全边界 | 第一次接触 / 要决定用哪种认证 |
+| **README.md**（本文件） | **现在怎么用**：面板长什么样、九个工具干什么、六种认证方式怎么选、安全边界 | 第一次接触 / 要决定用哪种认证 |
 | [`BOOTSTRAP.md`](./BOOTSTRAP.md) | **怎么做**：安装、三层验证、日常开发循环、发布、迁移、报错对照表 | 装机 / 换机器 / 出事排障 |
 | [`ADR.md`](./ADR.md) | **为什么这么定**：七条决策的理由、反面代价、已否决方案 | 要改设计 / 要反驳某个约束 |
 
@@ -190,24 +190,27 @@ git -c credential.helper=<Windows GCM 路径> \
 
 | 半区 | 文件 | 职责 |
 |---|---|---|
-| 宿主（Host） | `lib/index.js` | 6 个工具 + `/plugins/gitok/status` 数据路由 |
+| 宿主（Host） | `lib/index.js` | 9 个工具 + 5 条 HTTP 路由（1 读 + 4 写） |
 | 浏览器（Client） | `lib/client.js` | 设置里的「Git 认证」面板 |
 
 ### 4.1 工具清单
 
 | 工具 | 性质 | 作用 |
 |---|---|---|
-| `gitok_doctor` | **只读** | 逐端点体检：git 版本、helper（含 URL 作用域）、store 后端、代理、SSH 私钥、ssh-agent、明文凭据文件、gh 状态 |
+| `gitok_doctor` | **只读** | 逐端点体检：git 版本、helper（含 URL 作用域）、store 后端、代理、SSH 私钥（含**是否空口令**）、ssh-agent、明文凭据文件、gh 状态 |
 | `gitok_list` | **只读** | 列出已存凭据：凭据管理器条目、GCM 已知账号、各 WSL 端点来源。**只显示 host/用户名** |
 | `gitok_verify` | **只读** | 端到端跑 `git ls-remote` 验证通路 |
+| `gitok_monitor` | **只读** | 六项持续监控 + 四态判定（`ok`/`warn`/`error`/`unknown`） |
 | `gitok_login` | 触发登录 | 让 GCM 弹浏览器/设备码。**密钥不经过本插件** |
-| `gitok_adopt` | **改配置** | 把 WSL 端点的 helper 指向 Windows GCM（先备份） |
-| `gitok_revoke` | **删除** | GCM `erase` 删凭据 + 可选清理 WSL 配置。**必须 `confirm: true`** |
+| `gitok_bootstrap` | 幂等初始化 | **主入口**：S0 自检 → S1 补配置 → S2 登录 → S3 验收 → S4 收尾。可重入，支持 `dryRun` |
+| `gitok_adopt` | **改配置** | 把 WSL 端点的 helper 指向 Windows GCM（先备份）。支持 `dryRun` |
+| `gitok_rotate` | **轮换** | 预检 → 备份 → erase → 重新登录 → 验收。断网时不会误删可用凭据 |
+| `gitok_revoke` | **删除** | 不传 `confirm` 时**只列影响面**；传 `true` 才 GCM `erase` 删凭据 |
 
 > **面向新手时不要提工具名。** 设置里有一个「Git 认证」面板，新手只需看卡片、点「重新检查」。
 > 工具名只在需要精确操作（如 `gitok_revoke` 删某一条）时由 AI 代调。
 
-### 4.1.1 设置面板（v0.2.0 新增）
+### 4.1.1 设置面板（v0.3.0）
 
 在「设置」侧边栏注册一顶层分区 **Git 认证**（`settings.section`，`id: gitok`，`order: 65`）。
 
@@ -215,11 +218,36 @@ git -c credential.helper=<Windows GCM 路径> \
 
 | 区域 | 内容 |
 |---|---|
-| 状态卡 | 一个颜色徽标（正常/待处理/异常）+ 一句话结论，如「已配置，认证可用」 |
+| 状态卡 | 四态徽标（正常/待处理/异常/未知）+ 一句话结论 |
 | 明细行 | 凭据后端、git helper、仓库级 helper、代理、SSH 密钥、gh CLI、已存凭据条数、GCM 路径 |
-| 按钮 | 「重新检查」（带 `?refresh=1` 绕过 5s 缓存）、「查看原始报告」（展开完整体检文本） |
+| **持续监控** | 六项逐行展示，每项带自己独立的四态与原因 |
+| **写按钮** | 「登录 GitHub / 重新登录（换账号）」「一键初始化」「撤销凭据」（破坏性，需 `confirm`） |
+| 读按钮 | 「重新检查」（带 `?refresh=1` 绕过 5s 缓存）、「查看原始报告」 |
 | 新手说明 | 告诉用户凭据到底在哪、怎么删、怎么换账号 |
 
+### 4.1.2 四态模型（`ok` / `warn` / `error` / `unknown`）
+
+关键设计：**`unknown` 不等于「正常」**。
+
+| 状态 | 含义 | 典型场景 |
+|---|---|---|
+| `ok` | 查过了，没问题 | GCM 就位、无明文凭据 |
+| `warn` | 能用，但有隐患 | 存在明文 `hosts.yml` |
+| `error` | 必须处理 | 空口令 SSH 私钥、GCM 未找到 |
+| `unknown` | **没查**，不能当作正常 | 未配 `heartbeatUrl` 所以没跑心跳；本次只探了 WSL 所以没看 Windows 凭据 |
+
+没有 `unknown` 这个态，就会出现「没配置心跳却显示绿色」这种假健康。
+
+### 4.1.3 六项持续监控
+
+| id | 项 | 判据 |
+|---|---|---|
+| `heartbeat` | 端到端通路 | 可选：跑 `git ls-remote`。未配 URL 则 `unknown` |
+| `plaintext` | 明文凭据 | `~/.config/gh/hosts.yml` 或 `~/.git-credentials` 存在 → `warn` |
+| `sshkey` | SSH 私钥口令 | `ssh-keygen -y -P '' -f <key>` 能导出公钥 = **空口令 → `error`（P0）** |
+| `helper` | helper 叠加 | **同一 host** 下非空 helper 数 > 1 → `warn` |
+| `creds` | 凭据条目 | 无已存凭据 → `warn`；只探 WSL 时 → `unknown` |
+| `deps` | 依赖与网络 | GCM 缺失 / 端点超时 → `error`；代理不可达 → `warn` |
 **数据通路**（这是关键，Client 拿不到 Host 的能力）：
 
 ```
@@ -246,13 +274,25 @@ git -c credential.helper=<Windows GCM 路径> \
 ### 4.3 建议的使用顺序
 
 ```
-gitok_doctor                     # 1. 先看清现状
-gitok_verify  <私有库 URL>        # 2. 确认当前通路是否真的可用
-gitok_adopt   targets=[claude]   # 3. 让 WSL 借 Windows 凭据
-gitok_verify  <私有库 URL>        # 4. 确认切换后仍可用
-# 5. 确认无误后，手动清掉 WSL 里的明文 PAT：gh auth logout
-gitok_list                       # 6. 随时查看还剩哪些凭据
-gitok_revoke confirm=true        # 7. 需要时精确删除
+# ── 第一次装到一台新机器：只需这一步 ──
+gitok_bootstrap url="https://github.com/<你的私有库>"
+#   自动做完：S0 自检 → S1 补配置 → S2 登录（已就绪则跳）→ S3 验收 → S4 收尾建议
+
+gitok_monitor                    # 日常：六项持续监控 + 四态结论
+gitok_rotate url=<私有库 URL>     # 换账号 / 轮换：预检 → erase → 重登 → 验收
+gitok_verify <私有库 URL>        # 只看端到端通不通
+gitok_list                       # 随时查看还剩哪些凭据
+gitok_revoke                     # 不传 confirm：只看「删了会影响哪些仓库」
+gitok_revoke confirm=true        # 确认后才真删
+```
+
+要接入 WSL（**默认不动**，ADR-006）：
+
+```
+gitok_adopt targets=[claude] dryRun=true   # 先看会改什么
+gitok_adopt targets=[claude]               # 确认后才写
+gitok_verify <URL> targets=[claude]        # 确认切换后仍可用
+# 最后才清掉 WSL 里的明文 PAT：gh auth logout（顺序不能反）
 ```
 
 ### 4.4 配置项
@@ -260,10 +300,12 @@ gitok_revoke confirm=true        # 7. 需要时精确删除
 | 字段 | 默认 | 说明 |
 |---|---|---|
 | `gcmPath` | `''` | GCM 绝对路径，留空自动探测 MinGit / Git for Windows |
-| `targets` | `['windows']` | 要管理的端点，`windows` = 本机，其余为 WSL 发行版名 |
-| `proxy` | `''` | git 走的代理，留空从系统代理读 |
-| `useHttpPath` | `false` | 是否按 host+仓库路径区分凭据（一仓一认证） |
+| `targets` | `['windows']` | 要管理的端点，`windows` = 本机，其余为 WSL 发行版名，`auto` = 运行时发现全部 WSL |
+| `proxy` | `''` | 插件指定代理。留空则按 git 全局 `http.proxy` → 系统代理 → 直连 依次回落 |
+| `useHttpPath` | `false` | 按 host+仓库路径区分凭据**条目**。注意它不会让 GCM 返回不同 token |
 | `probeTimeoutMs` | `20000` | 每条探测命令超时 |
+| `heartbeatUrl` | `''` | 监控心跳用的仓库 URL。留空则该项如实报 `unknown` |
+| `autoCheckMinutes` | `0` | 周期巡检间隔（分钟），0 = 关闭，上限 10080。只做只读检查 |
 
 > `cordis.patch.yml` 的 `config:` 在**行激活时**读取 → 改配置**必须重启 App**。
 
@@ -308,7 +350,7 @@ Windows 凭据管理器的底层是 **DPAPI**，用当前用户的 master key �
 C:\dsh\dshplug\dsh-gitok\
 ├─ package.json        # dsh.bundle.patch → cordis.patch.yml；dsh.client → 浏览器半
 ├─ cordis.patch.yml    # - insert: - id: gitok / name: dsh-gitok
-├─ lib\index.js        # 宿主半：6 个工具 + /plugins/gitok/status 路由
+├─ lib\index.js        # 宿主半：9 个工具 + 5 条 HTTP 路由
 ├─ lib\client.js       # 浏览器半：设置里的「Git 认证」分区
 ├─ README.md           # 本文件（现在怎么用）
 ├─ BOOTSTRAP.md        # 命令行手册（怎么做）
@@ -362,7 +404,7 @@ $node = "$env:USERPROFILE\AppData\Local\Programs\DeepSeek Harness\resources\runt
 - ✅ `gitok_adopt` 接管 claude 后 helper 只剩一条，且端到端仍可用
 - ✅ 修复后已把 claude 的 `.gitconfig` 还原（493 字节，与原始一致）
 - ✅ `runDoctor` + `parseStatus` 在真实体检输出上验证：`level=ok`、`creds=1`
-- ✅ mock ctx 验证：6 个工具 + `/plugins/gitok/status` 均能注册
+- ✅ mock ctx 验证：9 个工具 + 5 条路由均能注册（v0.3.0 实测）
 
 ### 7.2 待办
 
@@ -642,7 +684,7 @@ cd C:\dsh\dshplug; & git pull --ff-only
 | Windows 凭据 | ✅ GCM `wincredman`，`git:https://github.com`，用户 `mengfanchun2017` |
 | WSL `claude` | ⏸ **未改动**，仍用 gh helper + 明文 PAT（按用户要求保持原样） |
 | WSL `u26claude4` | ⏸ **未改动**，仍有空口令 SSH 私钥（待后续处理） |
-| 本插件 | ✅ `status: active`，已装进 `desktop`（v0.2.0，link-junction） |
+| 本插件 | ✅ `status: active`，已装进 `desktop`（v0.3.0，link-junction） |
 | 设置面板 | ✅ 代码已完成（宿主路由 + 浏览器半）；需重启 DSH 后在界面上确认 |
 ---
 
