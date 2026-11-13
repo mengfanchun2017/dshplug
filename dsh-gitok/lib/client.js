@@ -269,6 +269,9 @@ window.__ModuleLoader__.load({
               StatusRows(st),
               CheckTable(st),
               ActionButtons({ st, busy, act }),
+              // 必须用 createElement 而不是直接调用 WslGuide(st)：
+              // 它内部有 useState，当普通函数调会报「Rendered more hooks than during the previous render」。
+              react.createElement(WslGuide, { st }),
             ),
 
           err &&
@@ -432,6 +435,168 @@ window.__ModuleLoader__.load({
           ),
       );
     }
+
+
+    // ── WSL 接管说明 ────────────────────────────────────────────────────
+    // 决策 D 的实现方式：WSL 不存密钥，git 需要凭据时 fork 调用 Windows 的 GCM，
+    // 由 GCM 从 Windows 凭据管理器（DPAPI）取出后直接回给 git。
+    // 这里把「原理 + 当前端点状态 + 可复制命令」放在面板里，
+    // 因为 BOOTSTRAP.md 里的命令用户到了现场未必翻得开。
+    function WslGuide(props) {
+      // 注意：props 是对象（createElement 传的）。不要写成 WslGuide(st) 直接调用——
+      // 那样内部 useState 会跨组件边界，报「Rendered more hooks than during the previous render」。
+      const st = props && props.st;
+      const [open, setOpen] = useState(false);
+      const eps = (st && st.wslEndpoints) || [];
+      const code = (s) =>
+        react.createElement(
+          'pre',
+          {
+            style: {
+              margin: '6px 0 0',
+              padding: '8px 10px',
+              background: 'var(--dsh-bg-subtle, #f6f8fa)',
+              border: '1px solid var(--dsh-border, #e3e3e3)',
+              borderRadius: 6,
+              fontSize: 12,
+              lineHeight: 1.5,
+              overflowX: 'auto',
+              whiteSpace: 'pre',
+            },
+          },
+          s,
+        );
+
+      // 命令里必须写真实的 GCM 路径；拿不到就退回占位符，并提示怎么找。
+      const gcm = (st && st.gcmPath) || '<你的 GCM 路径>';
+      const toWsl = (p) => p.replace(/^([A-Za-z]):\\/, (_, d) => '/mnt/' + d.toLowerCase() + '/').replace(/\\/g, '/');
+      const gcmWsl = gcm.indexOf('<') === 0 ? gcm : toWsl(gcm);
+
+      return react.createElement(
+        'div',
+        { style: { marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--dsh-border, #e3e3e3)' } },
+        react.createElement(
+          'div',
+          {
+            style: { display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' },
+            onClick: () => setOpen(!open),
+          },
+          react.createElement('span', { style: { fontWeight: 600 } }, 'WSL 里怎么用（决策 D）'),
+          react.createElement('span', { style: { color: '#666', fontSize: 12 } }, open ? '收起 ▲' : '展开 ▼'),
+        ),
+
+        !open &&
+          react.createElement(
+            'div',
+            { style: { marginTop: 6, fontSize: 12, color: 'var(--dsh-text-secondary, #777)' } },
+            'WSL 不存密钥，每次由 Windows 凭据管理器代答。所以只需在 Windows 登录一次，所有发行版跟着变。',
+          ),
+
+        open &&
+          react.createElement(
+            'div',
+            { style: { marginTop: 10 } },
+            react.createElement(
+              'div',
+              { style: { fontSize: 13, lineHeight: 1.7, color: 'var(--dsh-text-secondary, #666)' } },
+              'WSL 的 git 需要凭据时，会执行 ', 
+              react.createElement('code', null, 'credential.https://<host>.helper'),
+              ' 里那行命令。只要它指向 Windows 的 ', 
+              react.createElement('code', null, 'git-credential-manager.exe'),
+              '（经 ', 
+              react.createElement('code', null, '/mnt/c/...'),
+              ' 由 WSL interop 调用），凭据就从 Windows 凭据管理器（DPAPI）取出后直接回给 git。',
+              react.createElement('br'),
+              '结果：WSL 磁盘上零密钥；轮换时只在 Windows 重登一次。',
+            ),
+
+            // 当前端点的真实状态（有数据才显示）
+            eps.length > 0 &&
+              react.createElement(
+                'div',
+                { style: { marginTop: 10 } },
+                react.createElement('div', { style: { fontWeight: 600, fontSize: 13 } }, '当前端点'),
+                eps.map((e) =>
+                  react.createElement(
+                    'div',
+                    { key: e.name, style: { ...S.row, alignItems: 'flex-start' } },
+                    react.createElement(
+                      'span',
+                      { style: { ...S.k, minWidth: 110, color: e.adopted ? '#1a7f37' : '#9a6700', fontWeight: 500 } },
+                      (e.adopted ? '✅ ' : '⚠️ ') + e.name,
+                    ),
+                    react.createElement(
+                      'span',
+                      { style: { ...S.v, fontFamily: 'inherit', textAlign: 'left', color: 'var(--dsh-text-secondary, #777)', fontSize: 12 } },
+                      e.adopted ? '已接管，借用 Windows 凭据' : '未接管：' + (e.helper || '无 helper'),
+                    ),
+                  ),
+                ),
+              ),
+
+            react.createElement(
+              'div',
+              { style: { marginTop: 12, fontSize: 13, fontWeight: 600 } },
+              '在 WSL 里执行（把 claude 换成发行版名）',
+            ),
+            code(
+              'GCM=' + gcmWsl + '\n' +
+              '\n' +
+              '# ① 确认 interop 能执行到 GCM\n' +
+              'test -x "$GCM" && echo OK || echo MISSING\n' +
+              '\n' +
+              '# ② 先备份，改坏了能退\n' +
+              'cp ~/.gitconfig ~/.gitconfig.bak.gitok-$(date +%Y%m%d%H%M%S)\n' +
+              '\n' +
+              '# ③ 按 host 精确接管（不要动飞书那条 helper）\n' +
+              'for h in github.com gist.github.com; do\n' +
+              '  git config --global --unset-all "credential.https://$h.helper" 2>/dev/null || true\n' +
+              '  git config --global --add "credential.https://$h.helper" "!$GCM"\n' +
+              'done\n' +
+              '\n' +
+              '# ④ 复查：每个 host 应当只剩一条\n' +
+              'git config --global --get-all "credential.https://github.com.helper"',
+            ),
+
+            react.createElement(
+              'div',
+              { style: { marginTop: 12, fontSize: 13, fontWeight: 600 } },
+              '验证（必须看到 40 位 SHA）',
+            ),
+            code(
+              '# 不要接管道！`| head` 会把超时伪装成 exit=0\n' +
+              'cd ~/git/<某个仓库>\n' +
+              'timeout 40 git ls-remote origin HEAD; echo "REAL_EXIT=$?"',
+            ),
+
+            react.createElement(
+              'div',
+              { style: { marginTop: 12, fontSize: 13, fontWeight: 600 } },
+              '验证通过后才删明文 PAT',
+            ),
+            code(
+              'gh auth logout -h github.com 2>&1 || true\n' +
+              'rm -f ~/.git-credentials\n' +
+              '\n' +
+              '# 删完立刻再验一次（此时完全依赖 interop）\n' +
+              'cd ~/git/<某个仓库> && timeout 40 git ls-remote origin HEAD; echo "REAL_EXIT=$?"',
+            ),
+
+            react.createElement(
+              'div',
+              { style: { marginTop: 12, padding: 10, background: '#fff8e6', border: '1px solid #f0d58c', borderRadius: 6, fontSize: 12, lineHeight: 1.7 } },
+              react.createElement('strong', null, '顺序不能反：'),
+              '先接管 → 验证通过 → 再删明文。反了会直接丢认证。',
+              react.createElement('br'),
+              react.createElement('strong', null, '网络先排查：'),
+              'VPN 没开时任何 helper 都会超时（DNS 污染）。先跑 ',
+              react.createElement('code', null, 'curl -sS -o /dev/null https://github.com'),
+              '，它也慢就是网络问题，不是 GCM 坏了。',
+            ),
+          ),
+      );
+    }
+
 
     // ── 插件入口 ──────────────────────────────────────────────────────────
     function apply(ctx) {

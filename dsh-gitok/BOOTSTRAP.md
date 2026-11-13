@@ -255,7 +255,7 @@ cd C:\dsh\dshplug
 | 会丢 | 怎么补 |
 |---|---|
 | Windows 凭据管理器里的 token | **带不走**（DPAPI 绑机器）。新机跑一次 `gitok_login` |
-| `C:\dsh\getbraindata` 等数据目录 | 不在本插件范围，按各自插件文档处理 |
+| `C:\dsh\data-*` 等技能数据目录 | 不在本插件范围。数据不进仓库、不进插件包；到新机后由插件首次运行自动重建（或手动拷贝） |
 | profile 里的 `link:` 绝对路径 | 新机路径必须同为 `C:\dsh\dshplug\dsh-gitok`，否则改 `package.json` 重装 |
 | 本机特定的 GCM 路径 | 检查 `cordis.patch.yml` 的 `gcmPath`；留空则自动探测 |
 
@@ -437,44 +437,160 @@ $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\nod
 
 ### 10.3 WSL 发行版（`claude` 等）更新
 
-这一层最容易搞坏，因为**三个处都可能存认证**：`~/.config/gh/hosts.yml`（明文 PAT）、
-`~/.git-credentials`（明文）、`credential.https://host.helper`（指向哪个代答器）。
+这一层最容易搞坏，因为**三个地方都可能存认证**：
 
-**推荐形态：WSL 不自存密钥，全部借 Windows 那份。**
+| 位置 | 内容 | 性质 |
+|---|---|---|
+| `~/.config/gh/hosts.yml` | `oauth_token: github_pat_…` | **明文 PAT** |
+| `~/.git-credentials` | `https://user:token@github.com` | **明文** |
+| `credential.https://<host>.helper` | 指向哪个代答器 | 只是指针，不存密钥 |
+
+**推荐形态（决策 D）：WSL 不自存任何密钥，全部借 Windows 那份。**
+
+#### 10.3.1 一眼看懂原理
+
+WSL 里的 git 在需要凭据时，会执行 `credential.helper` 里配置的那条命令。
+只要那条命令指向 **Windows 上的 `git-credential-manager.exe`**（通过 `/mnt/c/...` 路径
+经 WSL interop 调用），凭据就会从 **Windows 凭据管理器**里读出并直接回给 git。
+
+```
+WSL git  ──fork──▶  /mnt/c/.../git-credential-manager.exe
+                          │
+                          ▼
+                   Windows 凭据管理器（DPAPI 加密）
+                          │
+                          ▼
+                    username/password 回给 WSL git（只在内存里）
+```
+
+所以 **WSL 磁盘上零密钥**，轮换时只需在 Windows 重登一次，所有发行版自动跟着变。
+
+#### 10.3.2 完整命令（2026-11-13 在 `claude` 与 `u26claude4` 实测通过）
+
+先确定 GCM 的 Windows 路径，再换算成 WSL 路径：
 
 ```powershell
-# ① 先看现状（只读）
-#   在对话里： gitok_doctor targets=["claude"]
-
-# ② 预演接管（不写任何文件）
-#    gitok_adopt targets=["claude"] dryRun=true
-
-# ③ 真接管（会先备份 ~/.gitconfig）
-#    gitok_adopt targets=["claude"]
-
-# ④ 验证这台的端到端通路
-#    gitok_verify url="https://github.com/<owner>/<repo>" targets=["claude"]
-
-# ⑤ 确认通过后，才清掉 WSL 里的明文 PAT
-wsl.exe -d claude -e bash -lc "gh auth logout --hostname github.com; rm -f ~/.git-credentials"
-
-# ⑥ 再验证一次（这时它完全依赖 interop 借 Windows 凭据）
-#    gitok_verify url="..." targets=["claude"]
+# Windows 侧路径（按实际安装位置调整）
+$gcmWin = "$env:LOCALAPPDATA\Programs\MinGit\ucrt64\bin\git-credential-manager.exe"
+Test-Path $gcmWin   # 必须返回 True
 ```
 
-**顺序绝不能反**：先接管 → 验证通过 → 再删明文。
-反了就会在该端点丢认证，而且如果这时网络又刚好坏，你会以为「插件把凭据搞没了」。
-
-**另外两个 WSL 专属坑：**
+换算规则：`C:\Users\franc\...` → `/mnt/c/Users/franc/...`
 
 ```bash
-# 坑 1：interop 下的 GCM 路径必须是 /mnt/c/... 形式
-#       （gitok_adopt 会自动转换，不要手写 C:\...）
+# === 在 WSL 里执行（把 claude 换成你的发行版名）===
+GCM=/mnt/c/Users/franc/AppData/Local/Programs/MinGit/ucrt64/bin/git-credential-manager.exe
 
-# 坑 2：WSL 里 127.0.0.1 不完全等同于 Windows 的 127.0.0.1
-#       代理需要显式指向 host IP，或确保 WSL 的 mirrored 网络已开
-wsl.exe -d claude -e bash -lc 'env | grep -i proxy'
+# ① 先确认这个端点上能执行到 GCM（interop 是否开着）
+test -x $GCM && echo OK || echo MISSING
+
+# ② 备份，改坏了能回退
+cp ~/.gitconfig ~/.gitconfig.bak.gitok-$(date +%Y%m%d%H%M%S)
+
+# ③ 接管。注意两个 host 都要做——gh 的 helper 同时对 gist.github.com 生效
+git config --global --get-all 'credential.https://github.com.helper'      # 先看原来是什么
+for h in github.com gist.github.com; do
+  git config --global --unset-all "credential.https://$h.helper" 2>/dev/null || true
+  git config --global --add "credential.https://$h.helper" "!$GCM"
+done
+
+# ④ 复查：每个 host 应当只剩一条，且指向 GCM
+git config --global --get-all 'credential.https://github.com.helper'
+git config --global --get-all 'credential.https://gist.github.com.helper'
 ```
+
+```bash
+# ⑤ 验证端到端（挑一个有 remote 的真实仓库）
+cd ~/git/<某个仓库>
+timeout 40 git ls-remote origin HEAD; echo "REAL_EXIT=$?"
+```
+
+**必须看到 40 位 SHA 且 `REAL_EXIT=0`。**
+
+```bash
+# ⑥ 只有 ⑤ 通过后才删明文 PAT
+gh auth logout -h github.com 2>&1 || true
+rm -f ~/.git-credentials
+
+# ⑦ 删完立刻再验一次（这时它 100% 依赖 interop 借 Windows 凭据）
+cd ~/git/<某个仓库> && timeout 40 git ls-remote origin HEAD; echo "REAL_EXIT=$?"
+```
+
+#### 10.3.3 顺序绝不能反
+
+**先接管 → 验证通过 → 再删明文。**
+反了就会在该端点丢认证；如果这时网络又刚好在抖，你会误判成「插件把凭据搞没了」。
+
+#### 10.3.4 四个实测踩到的坑
+
+**坑 1：`git config key ""` 不是清空。**
+它会在多值里**再追加一个空值**，旧 helper 仍然保留，结果是「gh 和 GCM 同时生效」的叠加态。
+必须用 `--unset-all` 再 `--add`，最后用 `--get-all` 确认只剩一条。
+
+**坑 2：`git remote -v | head -2; echo exit=$?` 会把失败伪装成成功。**
+`$?` 拿到的是 `head` 的退出码，永远是 0。网络超时时输出为空、退出码却是 0。
+写验证命令时**不要接管道**，或者直接看输出里有没有 40 位 SHA：
+
+```bash
+# 错：超时会显示 exit=0，看不出问题
+cd ~/git/repo && timeout 40 git ls-remote origin HEAD | head -3; echo "exit=$?"
+
+# 对：直接取 git 的退出码
+cd ~/git/repo && timeout 40 git ls-remote origin HEAD; echo "REAL_EXIT=$?"
+```
+
+**坑 3：VPN 没开时，任何 helper 都会「超时」，别急着怪 GCM。**
+实测未开 VPN 时 DNS 被污染（解析到 `57.155.223.240`），
+`git ls-remote` 卡在 `Trying <ip>:443...` 阶段 40~120 秒后超时。
+用下面这条**完全不经 helper** 的命令先分清是网络还是凭据：
+
+```bash
+# 3 次，全部应在 2 秒内返回；若 10 秒以上或超时，就是网络问题
+for i in 1 2 3; do
+  s=$(date +%s%N); curl -sS -o /dev/null https://github.com; rc=$?
+  e=$(date +%s%N); echo "第$i次: exit=$rc $(( (e-s)/1000000 ))ms"
+done
+```
+
+判据：`curl` 也慢 → 网络问题，先修网络；`curl` 快而 git 慢 → 才是 helper 问题。
+
+**坑 4：`gh auth logout` 不删文件，只清空内容。**
+实测执行后 `~/.config/gh/hosts.yml` 仍然存在，但内容变成 `{}`（3 字节），
+`gh auth status` 显示未登录。验证方式：
+
+```bash
+f=~/.config/gh/hosts.yml
+grep -c oauth_token $f 2>/dev/null || echo "0 条 token"
+sed -E 's/(oauth_token: .{8}).*/\1<REDACTED>/' $f   # 应当只有 {}
+```
+
+#### 10.3.5 不要碰的例外
+
+`claude` 上还有一条**飞书专用**的 helper，与 GitHub 无关，**不要动**：
+
+```
+credential.https://miaoda-git.feishu.cn/…git.helper = !lark-cli apps git-credential-helper --app-id 'app_…'
+credential.https://miaoda-git.feishu.cn/…git.usehttppath = true
+```
+
+所以接管时**必须按 host 精确指定** `github.com` / `gist.github.com`，
+不要图省事去 unset 整个 `credential.helper`（会连飞书那条一起清掉）。
+
+#### 10.3.6 回退
+
+```bash
+# 列出现有备份
+ls -1t ~/.gitconfig.bak.gitok-* | head
+
+# 恢复到最近一次
+cp $(ls -1t ~/.gitconfig.bak.gitok-* | head -1) ~/.gitconfig
+
+# 验证恢复后 helper 回到原样
+git config --global --get-all 'credential.https://github.com.helper'
+```
+
+恢复到原 helper 后，如果之前已经 `gh auth logout`，需要重新 `gh auth login`
+才能让 gh helper 重新可用。
 
 ### 10.4 给 Claude（或任何其他 agent）的详细操作说明
 

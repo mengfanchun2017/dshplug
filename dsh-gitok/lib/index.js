@@ -344,7 +344,10 @@ function probeWsl() {
     '_np=""; for k in ~/.ssh/id_*; do case "$k" in *.pub) continue;; esac; [ -f "$k" ] || continue; if command -v ssh-keygen >/dev/null 2>&1; then ssh-keygen -y -P "" -f "$k" >/dev/null 2>&1 && _np="$_np$(basename "$k"),"; else _np="could-not-check"; fi; done; echo "ssh nopass:      ${_np:-none}"',
     'echo "ssh-agent:       ${SSH_AUTH_SOCK:-(unset)}"',
     'echo "plaintext creds: $(ls ~/.git-credentials 2>/dev/null || echo none)"',
-    'echo "gh hosts file:   $(stat -c %a ~/.config/gh/hosts.yml 2>/dev/null || echo none)"',
+    // 【坑】只看文件是否存在会长期假报警：`gh auth logout` 只把内容清成 `{}`，文件本身还在。
+    // 实测：注销后 hosts.yml 仍然存在（3 字节），旧写法会一直报「有明文凭据」。
+    // 所以这里必须看里面到底还有没有 token。
+    'echo "gh hosts file:   $(f=~/.config/gh/hosts.yml; if [ -f "$f" ]; then if grep -q "oauth_token" "$f" 2>/dev/null; then echo "has-token($(stat -c %a "$f"))"; else echo "empty-file"; fi; else echo none; fi)"',
     'echo "gh status:       $(command -v gh >/dev/null 2>&1 && (gh auth status 2>&1 | head -4 | tr "\\n" "|") || echo "not installed")"',
   ]
   return lines.join('\n')
@@ -407,7 +410,8 @@ async function runDoctor(api, listArg) {
   lines.push('---')
   lines.push('**判读要点**')
   lines.push('- `helper` 为空且无 `credentialStore` → 该终端不会持久化任何凭据。')
-  lines.push('- `plaintext creds` 或 `~/.config/gh/hosts.yml` 有值 → 明文落盘，违背「不落明文」。')
+  lines.push('- `plaintext creds` 有值，或 `gh hosts file` 显示 `has-token(...)` → 明文落盘，违背「不落明文」。')
+  lines.push('  （显示 `empty-file` 是正常的：`gh auth logout` 会把内容清成 `{}` 但保留文件。）')
   lines.push('- `env HTTPS_PROXY` 为空但需要代理 → git 直连会超时。')
   lines.push('- `ssh nopass` 列出私钥名 → **空口令私钥，拷走即等于账号被盗**（P0）。')
   lines.push('- `helper.stack` 里某 host 的值 > 1 → helper 叠加，多个代答器同时生效，行为不可预期。')
@@ -464,6 +468,9 @@ function parseStatus(text, gcmPath, extra = {}) {
   const stackedAt = []
   let endpointTimeout = false
 
+  // 面板上的 WSL 说明区要用到：每个非 windows 端点当前指向哪个 helper。
+  // 目的不是重现完整诊断，而是让用户一眼看出「这台到底接管了没」。
+  const wslEndpoints = []
   for (const sec of sections) {
     if (/⏱ 超时|❌ 探测失败/.test(sec.body)) endpointTimeout = true
     const body = sec.body
@@ -471,7 +478,8 @@ function parseStatus(text, gcmPath, extra = {}) {
     const pc = pick(body, /^plaintext creds:[ \t]*(.*)$/m)
     if (pc && pc !== 'none') hasPlaintext = true
     const ghHosts = pick(body, /^gh hosts file:[ \t]*(.*)$/m)
-    if (ghHosts && ghHosts !== 'none') hasPlaintext = true
+    // empty-file = 文件在但里面没有 token（gh auth logout 后的状态），不算明文泄露。
+    if (ghHosts && ghHosts !== 'none' && ghHosts !== 'empty-file') hasPlaintext = true
 
     const np = pick(body, /^ssh nopass:[ \t]*(.*)$/m)
     if (np && np !== 'none' && np !== 'no-keys') {
@@ -505,6 +513,28 @@ function parseStatus(text, gcmPath, extra = {}) {
           stackedAt.push(key.replace(/^credential\./, '').replace(/\.helper$/, '') + '=' + n)
         }
       }
+    }
+
+    // 收集 WSL 端点状态（windows 本机不算，它就是「源头」）
+    if (sec.name && sec.name !== 'windows') {
+      const raw = pick(body, /^helper\(scoped\):[ \t]*(.*)$/m)
+      // 只看 github 相关的 helper，飞书那条不相关
+      const ghHelpers = (raw || '')
+        .split('~')
+        .map((x) => x.trim())
+        .filter((x) => /github\.com|gist\.github\.com/.test(x))
+        .map((x) => {
+          const sp = x.search(/[ \t]/)
+          return sp === -1 ? '' : x.slice(sp).trim()
+        })
+        .filter(Boolean)
+      // adopted = 只指向 GCM（路径里含 git-credential-manager），且没有其他代答器叠加
+      const adopted = ghHelpers.length === 1 && /git-credential-manager/i.test(ghHelpers[0])
+      wslEndpoints.push({
+        name: sec.name,
+        adopted,
+        helper: ghHelpers.length ? ghHelpers.join(' + ') : '',
+      })
     }
   }
 
@@ -585,7 +615,7 @@ function parseStatus(text, gcmPath, extra = {}) {
     gh: gh || '',
     credTargets,
     hasHelper,
-    endpoints: sections.map((s) => s.name),
+    wslEndpoints,
     checkedAt: new Date().toISOString(),
   }
 }

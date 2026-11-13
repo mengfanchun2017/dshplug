@@ -29,11 +29,58 @@ Git 认证一站式管理插件：**检查 / 建议 / 配置 / 验证 / 撤销**
 │ GCM 路径      .../git-credential-manager  │
 │                                          │
 │ [ 重新检查 ]  [ 查看原始报告 ]              │
+│ [ 重新登录 ] [ 一键初始化 ] [ 撤销凭据 ]   │
+│                                          │
+│ 持续监控                                  │
+│   ✅ 端到端通路    ok                      │
+│   ✅ 明文凭据      ok                      │
+│   ❌ SSH 私钥口令  error                   │
+│   ✅ helper 叠加   ok                      │
+│   ❔ 凭据条目      unknown                 │
+│   ✅ 依赖与网络    ok                      │
+│                                          │
+│ WSL 里怎么用（决策 D）         展开 ▼      │
 └──────────────────────────────────────────┘
 ```
 
 新手不用知道 `gitok_*` 工具名，看卡片 + 点按钮就够。
 
+### WSL 区展开后长什么样
+
+这一区收纳了「WSL 到底怎么借用 Windows 凭据」的完整说明，
+**不需要去翻 `BOOTSTRAP.md`**：
+
+```
+WSL 里怎么用（决策 D）                   收起 ▲
+
+WSL 的 git 需要凭据时，会执行 helper 里那行命令。只要它指向
+Windows 的 git-credential-manager.exe（经 /mnt/c/... 由 interop 调用），
+凭据就从 Windows 凭据管理器（DPAPI）取出后直接回给 git。
+结果：WSL 磁盘上零密钥；轮换时只在 Windows 重登一次。
+
+当前端点
+  ✅ claude        已接管，借用 Windows 凭据
+  ⚠️ u26claude4    未接管：!gh auth git-credential
+
+在 WSL 里执行（把 claude 换成发行版名）
+  GCM=/mnt/c/Users/.../git-credential-manager.exe
+  ...（可直接复制的一段脚本）
+
+验证（必须看到 40 位 SHA）
+  timeout 40 git ls-remote origin HEAD; echo "REAL_EXIT=$?"
+
+验证通过后才删明文 PAT
+  gh auth logout -h github.com; rm -f ~/.git-credentials
+```
+
+**两个关键点写在面板里，不靠记忆：**
+
+1. **顺序不能反** —— 先接管 → 验证通过 → 再删明文。反了会直接丢认证。
+2. **网络先排查** —— VPN 没开时任何 helper 都会超时（DNS 污染）。
+   先跑 `curl -sS -o /dev/null https://github.com`，它也慢就是网络问题。
+
+命令里的 GCM 路径取自实时探测结果，自动从 `C:\...` 转成 `/mnt/c/...` 并填入实际路径，
+所以换机器、换 GCM 安装位置都能直接用。
 ---
 
 ## 三份文档的分工
