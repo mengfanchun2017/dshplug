@@ -3,7 +3,7 @@
 > 命令行手册：**装机、验证、排错、迁移**。全部命令可直接复制。
 > 代码怎么设计、为什么这么定 → 见 [`ADR.md`](./ADR.md)；面板长什么样 → 见 [`README.md`](./README.md)。
 >
-> 快照时间：**2026-11-13** ｜ 版本 **0.3.0** ｜ 宿主机 `REDMIPRO` ｜ profile `desktop`
+> 快照时间：**2026-11-16** ｜ 版本 **0.3.5** ｜ 宿主机 `REDMIPRO` ｜ profile `desktop`
 
 ---
 
@@ -76,7 +76,7 @@ $node = "$env:USERPROFILE\AppData\Local\Programs\DeepSeek Harness\resources\runt
 & $node -e "const j=require('C:/dsh/dshplug/dsh-gitok/package.json');console.log(j.version, !!j.dsh.client, j.files)"
 ```
 
-期望：两次 `--check` 都不输出内容（exit 0）；第三行打印 `0.3.0 true [...]`。
+期望：两次 `--check` 都不输出内容（exit 0）；第三行打印 `0.3.5 true [...]`。
 
 ### 2.2 第二层：宿主半注册（mock ctx，不起 DSH）
 
@@ -166,7 +166,7 @@ c.slots={inject:(n,f)=>f(),
 
 期望看到**只有一行**：`settings.section gitok order=65`。
 
-> v0.3.5 起**不再注册** `sidebar.panellist` / `main`（只保留设置入口，见 ADR-010）。
+> v0.3.5 起**不再注册** `sidebar.panellist` / `main`（只保留设置入口，见 ADR-011）。
 > 如果你看到三行，说明跑的是旧版代码。
 
 > **注意**：浏览器半改完只需**刷新页面**；只有 `package.json` 的 `dsh.client` 变了才需要重装。
@@ -293,7 +293,7 @@ cd C:\dsh\dshplug
 & git log --oneline -3
 ```
 
-应看到与 `dsh-gitok v0.3.0` 相关的提交在最近几条里。
+应看到与 `dsh-gitok v0.3.5` 相关的提交在最近几条里。
 
 ### 5.2 切换 DSH 工作区
 
@@ -384,7 +384,7 @@ cd $env:USERPROFILE\.dsh\profiles\desktop
 ## 8. 验收清单（迁移后逐条打勾）
 
 ```text
-[ ] install.ps1 -Check 显示 dsh-gitok v0.3.0 status=active link-junction
+[ ] install.ps1 -Check 显示 dsh-gitok v0.3.5 status=active link-junction
 [ ] node --check lib/index.js 通过
 [ ] node --check lib/client.js 通过
 [ ] mock ctx 测试：tools=9, routes=5（status + login/revoke/rotate/bootstrap）

@@ -60,19 +60,26 @@ C:\dsh\dshplug\
 │  ├─ cordis.patch.yml
 │  ├─ index.js + client.js + gn.py / gn.ps1
 │  └─ SKILL.md        # 整理纪律
-├─ dsh-gitok\        ← 插件 4：Git 认证一站式管理（v0.2.0 active）
+├─ dsh-gitok\        ← 插件 4：Git 认证一站式管理（v0.3.5 active）
 │  ├─ package.json    # dsh.bundle.patch + dsh.client（有浏览器半）
 │  ├─ cordis.patch.yml
-│  ├─ lib\index.js    # 6 个 gitok_* 工具 + /plugins/gitok/status 路由
-│  ├─ lib\client.js   # 设置里的「Git 认证」面板
+│  ├─ lib\index.js    # 9 个 gitok_* 工具 + 5 条 /plugins/gitok/* 路由
+│  ├─ lib\client.js   # 设置里的「Mgitok」面板（只管设置，不进侧边栏）
 │  ├─ README.md       # 现在怎么用（面板/工具/认证方式对比）
 │  ├─ BOOTSTRAP.md    # 怎么做（安装/验证/排错/迁移）
-│  ├─ ADR.md          # 为什么（七条决策 + 反面代价）
-│  └─ docs\git-auth-audit-2026-11-12.md
-├─ dsh-larkcli\       ← 插件 5：飞书 CLI 的 Windows 原生驱动（开发中）
-│  ├─ package.json    # 尚无 dsh.bundle.patch → install.ps1 会自动跳过
-│  ├─ lark.ps1 + scripts\ + lark-cli-win\
-│  └─ README.md       # 插件化路线
+│  ├─ ADR.md          # 为什么（十一章决策 + 反面代价；ADR-011 取消侧栏）
+│  └─ docs\ {git-auth-audit-2026-11-12.md, WSL-GIT-AUTH.md, plugin-roadmap.md}
+├─ dsh-larkcli\       ← 插件 5：飞书/Lark 原生驱动（v0.1.0 active，Windows only）
+│  ├─ package.json    # dsh.bundle.patch + dsh.client（有浏览器半）
+│  ├─ cordis.patch.yml
+│  ├─ lib\index.js    # 9 个 lark_* 工具 + /plugins/larkcli/* 路由
+│  ├─ lib\client.js   # 设置里的「飞书」面板（账户卡片/描述标签/授权）
+│  ├─ lib\core.js     # 纯逻辑：账户表、本地匹配、config.json 生成、信封解析
+│  ├─ lib\service.js  # 起进程（FD 重定向捕获）、缓存、登录流程
+│  ├─ README.md       # 怎么用（9 工具/多账户/面板/降耗）
+│  ├─ BOOTSTRAP.md    # 怎么做（安装/验证/排错/换机/升级）
+│  ├─ ADR.md          # 为什么（九条决策 + 反面代价）
+│  └─ lark-cli-win\   # 官方二进制（不入 git，脚本补）
 └─ <单位电脑插件 N>\   ← clone 过来直接放根目录
 ```
 

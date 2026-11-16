@@ -6,7 +6,7 @@ Git 认证一站式管理插件：**检查 / 建议 / 配置 / 验证 / 撤销**
 （DPAPI 加密、绑定用户+本机、出机器解不开）。WSL 通过 interop 直接调用 Windows 的
 `git-credential-manager.exe`，**自己一个字节的密钥都不存**。
 
-> **版本 0.3.1 ｜ 状态 active ｜ 2026-11-16**
+> **版本 0.3.5 ｜ 状态 active ｜ 2026-11-16**
 > 未发布 npm，已用 `link:` 装进 `desktop` profile（宿主机 `REDMIPRO`）。
 > 这份 README 是**交接文档**：设计、机制、实测数据、踩过的坑全在里面，换机器/换工作区照着读就能接着开发。
 
@@ -259,13 +259,13 @@ git -c credential.helper=<Windows GCM 路径> \
 > **面向新手时不要提工具名。** 设置里有一个「Git 认证」面板，新手只需看卡片、点「重新检查」。
 > 工具名只在需要精确操作（如 `gitok_revoke` 删某一条）时由 AI 代调。
 
-### 4.1.1 设置面板（v0.3.0）
+### 4.1.1 设置面板
 
 在「设置」侧边栏注册一顶层分区 **Git 认证**（`settings.section`，`id: gitok`，`order: 65`）。
 
 > **只有这一个入口**（2026-11-16 起）。v0.3.0–v0.3.4 曾在应用侧边栏另起一个 `sidebar.panellist` 图标 +
 > `main` 面板，但两处显示的是**同一个组件**，功能完全重复。用户：“gitok 在设置就看就可以了 不用侧边栏”
-> → v0.3.5 删掉侧栏与图标（`GitokIcon` 一并移除）。理由与恢复方法见 `ADR-010`。
+> → v0.3.5 删掉侧栏与图标（`GitokIcon` 一并移除）。理由与恢复方法见 `ADR-011`。
 
 面板做什么：
 
@@ -1033,7 +1033,7 @@ cd C:\dsh\dshplug; & git pull --ff-only
 | Windows 凭据 | ✅ GCM `wincredman`，`git:https://github.com`，用户 `mengfanchun2017` |
 | WSL `claude` | ⏸ **未改动**，仍用 gh helper + 明文 PAT（按用户要求保持原样） |
 | WSL `u26claude4` | ⏸ **未改动**，仍有空口令 SSH 私钥（待后续处理） |
-| 本插件 | ✅ `status: active`，已装进 `desktop`（v0.3.0，link-junction） |
+| 本插件 | ✅ `status: active`，已装进 `desktop`（v0.3.5，link-junction） |
 | 设置面板 | ✅ 代码已完成（宿主路由 + 浏览器半）；需重启 DSH 后在界面上确认 |
 ---
 
