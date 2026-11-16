@@ -60,7 +60,7 @@ C:\dsh\dshplug\
 │  ├─ cordis.patch.yml
 │  ├─ index.js + client.js + gn.py / gn.ps1
 │  └─ SKILL.md        # 整理纪律
-├─ dsh-gitok\        ← 插件 4：Git 认证一站式管理（v0.3.8 active）
+├─ dsh-gitok\        ← 插件 4：Git 认证一站式管理（v0.3.9 active）
 │  ├─ package.json    # dsh.bundle.patch + dsh.client（有浏览器半）
 │  ├─ cordis.patch.yml
 │  ├─ lib\index.js    # 9 个 gitok_* 工具 + 5 条 /plugins/gitok/* 路由

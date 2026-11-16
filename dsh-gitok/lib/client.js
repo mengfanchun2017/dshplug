@@ -239,9 +239,10 @@ window.__ModuleLoader__.load({
         how: '按 host 只保留一条。面板 WSL 区第③步就是按这个原则写的，可以照抄。',
       },
       creds: {
-        what: '查 Windows 凭据管理器里有没有 git 的凭据条目、是什么类型。',
-        why: '这是「已经登录过」的直接证据。',
-        how: '没有就点上面的「登录 GitHub」；要删就点「撤销凭据」。',
+        what: '查 Windows 凭据管理器里有没有 git 的凭据条目、属于哪个账号。',
+        why: '这是「已经登录过」的直接证据。账号名用来对账 GitHub 上到底存了多少授权。',
+        how: '没有就点上面的「登录 GitHub」；要删本机的就点「撤销凭据」。' +
+          '注意：本机删了不等于 GitHub 那边撤销，两件事分开（见下方说明）。',
       },
       deps: {
         what: '查 GCM 是否装好、git 版本、以及代理端口能不能连通。',
@@ -444,9 +445,37 @@ window.__ModuleLoader__.load({
             { style: S.hint },
             '凭据本体在「Windows 凭据管理器」里（控制面板 → 凭据管理器 → Windows 凭据，找 git:https://...）。',
             react.createElement('br'),
-            '删除：可以在那里直接删，也可以在本会话里让 AI 调 ',
-            react.createElement('code', { style: S.inlineCode }, 'gitok_revoke'),
-            '（需确认）精确删某一条。',
+            react.createElement('br'),
+            react.createElement('strong', null, '两个地方要分清楚：'),
+            react.createElement('br'),
+            '① ', react.createElement('strong', null, '本机凭据'), '：存在你的电脑上（DPAPI 加密）。',
+            '删它 → 这台机器下次 pull/push 会重新要求登录，',
+            react.createElement('strong', null, '不影响 GitHub 那边已经发出的授权'),
+            '。删法：这里点「撤销凭据」，或凭据管理器里手动删。',
+            react.createElement('br'),
+            '② ', react.createElement('strong', null, 'GitHub 上的授权'), '：在 GitHub 网站管理，',
+            react.createElement('strong', null, '本插件看不到、也删不了'),
+            '（GitHub 不提供「列出我的 OAuth token」的 API，实测 /applications/grants 已 404）。',
+            react.createElement('br'),
+            '两个页面：',
+            react.createElement('br'),
+            '• ', react.createElement('code', { style: S.inlineCode }, 'github.com/settings/applications'),
+            ' → Authorized OAuth Apps：GCM 登录产生的是这类（gho_ 开头），',
+            '这里只能看到「Git Credential Manager」这一条 App，',
+            react.createElement('strong', null, '没有 token 名字、也没有后 4 位'),
+            '；撤销 = 整个 App 的授权全没，所有机器的 GCM 都会失效。',
+            react.createElement('br'),
+            '• ', react.createElement('code', { style: S.inlineCode }, 'github.com/settings/tokens'),
+            ' → 个人访问令牌（ghp_/github_pat_ 开头）：这里才有「名字 + 后 4 位」，',
+            '可以在不动其他机器的前提下单独删一条。这种 token 一般是手动建给脚本用的，',
+            react.createElement('strong', null, '不是本插件产生的'),
+            '。',
+            react.createElement('br'),
+            react.createElement('br'),
+            '所以「名字 + 后 4 位」这个对账方式只对 PAT 成立；',
+            'GCM 登录拿到的 OAuth token 在 GitHub 侧本来就不按名字区分，',
+            '本插件只能告诉你', react.createElement('strong', null, '本机存的是哪个账号'),
+            '（上面「已存凭据」那行），这就足够判断本地有没有多余的。',
             react.createElement('br'),
             '换新账号：点上面的「重新检查」旁边让 AI 调 ',
             react.createElement('code', { style: S.inlineCode }, 'gitok_login'),
@@ -471,7 +500,16 @@ window.__ModuleLoader__.load({
       push('gh CLI', st.gh);
       push(
         '已存凭据',
-        st.credTargets && st.credTargets.length ? `${st.credTargets.length} 条` : '尚无',
+        // 除了条数，把账号名列出来（st.credAccounts 由 Host 从 cmdkey 的 User 字段抽）。
+        // 用户要拿它去 GitHub 页面比对到底哪个授权是自己的。
+        (() => {
+          const n = st.credTargets ? st.credTargets.length : 0;
+          if (!n) return '尚无';
+          const users = st.credAccounts
+            ? [...new Set(Object.values(st.credAccounts).filter(Boolean))]
+            : [];
+          return `${n} 条` + (users.length ? `：${users.join(', ')}` : '');
+        })(),
       );
       push('GCM 路径', st.gcmPath);
       return rows.length ? react.createElement('div', null, rows) : null;

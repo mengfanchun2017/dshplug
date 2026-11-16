@@ -354,7 +354,7 @@ v0.3.2 补上时，最初把 `main` 塞进了 `sidebar.panellist` 的回调里�
 
 | 项 | 值 |
 |---|---|
-| 版本 | **0.3.8** |
+| 版本 | **0.3.9** |
 | 历史版本 | 0.3.5（2026-11-16 之前的快照） |
 | 状态 | `active` |
 | 安装形态 | `link-junction` → `C:\dsh\dshplug\dsh-gitok` |
@@ -620,3 +620,47 @@ smoke-route.mjs     → exit 1        （FAIL: 期望 200，实际 500）
 | 靠 lint（eslint `no-undef`） | 需要额外配置与依赖；`no-undef` 对 ESM 顶层常量误报多，且本仓库无 lint 流程 |
 | 加个「重启后人工点一下页面」 | 靠人不靠机器，且 v0.3.4→v0.3.7 已证明人工验证会跳过 |
 | 改成 CommonJS 避免 TDZ | 与 DSH 的 ESM 加载方式不符，成本远大于收益 |
+## ADR-014 · 凭据「对账」只做到本机账号级，GitHub 侧的授权不由本插件管理
+
+- **日期**：2026-11-16
+- **状态**：已采纳
+- **背景**：用户问「你刚给我新建了一个授权，旧的要我去 GitHub 页面删吗？
+  插件能不能告诉我用的是哪个（名字 + key 后 4 位），这样我好去删残留」。
+  这个诉求里有三个隐含前提，实测后发现**只有第三个成立**。
+- **实测事实**（2026-11-16，本机 GCM 登录取到的 token）：
+  1. token 前缀 `gho_`、长度 40、scopes `gist, repo, workflow`
+     → 这是 **GCM 自己那个 OAuth App 签发的 OAuth access token**，不是 PAT。
+  2. `GET /applications/grants` → **404**（该 API 早已废弃）。
+     `GET /user/installations` → **403**（需要 GitHub App 权限，与 OAuth token 无关）。
+     `GET /user` 可以调到，响应头有 `X-OAuth-Scopes`，但**没有任何 token 标识**。
+     → **GitHub 不提供「列出我签发的 OAuth token」的 API**。
+  3. 网页端 `github.com/settings/applications` 只有「Git Credential Manager」
+     这一个 App 条目：显示 App 名 + scopes + 最近使用时间，**无 token 名、无后 4 位**。
+     撤销是**按 App 整体撤销**，会让**所有机器**的 GCM 同时失效。
+  4. 网页端 `github.com/settings/tokens` 只有 PAT（`ghp_` / `github_pat_`），
+     那里才有「名字 + 后 4 位」，可单条撤销。但**本插件不产生这类 token**。
+- **决策**：
+  - 插件只回答「**本机存的是哪个账号**」，字段 `credAccounts`（target → 账号名），
+    来源是 `cmdkey /list` 的 `User:` 行。**不显示任何 token 片段**（ADR-002 仍然成立）。
+  - 面板明确写出「本机凭据」与「GitHub 授权」是两个东西，并给出两个 GitHub 页面
+    各自能做什么、撤销的代价是什么。
+  - **不做** token 指纹 / 后 4 位展示：OAuth token 在 GitHub 侧本来就不按名字区分，
+    显示一个对不上任何网页条目的「后 4 位」只会误导用户去找不存在的行。
+- **理由**：把「我们能看到的」和「我们看不到的」在界面上划清楚，
+  比给一个做不到的承诺更有用。用户真正要的是「我怎么知道本地有没有多余凭据」，
+  这个用账号名 + 条数就能回答。
+- **反面代价**：
+  - 用户若真想清理 GitHub 侧的历史授权，仍必须自己去网页按 App 撤销，
+    且要接受「所有机器一起失效」。插件帮不上，只能提示入口。
+  - 同账号多台机器共用一条 OAuth 授权，**无法区分是哪台机器**。
+  - 只显示账号名时，若同一账号在本机存了多条（不同 host），
+    面板会显示 `N 条：账号名`，看不出具体是哪几个 host —— 已在 `credTargets` 里保留
+    target 明细，需要时可展开（当前面板未展开）。
+- **已否决的替代方案**：
+
+  | 方案 | 否决理由 |
+  |---|---|
+  | 显示 token 后 4 位 | `gho_` OAuth token 在 GitHub 网页端没有对应条目，对不上；且违反 ADR-002 的最小披露 |
+  | 建一个「每机命名细粒度 PAT」来做可区分授权 | 即 ADR-008 已否决的方案：要用户手动建 PAT、管过期、逐机配置，成本远高于收益 |
+  | 用 GitHub API 枚举并展示授权列表 | API 不存在（404/403 实测），做不到 |
+  | 插件代删 GitHub 侧授权 | 需要用户 token 且有 `delete_repo` 之类高危 scope，违反 ADR-002 |

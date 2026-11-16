@@ -359,7 +359,25 @@ $env:WSL_UTF8='1'
 "wsl distros:     " + ((@(wsl.exe -l -q 2>$null) | Where-Object { $_.Trim() -ne '' }) -join ',')
 "gh:              " + $(if (Get-Command gh -ErrorAction SilentlyContinue) { 'installed' } else { 'not installed' })
 "---- windows credential manager: git entries ----"
-(cmdkey /list) | Select-String 'git:' | ForEach-Object { $_.Line.Trim() }`
+# 除了 Target 行，还要带上紧随其后的 User 行（账号名）。
+# 不能只 Select-String 'git:' —— 那样 User 行会被滤掉，
+# 面板就只显示「1 条」而不知道是谁的账号。
+# 用状态机跟踪「当前 Target 块是否跟 git 有关」，
+# 只在这个块里输出 User 行 —— 否则会把 MicrosoftAccount 等无关账号也吐出来，
+# 既是噪声也违反最小披露（ADR-002）。
+$isGit = $false
+(cmdkey /list) | ForEach-Object {
+  # 注意：本段在一个 JS 模板字符串里，反斜杠 s 必须写成两个反斜杠 + s ——
+  # 只写一个反斜杠 s，JS 会把它吐成 s，PowerShell 收到的就是 Target:s*(S+)，永远匹配不到。
+  # （同前面反斜杠点号那个坑，v0.3.9 实际踩到：参数名拿到了，但 credTargets 全空）
+  if ($_ -match 'Target:\\s*(\\S+)') {
+    $isGit = $_ -match 'git:'
+    if ($isGit) { "T: " + $_.Trim() }
+  }
+  elseif ($isGit -and $_ -match '^\\s*User:\\s*(.+)$') {
+    "u: " + $Matches[1].Trim()
+  }
+}`
 }
 
 /**
@@ -482,7 +500,36 @@ function parseStatus(text, gcmPath, extra = {}) {
   const sshKeys = pick(text, /^ssh keys:[ \t]*(.*)$/m)
   const sshAgent = pick(text, /^ssh-agent:[ \t]*(.*)$/m)
   const gh = pick(text, /^gh:[ \t]*(.*)$/m)
-  const credTargets = [...text.matchAll(/Target:\s*(\S+)/g)].map((m) => m[1])
+  // 探针输出两种行：`T: Target: ...` 与 `u: <账号名>`（见 probeWindows 末尾）。
+  // 同时兼容旧格式（纯 `Target: ...`），因为存量已部署版本可能还没重启。
+  const credTargets = [...text.matchAll(/^\s*(?:T:\s*)?Target:\s*(\S+)/gm)].map((m) => m[1])
+
+  // 从 cmdkey 输出里把「哪个 target 对应哪个账号」抓出来。
+  // 【为什么要单独抽】cmdkey /list 的格式是：
+  //     Target: LegacyGeneric:target=git:https://github.com
+  //     Type: Generic
+  //     User: mengfanchun2017
+  // 而旧探针的管道是 `Select-String 'git:'` —— 只留下 Target 行，
+  // User 行因为不含 'git:' 被过滤掉。所以面板一直只能显示
+  // 「1 条」，看不出**到底是谁的账号**，用户就没法配合 GitHub 页面排查残留。
+  // 不修改 credTargets 的形状（它被 hosts 统计、面板计数、旧版本兼容共用），
+  // 另开一个 credAccounts: { [target]: user }。
+  const credAccounts = {}
+  {
+    const lines = text.split(/\r?\n/)
+    let cur = null
+    for (const ln of lines) {
+      // 新格式：`T: Target: ...` / `u: <user>`
+      const tNew = /^\s*T:\s*Target:\s*(\S+)/.exec(ln)
+      const tOld = /^\s*Target:\s*(\S+)/.exec(ln)
+      const t = tNew || tOld
+      if (t) { cur = t[1]; continue }
+      const uNew = /^\s*u:\s*(.+?)\s*$/.exec(ln)
+      const uOld = /^\s*User:\s*(.+?)\s*$/.exec(ln)
+      const u = uNew || uOld
+      if (u && cur) { credAccounts[cur] = u[1]; cur = null }
+    }
+  }
 
   // 按端点切段，逐端点判读
   const sections = []
@@ -638,7 +685,14 @@ function parseStatus(text, gcmPath, extra = {}) {
       credTargets.length === 0 ? 'warn' : 'ok',
       credTargets.length === 0
         ? '尚无已存凭据（需要登录一次）'
-        : `${credTargets.length} 条${hosts.size > 1 ? `，跨 ${hosts.size} 个 host` : ''}`)
+        : `${credTargets.length} 条${
+            // 把账号名列出来：用户要拿它去 GitHub 页面比对残留。
+            // 只列账号名（cmdkey 的 User 字段），绝不碰 token 本体。
+            (() => {
+              const users = [...new Set(credTargets.map((t) => credAccounts[t]).filter(Boolean))]
+              return users.length ? `：${users.join(', ')}` : '（账号名未知）'
+            })()
+          }${hosts.size > 1 ? `，跨 ${hosts.size} 个 host` : ''}`)
   }
 
   // ---- f：依赖漂移（GCM / 代理 / 端点可达） ----
@@ -689,6 +743,9 @@ function parseStatus(text, gcmPath, extra = {}) {
     sshAgent: sshAgent || '',
     gh: gh || '',
     credTargets,
+    // target → 账号名。面板用它显示「这份凭据属于谁」。
+    // 不含任何 token 片段，它只是 cmdkey 的 User 字段。
+    credAccounts,
     hasHelper,
     wslEndpoints,
     checkedAt: new Date().toISOString(),
@@ -1088,11 +1145,14 @@ async function toolBootstrap(api, args) {
 
   // 已存凭据
   const cmdkey = await exec('pwsh', ['-NoProfile', '-NonInteractive', '-Command',
-    '[Console]::OutputEncoding=[Text.Encoding]::UTF8; (cmdkey /list) | Select-String "git:" | ForEach-Object { $_.Line.Trim() }'],
+    // 同时取 Target 行与 User 行（账号名），但计数只能算 Target 行，
+    // 否则每个条目会因多一行 User 而算成两条。
+    '[Console]::OutputEncoding=[Text.Encoding]::UTF8; (cmdkey /list) | ForEach-Object { if ($_ -match \'git:\') { "T: " + $_.Trim() } elseif ($_ -match \'^\s*User:\s*(.+)$\') { "u: " + $Matches[1].Trim() } }'],
     { timeoutMs: api.probeTimeout() })
-  const credCount = (cmdkey.stdout || '').split(/\r?\n/).filter(Boolean).length
-  envLines.push(`- 已存凭据：${credCount ? credCount + ' 条' : '尚无（S2 会登录）'}`)
-
+  const ckLines = (cmdkey.stdout || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+  const credCount = ckLines.filter((s) => s.startsWith('T:') || /^Target:/.test(s)).length
+  const credUsers = [...new Set(ckLines.filter((s) => s.startsWith('u:')).map((s) => s.slice(2).trim()).filter(Boolean))]
+  envLines.push(`- 已存凭据：${credCount ? credCount + ' 条' : '尚无（S2 会登录）'}${credUsers.length ? `（账号 ${credUsers.join(', ')}）` : ''}`)
   out.push(envLines.join('\n'))
   out.push('')
 
