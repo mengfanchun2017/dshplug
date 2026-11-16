@@ -803,6 +803,86 @@ for (const c of checks) {
 而 `checks` 里 `heartbeat` 依旧如实写着「未配置……不假装健康」。
 **诚实与好用并不冲突** —— 把「没查」从「健康度」里摘出去，而不是把它改成 ok。
 
+### 8.15 【白底白字】配色变量用错了命名空间 —— `--dsh-*` 里根本没有颜色
+
+v0.3.2 用户反馈：「一键初始化 看不出来（白底白字）」。
+
+根因不是对比度、不是主题 bug，而是**变量名写错了一整个命名空间**。
+
+做法：把 `app.asar`（199 MB）整体扫一遍，统计两类变量的实际定义数量。
+
+| 前缀 | 数量 | 实际内容 |
+|---|---|---|
+| `--dsh-*` | 175 个 | **全是布局尺寸**：`--dsh-sidebar-width`、`--dsh-composer-height`、`--dsh-frame-top-clearance`…**没有一个是配色** |
+| `--dsw-*` | 475 个 | 语义色全在这：`--dsw-alias-label-primary`、`--dsw-alias-border-l2`、`--dsw-alias-state-error-primary`… |
+
+我写的是：
+
+```js
+// ❌ 变量不存在 → 静默回退到 #fff → 深色主题下白底白字
+btn: { background: 'var(--dsh-bg-elevated, #fff)', color: 'inherit' }
+```
+
+`--dsh-bg-elevated` 在宿主里**从未定义**，于是 CSS 取了 fallback `#fff`；
+`color: 'inherit'` 在深色主题下继承白色文字 → 白底白字，按钮整个「消失」。
+
+改成：
+
+```js
+// ✅ 官方语义 token + 透明底描边（对齐 dsh-synchub）
+btn: { background: 'transparent', color: 'var(--dsw-alias-label-primary)', border: '1px solid var(--dsw-alias-border-l2)' }
+```
+
+**三条教训：**
+
+1. **`var(--x, fallback)` 的 fallback 会掩盖拼写错误。** 变量不存在时它一声不响地生效，
+   在浅色主题下还「看起来正常」，只有深色主题才暴露。排查时不要看渲染结果，
+   要**去 asar 里数变量到底存不存在**。
+2. **`--dsh-*` ≠ 旧版 `--dsw-*`，它们是两个不同用途的集合**（前者布局、后者配色），
+   不是新旧两代。看到别的插件用 `--dsh-*` 就照抄，会抄到一堆布局变量。
+3. **抄参考插件要抄「token 名」，不要抄「有 fallback 的地方」。**
+   `dsh-synchub` 全程只用 `--dsw-alias-*` 且几乎不给 fallback，是干净的样例；
+   `dsh-gitok` 之前那些 `var(--dsh-xxx, 硬编码)` 全是隐患。
+
+顺带修掉的同类问题：面板里 13 处硬编码色（`#1a7f37` / `#9a6700` / `#cf222e` / `#fff8e6` …）
+统一收敛到 `C` 调色板，一处定义、全面板跟随亮暗主题。
+
+### 8.16 子组件内部加了 `useState`，就不能再直接调用
+
+修 8.15 时给按钮加了悬停反馈，抽出一个带 `useState` 的 `Btn` 组件。
+但按钮组原来是**当普通函数调用**的：
+
+```js
+ActionButtons({ st, busy, act })   // ❌ 直接调用
+```
+
+这样 `Btn` 里的 `useState` 会挂到**父组件**的 hooks 链表上，
+数量随渲染次数变化 → `Rendered more hooks than during the previous render`。
+
+正确写法永远是：
+
+```js
+react.createElement(ActionButtons, { st, busy, act })   // ✅
+```
+
+**连带坑**：一旦改成 `createElement`，props 就是**一个对象**，
+于是组件签名必须同步从 `function StatusRows(st)` 改成：
+
+```js
+function StatusRows(props) {
+  const st = props && props.st;
+  ...
+}
+```
+
+只改调用处不改签名，`st` 会变成 `{st: {...}}`，取 `st.store` 全是 `undefined`，
+界面**静默变空**，不报错。
+
+**防御性测试**：写一个递归 `walk(tree)`，凡是 `typeof node.type === 'function'`
+就真的调一遍并递归它返回的树，能一次性抓出「`C` 未定义」「签名不匹配」「hooks 越界」。
+只做浅层渲染（`type` 是字符串的那些）永远发现不了这类问题。
+
+
 ---
 
 ## 9. 换工作区继续开发（交接清单）
@@ -877,6 +957,7 @@ cd C:\dsh\dshplug; & git pull --ff-only
 - [`BOOTSTRAP.md`](./BOOTSTRAP.md) —— 怎么做（安装/验证/排错/迁移）
 - [`ADR.md`](./ADR.md) —— 为什么（七条决策 + 反面代价 + 已否决方案）
 - [`docs/git-auth-audit-2026-11-12.md`](docs/git-auth-audit-2026-11-12.md) —— 原始盘点报告
+- [`docs/WSL-GIT-AUTH.md`](docs/WSL-GIT-AUTH.md) —— **WSL 里怎么让 git 用上 Windows 凭据**：手工步骤 + 可直接粘给 AI 自动配置的指令
 
 仓库级：
 

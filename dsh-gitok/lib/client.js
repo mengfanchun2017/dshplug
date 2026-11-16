@@ -60,58 +60,98 @@ window.__ModuleLoader__.load({
       return d.text || '';
     };
 
+    // ── 主题变量 ──────────────────────────────────────────────────────────
+    // 【铁律】配色只能用 --dsw-alias-*。
+    // 宿主里 175 个 --dsh-* 全是布局尺寸（--dsh-sidebar-width 这类），**一个配色都没有**；
+    // 语义色全在 --dsw-alias-*（475 个）。写成 var(--dsh-bg-elevated, #fff) 时变量查不到，
+    // 静默回退成硬编码 #fff —— 深色主题下就是「白底白字」，按钮文字直接看不见。
+    // 这正是 v0.3.2「一键初始化」按钮看不清的原因（v0.3.3 修复）。
+    const C = {
+      fg: 'var(--dsw-alias-label-primary, #1f2328)',
+      fg2: 'var(--dsw-alias-label-secondary, #59636e)',
+      fg3: 'var(--dsw-alias-label-tertiary, #818b98)',
+      // 卡片底：settings-card-fill 是设置页专用的那层，比 bg-layer-1 更贴合宿主
+      card: 'var(--dsw-alias-settings-card-fill, var(--dsw-alias-bg-layer-1, transparent))',
+      border: 'var(--dsw-alias-settings-card-stroke, var(--dsw-alias-border-l2, rgba(128,128,128,.28)))',
+      borderSoft: 'var(--dsw-alias-border-l1, rgba(128,128,128,.18))',
+      hover: 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.12))',
+      brand: 'var(--dsw-alias-brand-primary-new-colorprimary-new-color, var(--dsw-alias-brand-primary, #2f6feb))',
+      ok: 'var(--dsw-alias-state-success-primary, #15803d)',
+      warn: 'var(--dsw-alias-state-warn-primary, #b45309)',
+      err: 'var(--dsw-alias-state-error-primary, #cf222e)',
+      code: 'var(--dsw-alias-markdown-code-block, rgba(127,127,127,.10))',
+      radius: 'var(--dsw-radius-md, 8px)',
+    };
+
     // ── 极简样式（只用主题变量，跟随亮/暗） ────────────────────────────────
     // 不引 UI 库，所以这里手写几个通用片段复用。
     const S = {
-      wrap: { padding: '16px 18px', maxWidth: 760, fontFamily: 'inherit', fontSize: 13 },
-      h: { fontSize: 15, fontWeight: 600, margin: '0 0 4px' },
-      sub: { color: 'var(--dsh-text-secondary, #888)', margin: '0 0 16px', fontSize: 12 },
+      wrap: { padding: '16px 18px', maxWidth: 760, fontFamily: 'inherit', fontSize: 13, color: C.fg },
+      h: { fontSize: 15, fontWeight: 600, margin: '0 0 4px', color: C.fg },
+      sub: { color: C.fg3, margin: '0 0 16px', fontSize: 12 },
       card: {
-        border: '1px solid var(--dsh-border, #e3e3e3)',
-        borderRadius: 8,
+        border: `1px solid ${C.border}`,
+        borderRadius: C.radius,
         padding: '14px 16px',
         marginBottom: 12,
-        background: 'var(--dsh-bg-elevated, transparent)',
+        background: C.card,
       },
       row: {
         display: 'flex',
         justifyContent: 'space-between',
         gap: 16,
         padding: '5px 0',
-        borderBottom: '1px dashed var(--dsh-border, #f0f0f0)',
+        borderBottom: `1px solid ${C.borderSoft}`,
         alignItems: 'baseline',
       },
-      k: { color: 'var(--dsh-text-secondary, #777)', flex: '0 0 auto', minWidth: 96 },
+      k: { color: C.fg3, flex: '0 0 auto', minWidth: 96 },
       v: {
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontFamily: 'var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)',
         fontSize: 12,
         textAlign: 'right',
         wordBreak: 'break-all',
         flex: 1,
+        color: C.fg2,
       },
+      // 按钮三态统一走「透明底 + 边框」，与 dsh-synchub 一致。
+      // 不要用实心白底：--dsh-bg-elevated 不存在会退成 #fff，深色主题下白底白字。
       btn: {
-        padding: '6px 14px',
-        borderRadius: 6,
-        border: '1px solid var(--dsh-border, #ccc)',
-        background: 'var(--dsh-bg-elevated, #fff)',
-        color: 'inherit',
-        cursor: 'pointer',
+        font: 'inherit',
         fontSize: 13,
-        fontFamily: 'inherit',
+        padding: '6px 14px',
+        borderRadius: 'var(--dsw-radius-md, 8px)',
+        border: `1px solid ${C.border}`,
+        background: 'transparent',
+        color: C.fg,
+        cursor: 'pointer',
+        transition: 'background .12s ease, border-color .12s ease',
       },
+      // 主操作：由调用处控制实心/描边，这里只给主色描边版
       btnPrimary: {
-        padding: '6px 14px',
-        borderRadius: 6,
-        border: '1px solid transparent',
-        background: 'var(--dsh-accent, #2f6feb)',
-        color: '#fff',
-        cursor: 'pointer',
+        font: 'inherit',
         fontSize: 13,
-        fontFamily: 'inherit',
+        padding: '6px 14px',
+        borderRadius: 'var(--dsw-radius-md, 8px)',
+        border: '1px solid transparent',
+        background: C.brand,
+        color: 'var(--dsw-alias-label-on-color, #fff)',
+        cursor: 'pointer',
+        transition: 'filter .12s ease',
+      },
+      btnDanger: {
+        font: 'inherit',
+        fontSize: 13,
+        padding: '6px 14px',
+        borderRadius: 'var(--dsw-radius-md, 8px)',
+        border: `1px solid ${C.err}`,
+        background: 'transparent',
+        color: C.err,
+        cursor: 'pointer',
+        transition: 'background .12s ease',
       },
       badge: (level) => {
         const c =
-          level === 'ok' ? '#1a7f37' : level === 'warn' ? '#9a6700' : level === 'error' ? '#cf222e' : '#666';
+          level === 'ok' ? C.ok : level === 'warn' ? C.warn : level === 'error' ? C.err : C.fg3;
         return {
           display: 'inline-flex',
           alignItems: 'center',
@@ -126,25 +166,37 @@ window.__ModuleLoader__.load({
         };
       },
       pre: {
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontFamily: 'var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)',
         fontSize: 11.5,
         lineHeight: 1.55,
-        background: 'var(--dsh-bg-code, rgba(127,127,127,.08))',
-        border: '1px solid var(--dsh-border, #e3e3e3)',
-        borderRadius: 6,
+        background: C.code,
+        border: `1px solid ${C.borderSoft}`,
+        borderRadius: C.radius,
         padding: 12,
         overflow: 'auto',
         maxHeight: 320,
         whiteSpace: 'pre-wrap',
         wordBreak: 'break-all',
         margin: 0,
+        color: C.fg2,
       },
       hint: {
         fontSize: 12,
         lineHeight: 1.6,
-        color: 'var(--dsh-text-secondary, #888)',
+        color: C.fg3,
         margin: '8px 0 0',
       },
+      // 内联代码
+      inlineCode: {
+        fontFamily: 'var(--dsw-font-mono, ui-monospace, monospace)',
+        fontSize: '0.94em',
+        background: C.code,
+        border: `1px solid ${C.borderSoft}`,
+        borderRadius: 4,
+        padding: '1px 5px',
+        wordBreak: 'break-all',
+      },
+      link: { color: C.brand, textDecoration: 'none', cursor: 'pointer' },
     };
 
     const Row = ({ k, v, mono = true }) =>
@@ -272,9 +324,9 @@ window.__ModuleLoader__.load({
             react.createElement(
               'div',
               null,
-              StatusRows(st),
-              CheckTable(st),
-              ActionButtons({ st, busy, act }),
+              react.createElement(StatusRows, { st }),
+              react.createElement(CheckTable, { st }),
+              react.createElement(ActionButtons, { st, busy, act }),
               // 必须用 createElement 而不是直接调用 WslGuide(st)：
               // 它内部有 useState，当普通函数调会报「Rendered more hooks than during the previous render」。
               react.createElement(WslGuide, { st }),
@@ -283,7 +335,7 @@ window.__ModuleLoader__.load({
           err &&
             react.createElement(
               'p',
-              { style: { ...S.hint, color: '#cf222e' } },
+              { style: { ...S.hint, color: C.err } },
               err,
             ),
 
@@ -315,7 +367,7 @@ window.__ModuleLoader__.load({
           action &&
             react.createElement(
               'p',
-              { style: { ...S.hint, color: 'var(--dsh-accent, #2f6feb)', fontWeight: 500 } },
+              { style: { ...S.hint, color: C.brand, fontWeight: 500 } },
               action,
             ),
           actionMsg &&
@@ -324,7 +376,7 @@ window.__ModuleLoader__.load({
               { style: { marginTop: 10 } },
               react.createElement(
                 'p',
-                { style: { ...S.hint, margin: '0 0 6px', color: actionMsg.ok ? '#1a7f37' : '#cf222e', fontWeight: 500 } },
+                { style: { ...S.hint, margin: '0 0 6px', color: actionMsg.ok ? C.ok : C.err, fontWeight: 500 } },
                 actionMsg.ok ? '✅ 完成' : '❌ 失败',
               ),
               react.createElement('pre', { style: S.pre }, actionMsg.text || '(无输出)'),
@@ -351,11 +403,11 @@ window.__ModuleLoader__.load({
             '凭据本体在「Windows 凭据管理器」里（控制面板 → 凭据管理器 → Windows 凭据，找 git:https://...）。',
             react.createElement('br'),
             '删除：可以在那里直接删，也可以在本会话里让 AI 调 ',
-            react.createElement('code', { style: { fontSize: 11.5 } }, 'gitok_revoke'),
+            react.createElement('code', { style: S.inlineCode }, 'gitok_revoke'),
             '（需确认）精确删某一条。',
             react.createElement('br'),
             '换新账号：点上面的「重新检查」旁边让 AI 调 ',
-            react.createElement('code', { style: { fontSize: 11.5 } }, 'gitok_login'),
+            react.createElement('code', { style: S.inlineCode }, 'gitok_login'),
             '，会弹浏览器走 GCM 登录，密钥由 GCM 直接写进凭据管理器。',
           ),
         ),
@@ -363,7 +415,8 @@ window.__ModuleLoader__.load({
     }
 
     // 状态行：抽出来避免主组件过长
-    function StatusRows(st) {
+    function StatusRows(props) {
+      const st = props && props.st;
       const rows = [];
       const push = (k, v) => {
         if (v) rows.push(react.createElement(Row, { key: k, k, v }));
@@ -383,16 +436,17 @@ window.__ModuleLoader__.load({
     }
 
     // 六项持续监控的表格：每项四态（ok / warn / error / unknown）
-    function CheckTable(st) {
+    function CheckTable(props) {
+      const st = props && props.st;
       const checks = st && st.checks;
       if (!checks || !checks.length) return null;
       const mark = (lv) => (lv === 'ok' ? '✅' : lv === 'warn' ? '⚠️' : lv === 'error' ? '❌' : '❔');
       const color = (lv) =>
-        lv === 'ok' ? '#1a7f37' : lv === 'warn' ? '#9a6700' : lv === 'error' ? '#cf222e' : '#666';
+        lv === 'ok' ? C.ok : lv === 'warn' ? C.warn : lv === 'error' ? C.err : C.fg3;
 
       return react.createElement(
         'div',
-        { style: { marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--dsh-border, #e3e3e3)' } },
+        { style: { marginTop: 14, paddingTop: 12, borderTop: `1px solid ${C.border}` } },
         react.createElement('div', { style: { fontWeight: 600, marginBottom: 8 } }, '持续监控'),
         checks.map((c) =>
           react.createElement(
@@ -405,7 +459,7 @@ window.__ModuleLoader__.load({
             ),
             react.createElement(
               'span',
-              { style: { ...S.v, fontFamily: 'inherit', textAlign: 'left', color: 'var(--dsh-text-secondary, #777)' } },
+              { style: { ...S.v, fontFamily: 'inherit', textAlign: 'left', color: C.fg3 } },
               c.detail,
             ),
           ),
@@ -414,31 +468,78 @@ window.__ModuleLoader__.load({
     }
 
     // 受控写操作的按钮组。
-    // “重新登录”只弹浏览器；“撤销”是破坏性的，必须 confirm。
-    function ActionButtons({ st, busy, act }) {
-      const hasCred = st && st.credTargets && st.credTargets.length > 0;
-      const btn = (label, onClick, primary) =>
-        react.createElement(
-          'button',
-          { style: primary ? S.btnPrimary : S.btn, disabled: busy, onClick },
-          label,
-        );
+    //
+    // 「一键初始化」原来和「重新登录」并排，看不出区别也看不出后果 —— 用户反馈
+    // 「一键初始化 看不出来（白底白字）」。除了配色（v0.3.3 修），这里再补三件事：
+    //   1. 每个按钮下面一行小字说明「它会做什么」，不让人靠猜；
+    //   2. 三档视觉权重明确区分：主操作(实心) / 次要(描边) / 破坏性(红描边)；
+    //   3. 悬停有反馈（内联样式写不了 :hover，用 onMouseEnter/Leave 切状态）。
+    //
+    // “重新登录”只弹浏览器；“撤销”是破坏性的，Host 侧还会再要一次确认。
+    function Btn({ label, hint, onClick, kind = 'normal', disabled }) {
+      const [hover, setHover] = useState(false);
+      const base = kind === 'primary' ? S.btnPrimary : kind === 'danger' ? S.btnDanger : S.btn;
+      const style = { ...base, opacity: disabled ? 0.55 : 1, cursor: disabled ? 'not-allowed' : 'pointer' };
+      if (hover && !disabled) {
+        if (kind === 'primary') style.filter = 'brightness(1.08)';
+        else if (kind === 'danger') style.background = 'var(--dsw-alias-interactive-bg-hover-danger, rgba(220,38,38,.10))';
+        else style.background = C.hover;
+      }
 
+      const button = react.createElement(
+        'button',
+        {
+          type: 'button',
+          style,
+          disabled,
+          onClick,
+          onMouseEnter: () => setHover(true),
+          onMouseLeave: () => setHover(false),
+        },
+        label,
+      );
+
+      if (!hint) return button;
       return react.createElement(
         'div',
-        { style: { display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' } },
-        btn(hasCred ? '重新登录（换账号）' : '登录 GitHub', () => act('login'), true),
-        btn('一键初始化', () => act('bootstrap'), false),
+        { style: { display: 'flex', flexDirection: 'column', gap: 4, maxWidth: 210 } },
+        button,
+        react.createElement('span', { style: { fontSize: 11.5, lineHeight: 1.45, color: C.fg3 } }, hint),
+      );
+    }
+
+    function ActionButtons({ st, busy, act }) {
+      const hasCred = st && st.credTargets && st.credTargets.length > 0;
+      const e = react.createElement;
+
+      return e(
+        'div',
+        { style: { display: 'flex', gap: 12, marginTop: 14, flexWrap: 'wrap', alignItems: 'flex-start' } },
+        e(Btn, {
+          key: 'login',
+          label: hasCred ? '重新登录（换账号）' : '登录 GitHub',
+          hint: hasCred ? '在浏览器里换一个 GitHub 账号' : '弹出 GitHub 授权页，用当前浏览器登录',
+          kind: 'primary',
+          disabled: busy,
+          onClick: () => act('login'),
+        }),
+        e(Btn, {
+          key: 'bootstrap',
+          label: '一键初始化',
+          hint: '体检 → 登录 → 验证，一步跑完；新机器首选',
+          kind: 'normal',
+          disabled: busy,
+          onClick: () => act('bootstrap'),
+        }),
         hasCred &&
-          react.createElement(
-            'button',
-            {
-              style: { ...S.btn, color: '#cf222e', borderColor: '#cf222e55' },
-              disabled: busy,
-              onClick: () => act('logout'),
-            },
-            '撤销凭据',
-          ),
+          e(Btn, {
+            key: 'logout',
+            label: '撤销凭据',
+            hint: '删掉本机存的 GitHub 凭据，需重新登录',
+            kind: 'danger',
+            disabled: busy,
+            onClick: () => act('logout'),
+          }),
       );
     }
 
@@ -461,8 +562,8 @@ window.__ModuleLoader__.load({
             style: {
               margin: '6px 0 0',
               padding: '8px 10px',
-              background: 'var(--dsh-bg-subtle, #f6f8fa)',
-              border: '1px solid var(--dsh-border, #e3e3e3)',
+              background: C.code,
+              border: `1px solid ${C.border}`,
               borderRadius: 6,
               fontSize: 12,
               lineHeight: 1.5,
@@ -480,7 +581,7 @@ window.__ModuleLoader__.load({
 
       return react.createElement(
         'div',
-        { style: { marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--dsh-border, #e3e3e3)' } },
+        { style: { marginTop: 14, paddingTop: 12, borderTop: `1px solid ${C.border}` } },
         react.createElement(
           'div',
           {
@@ -488,13 +589,13 @@ window.__ModuleLoader__.load({
             onClick: () => setOpen(!open),
           },
           react.createElement('span', { style: { fontWeight: 600 } }, 'WSL 里怎么用（决策 D）'),
-          react.createElement('span', { style: { color: '#666', fontSize: 12 } }, open ? '收起 ▲' : '展开 ▼'),
+          react.createElement('span', { style: { color: C.fg3, fontSize: 12 } }, open ? '收起 ▲' : '展开 ▼'),
         ),
 
         !open &&
           react.createElement(
             'div',
-            { style: { marginTop: 6, fontSize: 12, color: 'var(--dsh-text-secondary, #777)' } },
+            { style: { marginTop: 6, fontSize: 12, color: C.fg3 } },
             'WSL 不存密钥，每次由 Windows 凭据管理器代答。所以只需在 Windows 登录一次，所有发行版跟着变。',
           ),
 
@@ -504,7 +605,7 @@ window.__ModuleLoader__.load({
             { style: { marginTop: 10 } },
             react.createElement(
               'div',
-              { style: { fontSize: 13, lineHeight: 1.7, color: 'var(--dsh-text-secondary, #666)' } },
+              { style: { fontSize: 13, lineHeight: 1.7, color: C.fg3 } },
               'WSL 的 git 需要凭据时，会执行 ', 
               react.createElement('code', null, 'credential.https://<host>.helper'),
               ' 里那行命令。只要它指向 Windows 的 ', 
@@ -528,12 +629,12 @@ window.__ModuleLoader__.load({
                     { key: e.name, style: { ...S.row, alignItems: 'flex-start' } },
                     react.createElement(
                       'span',
-                      { style: { ...S.k, minWidth: 110, color: e.adopted ? '#1a7f37' : '#9a6700', fontWeight: 500 } },
+                      { style: { ...S.k, minWidth: 110, color: e.adopted ? C.ok : C.warn, fontWeight: 500 } },
                       (e.adopted ? '✅ ' : '⚠️ ') + e.name,
                     ),
                     react.createElement(
                       'span',
-                      { style: { ...S.v, fontFamily: 'inherit', textAlign: 'left', color: 'var(--dsh-text-secondary, #777)', fontSize: 12 } },
+                      { style: { ...S.v, fontFamily: 'inherit', textAlign: 'left', color: C.fg3, fontSize: 12 } },
                       e.adopted ? '已接管，借用 Windows 凭据' : '未接管：' + (e.helper || '无 helper'),
                     ),
                   ),
@@ -590,7 +691,7 @@ window.__ModuleLoader__.load({
 
             react.createElement(
               'div',
-              { style: { marginTop: 12, padding: 10, background: '#fff8e6', border: '1px solid #f0d58c', borderRadius: 6, fontSize: 12, lineHeight: 1.7 } },
+              { style: { marginTop: 12, padding: 10, background: 'var(--dsw-alias-state-warn-tertiary, rgba(217,119,6,.10))', border: '1px solid var(--dsw-alias-state-warn-primary, #b45309)', borderRadius: C.radius, fontSize: 12, lineHeight: 1.7, color: C.fg } },
               react.createElement('strong', null, '顺序不能反：'),
               '先接管 → 验证通过 → 再删明文。反了会直接丢认证。',
               react.createElement('br'),
