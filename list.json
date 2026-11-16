@@ -6,7 +6,7 @@
     {
       "name": "dsh-synchub",
       "dir": "dsh-synchub",
-      "version": "0.3.1",
+      "version": "0.4.0",
       "description": "同步中心：会话/工作区/附件/技能/配置层 → 各自私有 Git 仓库；同步面分级 + 危险目录守卫 + 环境切换检测 + 一键同步",
       "installedOn": [
         "FRANCIS-HOME-I7"
@@ -35,22 +35,22 @@
     {
       "name": "dsh-gitok",
       "dir": "dsh-gitok",
-      "version": "0.3.0",
-      "description": "Git 认证一站式管理，分 Init / Manage / Monitor 三层。设置里有一个「Git 认证」面板（四态状态卡 + 六项持续监控 + 一键初始化/重新登录/撤销按钮 + 原始报告）。底层 9 个 gitok_* 工具（doctor/list/verify/login/revoke/adopt/bootstrap/rotate/monitor），凭据收敛到 Windows 凭据管理器（DPAPI，出机器不可用），WSL 经 interop 借用不落盘。文档三份：README（怎么用）/ BOOTSTRAP（怎么做）/ ADR（为什么，含决策 D）。",
+      "version": "0.3.1",
+      "description": "Git 认证一站式管理，分 Init / Manage / Monitor 三层。设置里有一个「Mgitok」面板（四态状态卡 + 六项持续监控 + 一键初始化/重新登录/撤销按钮 + WSL 接管说明 + 原始报告）。底层 9 个 gitok_* 工具（doctor/list/verify/login/revoke/adopt/bootstrap/rotate/monitor），凭据收敛到 Windows 凭据管理器（DPAPI，出机器不可用），WSL 经 interop 借用不落盘。文档三份：README（怎么用）/ BOOTSTRAP（怎么做）/ ADR（为什么，含决策 D）。",
       "installedOn": [
         "REDMIPRO"
       ],
       "status": "active",
-      "note": "未在 npm 发布，用 link: 装进 desktop profile。有浏览器半（声明 dsh.client，platform=web，immediately）—— 改 lib/client.js 刷新页面即可，改 lib/index.js 或 package.json 的 dsh.client 必须完全重启 DSH。开发工作区：C:\\dsh\\dshplug\\dsh-gitok。WSL 默认不动（targets 只含 windows，ADR-006）；要看 WSL 用工具参数临时指定。"
+      "note": "界面显示名 = Mgitok（规范：M + 技能名，全小写；目录与包名仍为 dsh-gitok）。有浏览器半（dsh.client，platform=web，immediately）—— 改 lib/client.js 刷新页面即可，改 lib/index.js 或 package.json 的 dsh.client 必须完全重启 DSH。2026-11-16 修复：package.json 曾缺 exports[\"./client\"]，导致宿主半可用但界面完全不显示且不报错；同时补齐 ./locale/*.json 与 ./icon。开发工作区：C:\\dsh\\dshplug\\dsh-gitok。WSL 默认不动（targets 只含 windows，ADR-006）。"
     },
     {
       "name": "dsh-larkcli",
       "dir": "dsh-larkcli",
-      "version": "0.0.1",
-      "description": "Lark/飞书 CLI 的 Windows 原生驱动（开发中）：不靠 WSL、不装系统 Node",
+      "version": "0.1.0",
+      "description": "飞书/Lark 原生驱动（Windows only，不靠 WSL、不装系统 Node）：直连官方 lark-cli.exe，多账户（每账户独立 App + 独立 user 授权，可写描述与标签），按任务本地加权搜索账户以降低消耗；9 个工具（lark_status / lark_call / lark_schema / lark_doctor / lark_account_search / lark_account_upsert / lark_account_set_secret / lark_login_start / lark_login_finish）+ 设置面板。",
       "installedOn": [],
-      "status": "dev",
-      "note": "还不是可加载插件：尚缺 index.js 与 cordis.patch.yml，dsh.bundle 未声明。install.ps1 会自动跳过（Test-Bundle 返回 false），不影响其他插件。"
+      "status": "active",
+      "note": "未在 npm 发布，用 link: 装进 desktop profile。数据与凭据在仓库外 C:\\dsh\\data-larkcli（accounts.json + accounts/<id>/appsecret.txt），config.json 由代码按本机路径现算生成 —— 迁移时那条写死的 C:/dsh/dsh-larkcli 绝对路径就是凭据失效的根因，已从结构上根治。有浏览器半（dsh.client，platform=web，immediately）：改 lib/client.js 刷页面即可，改 lib/index.js 或 package.json 必须完全重启 DSH。已确认决策：只做 Windows；每账户独立 App；按任务本地搜账户；凭据出仓库。"
     }
   ]
 }

@@ -605,8 +605,10 @@ window.__ModuleLoader__.load({
       // 这个坑 dsh-getbrain 里验证过（它的 1125 行同样写法）。
       ctx.effect(() =>
         ctx.locale.register(NS, {
-          zh: { nav: 'Git 认证' },
-          en: { nav: 'Git Auth' },
+          // 显示名统一为「M + 技能名」，全小写（2026-11-16 约定）。
+          // 品牌标识 M 是固定前缀；仓库目录仍为 dsh-gitok，两者不要混。
+          zh: { nav: 'Mgitok' },
+          en: { nav: 'Mgitok' },
         }),
         'gitok: settings dictionaries',
       );

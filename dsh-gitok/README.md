@@ -6,9 +6,11 @@ Git 认证一站式管理插件：**检查 / 建议 / 配置 / 验证 / 撤销**
 （DPAPI 加密、绑定用户+本机、出机器解不开）。WSL 通过 interop 直接调用 Windows 的
 `git-credential-manager.exe`，**自己一个字节的密钥都不存**。
 
-> **版本 0.3.0 ｜ 状态 active ｜ 2026-11-13**
+> **版本 0.3.1 ｜ 状态 active ｜ 2026-11-16**
 > 未发布 npm，已用 `link:` 装进 `desktop` profile（宿主机 `REDMIPRO`）。
 > 这份 README 是**交接文档**：设计、机制、实测数据、踩过的坑全在里面，换机器/换工作区照着读就能接着开发。
+
+> **界面显示名：`Mgitok`**（规范：`M` + 技能名，全小写；目录与包名仍为 `dsh-gitok`）。
 
 ---
 
@@ -460,9 +462,11 @@ $node = "$env:USERPROFILE\AppData\Local\Programs\DeepSeek Harness\resources\runt
 - [x] ✅ **已装进 `desktop` profile**（2026-11-12，`list.json` 里 `status: active`、`installedOn: ["REDMIPRO"]`）
 - [x] ✅ **重启后已验证**：`gitok_doctor` 在会话里实际可用（2026-11-12 16:37）
 - [x] ✅ **v0.2.0 设置面板**：`lib/client.js` + `dsh.client` + Host 路由已写完
-- [ ] 设置面板**尚未在界面上实际确认渲染**（需重启后在「设置」里看到「Git 认证」分区）
-- [ ] 面板里的「重新登录 / 撤销」按钮未做（目前需 AI 代调工具）
-- [ ] `gitok_adopt` 没有 `--dry-run` 选项，只能靠备份回滚
+- [ ] **面板尚未在界面上确认渲染**（代码已完好，待你重启后在「设置 → Mgitok」里看一眼）
+      根因已于 2026-11-16 修复：`package.json` 缺 `exports["./client"]`，见 §8.11
+- [x] ✅ 面板「重新登录 / 一键初始化 / 撤销凭据」按钮已做（`ActionButtons`），需 `dsh.client` 重启后可见
+- [x] ✅ `gitok_adopt` 已支持 `dryRun`（只报将执行什么，不改文件）
+- [x] ✅ `gitok_rotate` / `gitok_bootstrap` / `gitok_monitor` 均已实现
 - [ ] 没处理 `gitok_revoke` 之后「其他仓库还在用旧凭据」的提示
 
 ### 7.3 已知限制
@@ -668,6 +672,48 @@ ctx.inject(['webServer'], (webCtx) => {
 
 注意 `ctx.inject(['webServer'], fn)` 是**服务就绪才回调**；如果宿主没有 webServer
 （比如纯 CLI 模式），这段不会执行，但插件其余部分照常工作。
+### 8.11 【最难查】装了、工具能用、路由也通，但界面上就是没有它
+
+**症状**：`gitok_*` 九个工具全部可调用，`/plugins/gitok/status` 返回 200，
+但设置和侧边栏里都找不到它，**且浏览器控制台没有任何报错**。
+
+**根因**：`package.json` 的 `exports` 里只写了 `"."`，**缺 `"./client"`**。
+DSH 按导出路径去找浏览器半的入口，找不到就静默跳过，不报错、不警告。
+
+```json
+// ❌ 错的：宿主半能用，界面永远不出现
+"exports": {
+  ".": "./lib/index.js",
+  "./package.json": "./package.json"
+}
+
+// ✅ 对的（对照 dsh-larkcli / dsh-getbrain 都能正常显示）
+"exports": {
+  ".": "./lib/index.js",
+  "./client": "./lib/client.js",
+  "./locale/*.json": "./locale/*.json",
+  "./icon": "./icon.svg",
+  "./package.json": "./package.json"
+}
+```
+
+**为什么这么难查**：所有常规排查手段都指向「正常」——
+工具能调、路由能响、`client.js` 语法无误、slot 注册代码与能显示的插件逐字相同、
+locale 写法一致、`inject: ['slots']` 也一致。唯独没想到「入口根本没被找到」。
+
+**验证方法（不靠重启，秒级出结果）**：用 Node 解析器直接问「这个子路径能不能解析到文件」：
+
+```js
+import { createRequire } from 'node:module';
+const req = createRequire('C:/Users/franc/.dsh/profiles/desktop/package.json');
+req.resolve('dsh-gitok/client');   // 能解析 = 入口存在；抛 ERR_PACKAGE_PATH_NOT_EXPORTED = 缺这个导出
+```
+
+**排查顺序（下次直接照这个走）**：把 `exports` 与**已能正常显示的插件**逐项对比，
+差异一眼就能看出来，比读日志、重装、重启都快。
+
+**已修的三个导出**：`./client`（浏览器入口）、`./locale/*.json`（语言包）、`./icon`（图标）。
+同时新建了缺失的 `locale/zh.json`、`locale/en.json`、`icon.svg`。
 
 ---
 

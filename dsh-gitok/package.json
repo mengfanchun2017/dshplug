@@ -1,6 +1,6 @@
 {
   "name": "dsh-gitok",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "description": "Git 认证一站式管理：检查 / 登录 / 验证 / 列出 / 撤销。把 Windows 与各 WSL 终端的 git 凭据统一收敛到 Windows 凭据管理器（DPAPI 加密、出机器不可用），WSL 通过 interop 借用而不落盘任何明文密钥。",
@@ -22,12 +22,17 @@
   "main": "./lib/index.js",
   "exports": {
     ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
     "./package.json": "./package.json"
   },
   "files": [
     "lib/index.js",
     "lib/client.js",
     "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
     "README.md",
     "BOOTSTRAP.md",
     "ADR.md",

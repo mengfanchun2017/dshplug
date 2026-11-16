@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Mgitok",
+    "description": "One-stop git authentication: check / login / verify / list / revoke. Consolidates git credentials for Windows and every WSL distro into the Windows Credential Manager (DPAPI-encrypted, unusable off-machine); WSL borrows over interop and never stores plaintext."
+  },
+  "nav": "Mgitok"
+}
