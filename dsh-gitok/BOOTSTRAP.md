@@ -436,12 +436,27 @@ cd $env:USERPROFILE\.dsh\profiles\desktop
 `gitok_revoke` **必须**显式传 `confirm: true`，否则只返回提示、不执行。
 删完该 host 的 git 操作会重新要求认证。
 
+### 7.1 GitHub 网页侧的三类授权（想知道「这台机器到底是哪条」先看这张表）
+
+本插件只能看到本机写进 Windows 凭据管理器的那一条；**GitHub 网页上是另一个世界**，
+两者靠不上名字。三个页面分工：
+
+| 页面 | 里面是什么 | 能不能按机器区分 |
+|---|---|---|
+| `/settings/applications` | Authorized OAuth Apps。GCM 登录产生的 `gho_` 全在这里，**只显示成一条「Git Credential Manager」** | ❌ 名字是 App 发布方定的，全球同名；撤销是**按 App**，会把该账号下所有机器的 token 一起作废 |
+| `/settings/personal-access-tokens` | Fine-grained PAT（GitHub 现在默认推荐） | ✅ 有名字 + 后 4 位，**能单条删**，只影响用它的那台 |
+| `/settings/tokens` | Tokens (classic) | ✅ 同上，但权限是全库全宽 |
+| `/settings/security-log` | 搜 `oauth_access` | — 这是**判断「哪台机器」的唯一依据**：每条带时间 + IP/城市 |
+
+**想「一台机器一个令牌、名字还认得出」**：只能用 fine-grained PAT，命名带主机名，
+例如 `REDMIPRO-20261116`（主机名可用 `$env:COMPUTERNAME` 查，本插件的面板会直接告诉你）。
+OAuth 那条路做不到 —— 详见 ADR-014 的 v0.3.11 补遗。
 ---
 
 ## 8. 验收清单（迁移后逐条打勾）
 
 ```text
-[ ] install.ps1 -Check 显示 dsh-gitok v0.3.10 status=active link-junction
+[ ] install.ps1 -Check 显示 dsh-gitok v0.3.11 status=active link-junction
 [ ] node --check lib/index.js 通过
 [ ] node --check lib/client.js 通过
 [ ] mock ctx 测试：tools=9, routes=5（status + login/revoke/rotate/bootstrap）

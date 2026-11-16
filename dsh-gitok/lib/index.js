@@ -326,6 +326,7 @@ $OutputEncoding=[Text.Encoding]::UTF8
 $ErrorActionPreference='Continue'
 "git:             " + ((git --version) -join '')
 "exec-path:       " + ((git --exec-path) -join '')
+"machine:         " + $env:COMPUTERNAME
 $h = @(git config --show-origin --get-all credential.helper 2>$null | Where-Object { $_.Trim() -ne '' })
 "helper:          " + ($h -join ' | ')
 // helper(scoped) 输出全部按 URL 作用域的 helper 原始行，用 ~ 分隔；
@@ -497,6 +498,11 @@ function parseStatus(text, gcmPath, extra = {}) {
   const store = pick(text, /^credentialStore:[ \t]*(.*)$/m)
   const proxy = pick(text, /^http\.proxy:[ \t]*(.*)$/m)
   const sysProxy = pick(text, /^sys proxy:[ \t]*(.*)$/m)
+  // 机器名：面板要拿它拼「建议的凭据名」（如 REDMIPRO-20261116）。
+  // 为什么需要：GCM 的 OAuth 授权在 GitHub 侧叫「Git Credential Manager」，
+  // 那个名字是 App 开发者定的、跨机器完全同名，无法按机器区分。
+  // 想按机器区分只能改用 fine-grained PAT 并自己命名，而命名最好带机器名。
+  const machine = pick(text, /^machine:[ \t]*(.*)$/m)
   const sshKeys = pick(text, /^ssh keys:[ \t]*(.*)$/m)
   const sshAgent = pick(text, /^ssh-agent:[ \t]*(.*)$/m)
   const gh = pick(text, /^gh:[ \t]*(.*)$/m)
@@ -739,6 +745,7 @@ function parseStatus(text, gcmPath, extra = {}) {
     store: store || '(默认 wincredman)',
     proxy: proxy && proxy !== '(unset)' ? proxy : '',
     sysProxy: sysProxy || '',
+    machine: machine || '',
     sshKeys: sshKeys && sshKeys !== 'none' ? sshKeys : '',
     sshAgent: sshAgent || '',
     gh: gh || '',

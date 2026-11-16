@@ -677,11 +677,12 @@ smoke-route.mjs     → exit 1        （FAIL: 期望 200，实际 500）
    - `settings/applications` → Authorized OAuth Apps（GCM 的 `gho_` 授权在这里）
    - `settings/tokens` → PAT（唯一能单条删、不影响其他机器的）
    - `settings/security-log` → 搜 `oauth_access`（**判断「哪台机器」的唯一依据**）
-3. **可展开说明**「怎么判断这台机器对应哪个授权」，写三种按可靠度排序的方法：
+3. **可展开说明**「怎么判断这台机器对应哪个授权」，写四种按可靠度排序的方法：
    - 方法 1（最准）：安全日志里 `oauth_authorization.create` 的时间 + IP/城市，
      刚登录完刷新，时间最新且出口 IP 对得上的那条就是。**注意代理会改变 GitHub 看到的 IP**。
-   - 方法 2：撤销 + 重登反推，代价是所有机器一起失效。
-   - 方法 3：多账号不要在同一台机器反复换号（会覆盖同一 target 的凭据）。
+   - 方法 2：**为什么「撤销一个」会命中多台机器** —— v0.3.11 按用户质疑重写，见下节。
+   - 方法 3：**OAuth 授权不能加「-机器名」后缀** —— App 名是发布方注册时写死的，见下节。
+   - 方法 4：多账号不要在同一台机器反复换号（会覆盖同一 target 的凭据）。
 4. **明确写「没有一步到位的对应关系」**，并解释为什么不给假指纹 ——
    这与 ADR-014 一致：OAuth token 网页端不显示名字/后 4 位，给了也对不上。
 
@@ -694,3 +695,45 @@ smoke-route.mjs     → exit 1        （FAIL: 期望 200，实际 500）
 **验证**：`node --check` 通过；用最小 React 桩把 `CredAccountCard` 真渲染了三种输入
 （有凭据 / 无凭据 / 全空），标题与降级提示都正确分支；静态扫了 `C.*` / `S.*` 的
 13 + 14 个引用，确认无未定义键（这是 `node --check` 查不出的一类错误）。
+
+### 2026-11-16 · v0.3.11 补遗：三处纠正（用户提出，均经查证）
+
+用户对 v0.3.10 的说明提出三条质疑，**三条都成立**，逐条纠正：
+
+**① 「撤销一个为什么多台一起失效」—— v0.3.10 的描述不准确。**
+用户原话：「我确定 git credential manager 是你刚开的，这里不是一台机器设置会新建一个么，
+为什么删除一个多台会一起失效」。
+查证结果：用户的观察是对的，**每台机器单独登录确实各自拿到一个独立 token**。
+同一账号 + 同一 App + 同一 scope 最多 10 个 token 并存，超出后 GitHub 会顶掉最久未用的
+（见 [docs](https://docs.github.com/en/apps/oauth-apps) 的 oauth-token-limit：
+"There is a limit of ten tokens that are issued per user/application/scope combination"）。
+但网页上那个「Revoke」是**按 App 撤销**，不是按 token 撤销；
+官方 [Token expiration and revocation](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/token-expiration-and-revocation)
+原文：「Once an authorization is revoked, any tokens associated with the authorization will be revoked as well.」
+→ 所以根因不是「只有一个凭据」，而是**可操作粒度止于 App，单个 token 网页上不给拆**。
+面板文案已改成讲清这个区别，不再笼统写「所有机器一起失效」。
+
+**② OAuth 授权能不能加「-机器名」后缀 —— 不能。**
+用户问：「这个 git credential manager 如果我在另一个机器上做的，还是同一个名字么；
+如果是的话无法区分，是否可以在申请时候后面加上 -xxx 把主机名放进去」。
+查证：**Git Credential Manager 是 App 发布方（Git 项目）注册 OAuth App 时定下的名字**，
+不是本机生成的；本机既改不了也加不了后缀，全球所有装了 GCM 的机器在网页上都是同一个名字。
+（实测本机 GCM 2.9.1 的 `GitHub.dll` 里只有 `gitHubDevClientId` / `gitHubDevRedirectUri`
+这两个仅开发模式生效的键，**没有**让终端用户改 App 名或 client id 的配置项；
+`credential.gitHubAuthModes` 只控制认证方式 browser/device/pat，不涉及命名。）
+→ 想要「按机器命名」，只能用 fine-grained PAT 自己起名。
+为此宿主探针新增 `machine:` 行（`$env:COMPUTERNAME`），面板直接给出
+`REDMIPRO-YYYYMMDD` 这样的命名示例，不用用户自己去查主机名。
+
+**③ 链接缺 fine-grained tokens —— 补上，并提到 classic 前面。**
+用户原话：「你给的是 classic，现在默认的用 /settings/personal-access-tokens，
+把这个放在 */tokens 这个链接前面，比较完整」。
+已改：② 区先列 `settings/personal-access-tokens`（Fine-grained，GitHub 现在默认推荐），
+再列 `settings/tokens`（Tokens (classic)），两个都标明「有名字 + 后 4 位、能单条删」，
+并指出「一台机器一个令牌、名字还认得出」只有这条路能做到。
+
+**验证（v0.3.11）**：两个文件 `node --check` 通过；新增 `tools/_render-check.mjs`
+把 `CredAccountCard` 抽出来用 React 桩真渲染 4 种输入（有凭据 / 无凭据 / 展开后 / 全空首帧），
+断言新文案与降级分支均正确；`C.*` 13/13、`S.*` 40 定义 14 引用均无未定义；
+`tools/smoke-route.mjs` 仍 `level=ok`，六项监控 `helper/creds/plaintext/sshkey/deps` 全 ok。
+新增的 `machine` 行正则 `^machine:[ \t]*(.*)$` 已用真实 PowerShell 输出对拍通过。
