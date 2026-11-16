@@ -105,6 +105,70 @@ routes: /plugins/gitok/status,/plugins/gitok/login,/plugins/gitok/revoke,/plugin
 ```
 **这是最有价值的一条验证**：它证明 Host 半能加载、Config 能解析、9 个工具和 5 条路由都注册上了，
 
+### 2.2b 第二层·浏览器半：打桩 ctx 跑 `apply`（**专治「界面不显示但控制台干净」**）
+
+上面的 2.2 只证明宿主半注册成功。**浏览器半是另一套加载**：宿主调一次 `apply`，
+它抛错就等于整块没注册，且**不报错、不写日志**。所以必须单独验。
+
+先做最省事的静态检查（几毫秒）：
+
+```powershell
+# apply 里出现的每个 ctx.xxx，inject 里都必须有
+Select-String -Path C:\dsh\dshplug\dsh-gitok\lib\client.js -Pattern 'ctx\.\w+'
+```
+
+把结果与 `const inject = [...]` 逐项对照。写 `apply` 时只要多用一个 `ctx.xxx` 就漏，
+是这类「静默不显示」的第一嫌疑（ADR-009）。
+
+再跑真验证 —— 按 `inject` 声明**严格**供给服务，缺什么立刻抛：
+
+```powershell
+$node = "$env:USERPROFILE\AppData\Local\Programs\DeepSeek Harness\resources\runtime\primary-runtime\dependencies\node\bin\node.exe"
+
+& $node --input-type=module -e "
+import fs from 'node:fs';
+const code = fs.readFileSync('C:/dsh/dshplug/dsh-gitok/lib/client.js','utf8');
+const R = { createElement:(t)=>({type:t,kids:[]}), useState:(i)=>[i,()=>{}],
+            useEffect:()=>{}, useCallback:(f)=>f, useRef:(v)=>({current:v}) };
+let cap=null;
+globalThis.window={__ModuleLoader__:{load:o=>{cap=o;}}};
+new Function('window',code)(globalThis.window);
+const mod=cap.factory(n=>{ if(n==='react') return R; throw new Error('req '+n); });
+
+const mk=(svc)=>{
+  const c={effect:f=>{f();return()=>{}}};
+  if(svc.includes('slots'))  c.slots={inject:(n,f)=>f(),register:()=>()=>{}};
+  if(svc.includes('locale')) c.locale={register:()=>()=>{},bind:()=>()=>'Mgitok'};
+  return c;
+};
+console.log('inject =', JSON.stringify(mod.inject));
+mod.apply(mk(mod.inject));          // 按声明供给 → 必须成功
+console.log('✅ apply 成功');
+"
+```
+
+期望输出：
+
+```
+inject = ["slots","locale"]
+✅ apply 成功
+```
+
+**若这里抛 `Cannot read properties of undefined (reading '...')`**，就是 `inject` 漏列了服务 ——
+`register` 对应 `locale`/`slots`，`bind` 对应 `locale`。补进 `inject` 即可，不用改逻辑。
+
+想同时确认插槽真的注册出来了，把 `register` 改成记录版：
+
+```js
+c.slots={inject:(n,f)=>f(),
+         register:(o,comp)=>{console.log('  slot', o.name, o.id||o.key, 'order='+(o.order||'-'));return()=>{}}};
+```
+
+期望看到三行：`settings.section gitok order=65`、`main gitok-main`、
+`sidebar.panellist gitok order=465`（ADR-010）。
+
+> **注意**：浏览器半改完只需**刷新页面**；只有 `package.json` 的 `dsh.client` 变了才需要重装。
+
 ### 2.3 第三层：运行时（需要 DSH 正在跑）
 
 ```powershell
