@@ -6,7 +6,7 @@ Git 认证一站式管理插件：**检查 / 建议 / 配置 / 验证 / 撤销**
 （DPAPI 加密、绑定用户+本机、出机器解不开）。WSL 通过 interop 直接调用 Windows 的
 `git-credential-manager.exe`，**自己一个字节的密钥都不存**。
 
-> **版本 0.3.5 ｜ 状态 active ｜ 2026-11-16**
+> **版本 0.3.6 ｜ 状态 active ｜ 2026-11-16**
 > 未发布 npm，已用 `link:` 装进 `desktop` profile（宿主机 `REDMIPRO`）。
 > 这份 README 是**交接文档**：设计、机制、实测数据、踩过的坑全在里面，换机器/换工作区照着读就能接着开发。
 
@@ -16,10 +16,10 @@ Git 认证一站式管理插件：**检查 / 建议 / 配置 / 验证 / 撤销**
 
 ## 面板长什么样
 
-装好后在 **设置 → Git 认证** 里：
+装好后在 **设置 → Mgitok** 里：
 
 ```
-┌─ Git 认证 ───────────────────────────────┐
+┌─ Mgitok ──────────────────────────────────┐
 │ ● 正常   已配置，认证可用                  │
 │                                          │
 │ 凭据后端      (default = wincredman)      │
@@ -240,7 +240,7 @@ git -c credential.helper=<Windows GCM 路径> \
 | 半区 | 文件 | 职责 |
 |---|---|---|
 | 宿主（Host） | `lib/index.js` | 9 个工具 + 5 条 HTTP 路由（1 读 + 4 写） |
-| 浏览器（Client） | `lib/client.js` | 设置里的「Git 认证」面板 |
+| 浏览器（Client） | `lib/client.js` | 设置里的「Mgitok」面板 |
 
 ### 4.1 工具清单
 
@@ -256,12 +256,12 @@ git -c credential.helper=<Windows GCM 路径> \
 | `gitok_rotate` | **轮换** | 预检 → 备份 → erase → 重新登录 → 验收。断网时不会误删可用凭据 |
 | `gitok_revoke` | **删除** | 不传 `confirm` 时**只列影响面**；传 `true` 才 GCM `erase` 删凭据 |
 
-> **面向新手时不要提工具名。** 设置里有一个「Git 认证」面板，新手只需看卡片、点「重新检查」。
+> **面向新手时不要提工具名。** 设置里有一个「Mgitok」面板，新手只需看卡片、点「重新检查」。
 > 工具名只在需要精确操作（如 `gitok_revoke` 删某一条）时由 AI 代调。
 
 ### 4.1.1 设置面板
 
-在「设置」侧边栏注册一顶层分区 **Git 认证**（`settings.section`，`id: gitok`，`order: 65`）。
+在「设置」侧边栏注册一顶层分区 **Mgitok**（`settings.section`，`id: gitok`，`order: 65`）。
 
 > **只有这一个入口**（2026-11-16 起）。v0.3.0–v0.3.4 曾在应用侧边栏另起一个 `sidebar.panellist` 图标 +
 > `main` 面板，但两处显示的是**同一个组件**，功能完全重复。用户：“gitok 在设置就看就可以了 不用侧边栏”
@@ -404,7 +404,7 @@ C:\dsh\dshplug\dsh-gitok\
 ├─ package.json        # dsh.bundle.patch → cordis.patch.yml；dsh.client → 浏览器半
 ├─ cordis.patch.yml    # - insert: - id: gitok / name: dsh-gitok
 ├─ lib\index.js        # 宿主半：9 个工具 + 5 条 HTTP 路由
-├─ lib\client.js       # 浏览器半：设置里的「Git 认证」分区
+├─ lib\client.js       # 浏览器半：设置里的「Mgitok」分区
 ├─ README.md           # 本文件（现在怎么用）
 ├─ BOOTSTRAP.md        # 命令行手册（怎么做）
 ├─ ADR.md              # 架构决策记录（为什么）
@@ -638,7 +638,7 @@ const scoped = text.match(/^helper\(scoped\):[ \t]*(.*)$/m)?.[1] ?? ''
 const t = (s) => s
 
 // ✅ 正：从 locale 服务拿绑定函数
-ctx.effect(() => ctx.locale.register(NS, { zh:{nav:'Git 认证'}, en:{nav:'Git Auth'} }), '...')
+ctx.effect(() => ctx.locale.register(NS, { zh:{nav:'Mgitok'}, en:{nav:'Mgitok'} }), '...')
 const t = ctx.locale.bind(NS)
 ```
 
@@ -1033,7 +1033,7 @@ cd C:\dsh\dshplug; & git pull --ff-only
 | Windows 凭据 | ✅ GCM `wincredman`，`git:https://github.com`，用户 `mengfanchun2017` |
 | WSL `claude` | ⏸ **未改动**，仍用 gh helper + 明文 PAT（按用户要求保持原样） |
 | WSL `u26claude4` | ⏸ **未改动**，仍有空口令 SSH 私钥（待后续处理） |
-| 本插件 | ✅ `status: active`，已装进 `desktop`（v0.3.5，link-junction） |
+| 本插件 | ✅ `status: active`，已装进 `desktop`（v0.3.6，link-junction） |
 | 设置面板 | ✅ 代码已完成（宿主路由 + 浏览器半）；需重启 DSH 后在界面上确认 |
 ---
 

@@ -101,7 +101,8 @@
   > 「gitok 我计划是在设置中添加项便于新手使用 Git 认证 显示为这个就好了」
   一堆 `gitok_*` 工具名对新手毫无意义 —— 他不知道有这些工具，也不知道怎么调。
 - **决策**：
-  - 新增 `lib/client.js`，在 `settings.section` 注册顶层分区 **Git 认证**（`id: gitok`, `order: 65`）。
+  - 新增 `lib/client.js`，在 `settings.section` 注册顶层分区（`id: gitok`, `order: 65`）。
+    显示名初版为「Git 认证」，2026-11-16 起按统一规范改为 **`Mgitok`**（见 ADR-012）。
   - `package.json` 加 `dsh.client`（`platform: web`）。
   - **`parseStatus()` 与 `gitok_doctor` 共用 `runDoctor()`**，不各写一份探测。
 - **理由**：新手路径是「打开设置 → 看到状态 → 点按钮」，不是记住六个工具名。
@@ -421,3 +422,71 @@ ctx.effect(
 > （ADR-009 的铁律：`apply` 里每出现一次 `ctx.xxx`，`inject` 就必须有 `xxx`）。
 
 ---
+
+## ADR-012 · 界面显示名统一为「`M` + 技能名」，全小写
+
+**日期**：2026-11-16 ｜ **状态**：已采纳
+
+### 结论
+
+侧边栏与设置里出现的**显示名**一律为「`M` + 技能名」，全小写：`Mgitok` / `Mlarkcli` / `Mgetbrain` / `Msynchub`。
+`M` 是 Manta 品牌标识，固定大写前缀；技能名部分全小写。
+
+**只动显示名，不动身份名**：仓库目录仍是 `dsh-gitok`，包名仍是 `dsh-gitok`，
+`package.json` 的 `name` 与 `__ModuleLoader__.load({ id })` 的 `id` 都保持原样。
+
+在 dsh-gitok 内部，显示名收敛到 `lib/client.js` 的一个模块级常量：
+
+```js
+const DISPLAY_NAME = 'Mgitok';
+```
+
+设置分区的 `nav` 与面板 `<h2>` 标题都从它取，只有一处真值。
+
+### 理由
+
+1. **多插件在同一列表里必须可区分且成体系**。混着「Git 认证」「飞书」「同步中心」时，
+   用户看到的是三个不同风格的名字，无法一眼判断它们同属 Manta 系列。
+   统一前缀让「这批是我的插件」在视觉上直接成立。
+2. **全小写避免排序与搜索分裂**。`Mgitok` 与 `Mgitok` 只有一种写法，
+   Linux/macOS 上大小写敏感的文件名、URL 与搜索结果不会出现两份。
+3. **显示名与身份名分离是必须的**。目录名被 `install.ps1` 的 `link:` Junction 引用，
+   也是 `~/.dsh` 里配置与凭据的归属键（见 ADR-007）。改目录名会断 Junction、
+   让已保存的 `dataDir`、`targets`、凭据全部失联。
+   所以**改名只能改表现层**（`locale.register` 的 `nav` + 面板标题）。
+4. **常量优于两处各写一份**。v0.3.5 收尾时真实踩到：`nav` 已改 `Mgitok`，
+   面板 `<h2>` 还写着「Git 认证」，界面上标题与分区名不一致。两处各写一份字符串就必然走样。
+
+### 反面代价
+
+- **`M` 前缀在中文语境下不直观**：不看文档的用户不知道 `Mgitok` 是 git 认证。
+  靠 locale 的 `meta.description` 与面板副标题补足，名称本身不承担解释职责。
+- **改了显示名，旧文档与旧截图会失配**。本次同步改了 README/BOOTSTRAP/ADR/cordis.patch.yml/roadmap
+  五份文档里指代**界面名**的地方；指代**技术主题**的「git 认证」（如「本机存在三套 git 认证」）保持不变。
+  这个区分要人工判断，无法机械替换 —— 是全小写前缀方案唯一的长期维护成本。
+- **插件间形态仍可能不一致**：`dsh-synchub` / `dsh-getbrain` 是「设置 + 侧栏」双入口，
+  gitok 是单入口（ADR-011）。命名统一**不**意味着入口必须一致。
+
+### 已否决的替代方案
+
+- **连目录名一起改成 `Mgitok`**：否决。断 `link:` Junction，且 Windows 路径大小写不敏感、
+  Linux 敏感，跨机同步会分裂成两个目录。身份层必须稳定。
+- **用中文显示名**（「Git 认证」「飞书」）：已证伪。多插件列表里无法成体系，
+  且这些名字里没有一个共同的品牌来源。
+- **每个插件各定风格**：这就是改名前的状态，用户明确提出要统一，故否决。
+- **在 `package.json` 里加 `displayName` 字段**：平台不读这个字段（无源码级依据），
+  显示名实际由 locale 的 `nav` 决定。加一个没人读的字段只会误导后来的人。
+
+### 影响范围与落点
+
+| 位置 | 是否改 | 说明 |
+|---|---|---|
+| `lib/client.js` 的 `DISPLAY_NAME` | ✅ | 唯一真值 |
+| `locale/*.json` 的 `nav` | ✅ | 静态声明也须一致 |
+| `package.json` 的 `name` | ❌ | 身份层，改了断 Junction |
+| 目录名 `dsh-gitok/` | ❌ | 同上 |
+| `__ModuleLoader__.load({ id })` | ❌ | 必须等于包名 |
+| 文档里指代界面名的「Git 认证」 | ✅ | 本次已改 |
+| 文档里指代技术主题的「git 认证」 | ❌ | 如「三套互不相通的 git 认证」 |
+
+规范已写入 `C:\dsh\dshplug\BOOTSTRAP.md` §5.1 与 `~/.dsh/AGENTS.md` 开发约定，后续新插件照此执行。

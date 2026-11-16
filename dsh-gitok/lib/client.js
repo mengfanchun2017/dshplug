@@ -31,6 +31,11 @@ window.__ModuleLoader__.load({
     const API = '/plugins/gitok/status';
     const NS = 'gitok.settings';
 
+    // 界面显示名的唯一来源：「M」+ 技能名，全小写（2026-11-16 约定）。
+    // 设置分区的 nav 与面板标题都从这里取，避免两处各写一份字符串而走样。
+    // 注意：GitokSection 是模块顶层函数，拿不到 apply 里的 t()，所以只能用常量。
+    const DISPLAY_NAME = 'Mgitok';
+
     // ── 取数据 ────────────────────────────────────────────────────────────
     // Host 侧的探测要起 pwsh 子进程（~2-5s），超时给宽一点。
     // 但也不能太宽：界面转圈 45s 用户会以为卡死。
@@ -334,7 +339,8 @@ window.__ModuleLoader__.load({
         'div',
         { style: S.wrap },
 
-        react.createElement('h2', { style: S.h }, 'Git 认证'),
+        // 面板标题 = 界面显示名，与设置分区的 nav 共用 DISPLAY_NAME，改名不会走样。
+        react.createElement('h2', { style: S.h }, DISPLAY_NAME),
         react.createElement(
           'p',
           { style: S.sub },
@@ -988,10 +994,10 @@ window.__ModuleLoader__.load({
         ctx.locale.register(NS, {
           // 显示名统一为「M + 技能名」，全小写（2026-11-16 约定）。
           // 品牌标识 M 是固定前缀；仓库目录仍为 dsh-gitok，两者不要混。
-          // nav = 设置分区的显示名。
+          // nav = 设置分区的显示名，取自 DISPLAY_NAME（与面板标题同源）。
           // 不需要 panelName：那是给侧边栏用的，本插件不注册 sidebar.panellist。
-          zh: { nav: 'Mgitok' },
-          en: { nav: 'Mgitok' },
+          zh: { nav: DISPLAY_NAME },
+          en: { nav: DISPLAY_NAME },
         }),
         'gitok: settings dictionaries',
       );

@@ -3,7 +3,7 @@
 > 命令行手册：**装机、验证、排错、迁移**。全部命令可直接复制。
 > 代码怎么设计、为什么这么定 → 见 [`ADR.md`](./ADR.md)；面板长什么样 → 见 [`README.md`](./README.md)。
 >
-> 快照时间：**2026-11-16** ｜ 版本 **0.3.5** ｜ 宿主机 `REDMIPRO` ｜ profile `desktop`
+> 快照时间：**2026-11-16** ｜ 版本 **0.3.6** ｜ 宿主机 `REDMIPRO` ｜ profile `desktop`
 
 ---
 
@@ -76,7 +76,7 @@ $node = "$env:USERPROFILE\AppData\Local\Programs\DeepSeek Harness\resources\runt
 & $node -e "const j=require('C:/dsh/dshplug/dsh-gitok/package.json');console.log(j.version, !!j.dsh.client, j.files)"
 ```
 
-期望：两次 `--check` 都不输出内容（exit 0）；第三行打印 `0.3.5 true [...]`。
+期望：两次 `--check` 都不输出内容（exit 0）；第三行打印 `0.3.6 true [...]`。
 
 ### 2.2 第二层：宿主半注册（mock ctx，不起 DSH）
 
@@ -198,7 +198,7 @@ creds   : 1
 **404 的含义**：路由没挂上。按顺序排查 ①DSH 是否在 `index.js` 修改**之后**启动的
 ②是否重装过 ③`webServer` 服务是否存在（纯 CLI 模式没有）。
 
-面板里看不见「Git 认证」分区时，先跑这一条 —— 能返回 JSON 就说明问题在浏览器半（`dsh.client`），
+面板里看不见「Mgitok」分区时，先跑这一条 —— 能返回 JSON 就说明问题在浏览器半（`dsh.client`），
 返回 404 就说明问题在宿主半（重启/重装）。
 
 ---
@@ -346,7 +346,7 @@ Get-Command git-credential-manager -ErrorAction SilentlyContinue
 | 现象 | 根因 | 处理 |
 |---|---|---|
 | `无法将"gitok_doctor"项识别为 cmdlet` | 它是模型工具不是命令 | 在对话里让 AI 调，别在终端敲 |
-| 面板里没有「Git 认证」分区 | 加 `dsh.client` 后没重装 / 没重启 | `install.ps1 -Force` + 完全退出重开 |
+| 面板里没有「Mgitok」分区 | 加 `dsh.client` 后没重装 / 没重启 | `install.ps1 -Force` + 完全退出重开 |
 | 面板报「状态接口不可用」 | `/plugins/gitok/status` 404 | 跑 §2.2 确认路由注册了；确认 `index.js` 修改早于进程启动 |
 | `/status` 一直转圈超 30s | `probeTimeoutMs` 太长或 pwsh 卡住 | `cordis.patch.yml` 把 `probeTimeoutMs` 降到 10000 |
 | `没有匹配的插件（检查 -Only 或 list.json 的 status）` | `list.json` 那条不是 `active` | 改 `status: "active"` |
@@ -384,12 +384,12 @@ cd $env:USERPROFILE\.dsh\profiles\desktop
 ## 8. 验收清单（迁移后逐条打勾）
 
 ```text
-[ ] install.ps1 -Check 显示 dsh-gitok v0.3.5 status=active link-junction
+[ ] install.ps1 -Check 显示 dsh-gitok v0.3.6 status=active link-junction
 [ ] node --check lib/index.js 通过
 [ ] node --check lib/client.js 通过
 [ ] mock ctx 测试：tools=9, routes=5（status + login/revoke/rotate/bootstrap）
 [ ] 完全退出 DSH 再打开
-[ ] 设置里能看到「Git 认证」分区
+[ ] 设置里能看到「Mgitok」分区
 [ ] 面板徽标颜色正确（ok 绿 / warn 黄 / error 红 / unknown 灰）
 [ ] 「持续监控」六行都在，且 unknown 不冒充绿
 [ ] 点「重新检查」能刷新（不是转圈卡死）

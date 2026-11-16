@@ -2,7 +2,7 @@
 # 安装：& C:\dsh\dshplug\install.ps1 -Only dsh-gitok -RepoRoot 'C:\dsh\dshplug'
 #
 # 一个插件行：宿主半运行 lib/index.js，注册 9 个 gitok_* 工具 + 5 条 HTTP 路由；
-# 浏览器半 lib/client.js 在「设置 → Git 认证」里画状态面板（见 package.json 的 dsh.client）。
+# 浏览器半 lib/client.js 在「设置 → Mgitok」里画状态面板（见 package.json 的 dsh.client）。
 #
 # 安全约定：本文件不含任何密钥。密钥只存在于 Windows 凭据管理器（DPAPI）。
 #

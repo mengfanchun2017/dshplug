@@ -333,7 +333,7 @@ Manage
 [ ] 面板两个写按钮有二次确认，且请求体不含任何 token 字段
 
 Monitor
-[ ] 面板「Git 认证」分区实际渲染，徽标与 /plugins/gitok/status 一致
+[ ] 面板「Mgitok」分区实际渲染，徽标与 /plugins/gitok/status 一致
 [ ] 探测失败时徽标是 unknown（「状态未知」）而不是绿色勾
 [ ] 指定 targets=["u26claude4"] 能报出：token invalid + 空口令私钥 P0
 [ ] doctor 输出无任何 40+ 字符高熵串（ADR-002 脱敏验收）
