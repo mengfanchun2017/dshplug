@@ -164,8 +164,10 @@ c.slots={inject:(n,f)=>f(),
          register:(o,comp)=>{console.log('  slot', o.name, o.id||o.key, 'order='+(o.order||'-'));return()=>{}}};
 ```
 
-期望看到三行：`settings.section gitok order=65`、`main gitok-main`、
-`sidebar.panellist gitok order=465`（ADR-010）。
+期望看到**只有一行**：`settings.section gitok order=65`。
+
+> v0.3.5 起**不再注册** `sidebar.panellist` / `main`（只保留设置入口，见 ADR-010）。
+> 如果你看到三行，说明跑的是旧版代码。
 
 > **注意**：浏览器半改完只需**刷新页面**；只有 `package.json` 的 `dsh.client` 变了才需要重装。
 
@@ -355,7 +357,8 @@ Get-Command git-credential-manager -ErrorAction SilentlyContinue
 | 面板「仓库级 helper」显示了 `credentialStore: ...` | 正则 `\s*` 吃掉换行 | 已改用 `[ \t]*` + `(.*)`（见 README 8.7） |
 | 侧边栏导航文字没翻译 | `t` 写成了直通函数 | 必须 `ctx.locale.bind(NS)`（见 README 8.8） |
 | **设置和侧边栏都没有它，控制台干净** | `exports` 缺 `"./client"`（8.11）**或** `inject` 漏列 `locale`（8.12） | 先跑 §2.2 看 apply 是否抛错；不抛就查 `exports` |
-| **设置里有、侧边栏没有** | 没注册 `sidebar.panellist`（8.13） | 补 `sidebar.panellist` + `main` 两个插槽 |
+| **设置里有、侧边栏没有**（gitok 本插件） | **设计如此**，v0.3.5 起故意不注册侧栏（ADR-011） | 不用修 |
+| **设置里有、侧边栏没有**（其他插件） | 没注册 `sidebar.panellist`（8.13） | 补 `sidebar.panellist` + `main` 两个插槽 |
 | 徽标显示「未知」但各项都正常 | 未配置的 `heartbeat` 拉低了整体等级（8.14） | 已修；或配 `heartbeatUrl` |
 
 ---

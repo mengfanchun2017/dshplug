@@ -292,7 +292,12 @@ Cordis 只注入声明过的服务，`ctx.locale` 是 `undefined`，`apply` 第�
 
 ## ADR-010 · 侧边栏与设置面板并列提供，两个插槽分开注册
 
-**日期**：2026-11-16 ｜ **状态**：已采纳
+**日期**：2026-11-16 ｜ **状态**：⚠ **已被 ADR-011 取代**（保留原文作历史，别再照它实现）
+
+> 本 ADR 的结论是「两个入口都做」。一天后用户明确否掉了：
+> 「gitok 在设置就看就可以了 不用侧边栏」。改为只保留设置入口，见 **ADR-011**。
+> 正文保留原样，因为**«两个插槽怎么分开注册»这部分技术细节仍然有效** ——
+> 将来任何插件要加侧栏图标都用得上，只是 gitok 自己不再用。
 
 ### 结论
 
@@ -339,13 +344,80 @@ v0.3.2 补上时，最初把 `main` 塞进了 `sidebar.panellist` 的回调里�
 
 | 项 | 值 |
 |---|---|
-| 版本 | **0.3.2** |
+| 版本 | **0.3.5** |
 | 状态 | `active` |
 | 安装形态 | `link-junction` → `C:\dsh\dshplug\dsh-gitok` |
 | 安装 profile | `desktop` |
 | 宿主机 | `REDMIPRO` |
 | 宿主半 | 9 个工具 + 5 条路由 |
-| 浏览器半 | **两处入口**：设置 → Mgitok（`settings.section`, order 65）+ 侧边栏图标（`sidebar.panellist`, order 465）+ 面板本体（`main`）；四态 + 六项监控 + 受控写按钮 |
+| 浏览器半 | **一处入口**：设置 → Mgitok（`settings.section`, order 65）；四态 + 六项监控（带 `?` 就地说明）+ 受控写按钮 + WSL 分步命令区。侧边栏与 `main` 已于 v0.3.5 移除（ADR-011） |
 | `inject` | `['slots', 'locale']`（ADR-009） |
 | 已验证 | mock-ctx 注册 9 工具/5 路由；三端点四态实测（windows=unknown / claude=warn / u26claude4=error）；面板组件渲染实测 |
 | WSL 端点 | 默认不动（ADR-006），参数可临时指定 |
+
+---
+
+## ADR-011 · gitok 只保留设置入口，移除侧边栏与 main 面板
+
+**日期**：2026-11-16 ｜ **状态**：已采纳（取代 ADR-010）
+
+### 结论
+
+浏览器半**只注册 `settings.section` 一个插槽**（`id: gitok`, `order: 65`）。
+删掉 `sidebar.panellist` 注册、`main` 面板注册，以及只为侧栏存在的 `GitokIcon` 组件。
+
+```js
+// apply() 里现在只有这一个注册
+ctx.effect(
+  () => ctx.slots.inject('settings.section', () =>
+    ctx.slots.register(
+      { name: 'settings.section', id: 'gitok', order: 65, label: () => t('nav'), locale: NS },
+      GitokSection,
+    )),
+  'gitok: settings section',
+);
+```
+
+### 理由
+
+1. **功能完全重复**。`main` 面板注册的就是 `GitokSection` 本身，和设置里那个是**同一个组件**。
+   用户原话：「gitok 在设置就看就可以了 不用侧边栏（功能类似）」。
+
+2. **gitok 不是「日常瞟一眼」型插件**。ADR-010 当时的判断是
+   「认证是否正常是每天都想看的信息，藏在两级设置里等于不看」。
+   实际使用后这个前提不成立 —— 凭据配好之后长期不变，
+   真正需要看的时候是**出问题时**，而那时用户会主动去设置找。
+   反而是侧栏多一个常驻图标更打扰。
+
+3. **省掉一个常驻请求**。`GitokIcon` 挂载时要 `fetchStatus(false, 8000)` 探一次状态。
+   删掉图标后，浏览器半只在用户真正打开设置面板时才请求 `/status`。
+
+### 反面代价
+
+- **侧栏少一个入口**：想快速看状态必须先进设置。这是用户明确接受的代价。
+- **`GitokIcon` 被删掉**（连同状态小点逻辑约 60 行）。
+  将来若要恢复侧栏，这段要重写 —— 可参考 `dsh-synchub/lib/client.js` 的同名组件。
+- **与 `dsh-getbrain` / `dsh-synchub` 的形态不一致**：那两个都是「设置 + 侧栏」双入口。
+  这不违反约定 —— 双入口是**可选**的，取决于插件是否需要常驻可见；
+  `inject` 列表也跟着变短（仍为 `['slots', 'locale']`，因为 `settings.section` 也在 `slots` 里）。
+
+### 已否决的替代方案
+
+- **保留侧栏但隐藏图标**：`sidebar.panellist` 不注册、只留 `main`。
+  否决 —— `main` 面板没有入口就永远打不开，是死代码。
+- **侧栏保留但点击后跳转设置**：需要在组件里操作宿主路由，宿主没提供稳定接口，且属于 hack。
+- **两处都留、靠文案区分**（ADR-010 的做法）：已证伪，用户看到的就是「重复」。
+
+### 恢复方法（如果将来要重新加回侧栏）
+
+三步，缺一不可（细节见 ADR-010 正文与 README §8.13）：
+
+1. 恢复 `GitokIcon` 组件（图标 + 左上角状态小点，`top:-1, left:-2`）。
+2. 注册 `sidebar.panellist`（`id: gitok`, `order: 465`, `label: () => t('panelName')`），
+   同时把 `panelName` 键加回 locale 字典。
+3. **独立**注册 `main`（`key: 'gitok'`），**不要**塞进 sidebar 的回调里。
+
+> `inject` 写 `['slots', 'locale']` 两个都要，因为 `apply` 里 `ctx.slots` 和 `ctx.locale` 都会用到
+> （ADR-009 的铁律：`apply` 里每出现一次 `ctx.xxx`，`inject` 就必须有 `xxx`）。
+
+---

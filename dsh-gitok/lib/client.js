@@ -21,7 +21,7 @@ window.__ModuleLoader__.load({
     const { useState, useEffect, useCallback, useRef } = react;
 
     // inject 必须列全 apply 里用到的服务：
-    //   slots  —— 注册 settings.section / sidebar.panellist
+    //   slots  —— 只注册 settings.section（刻意不做侧边栏，见 apply 末尾说明）
     //   locale —— locale.register / locale.bind
     // 只写 ['slots'] 而实际访问 ctx.locale，会让 apply 直接抛
     // "Cannot read properties of undefined (reading 'register')"，
@@ -977,68 +977,6 @@ window.__ModuleLoader__.load({
     }
 
 
-    // ── 侧边栏入口图标 ────────────────────────────────────────────────────
-    // 与 dsh-synchub 同形态：这里只画一个图标 + 状态小点，
-    // **文字由插槽元数据的 label 渲染**，组件里再写名字会重复两遍。
-    // 图标取「钥匙 + 取销」的语义：一把钥匙 = 凭据，横线 = 正在校验。
-    function GitokIcon() {
-      const [level, setLevel] = useState(null);
-
-      useEffect(() => {
-        let alive = true;
-        // 只在挂载时探一次；不轮询，避免侧栏常驻刷 Host 子进程。
-        fetchStatus(false, 8000)
-          .then((d) => { if (alive && d && d.ok && d.status) setLevel(d.status.level); })
-          .catch(() => { /* 拿不到就不显示小点，不能因此弄坏侧栏 */ });
-        return () => { alive = false; };
-      }, []);
-
-      const bad = level === 'error';
-      const warn = level === 'warn';
-      const title = bad
-        ? 'Mgitok：认证异常'
-        : warn
-          ? 'Mgitok：有需要处理的项'
-          : level === 'ok'
-            ? 'Mgitok：认证正常'
-            : 'Mgitok';
-
-      return react.createElement(
-        'span',
-        {
-          title,
-          'aria-label': title,
-          style: { display: 'inline-flex', alignItems: 'center', position: 'relative' },
-        },
-        react.createElement(
-          'svg',
-          {
-            width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none',
-            stroke: 'currentColor', strokeWidth: 1.9,
-            strokeLinecap: 'round', strokeLinejoin: 'round',
-            'aria-hidden': 'true',
-          },
-          // 钥匙头（圆环）
-          react.createElement('circle', { cx: 8, cy: 9, r: 3.2 }),
-          // 钥匙杆 + 齿
-          react.createElement('path', { d: 'M10.4 11.4L19 20' }),
-          react.createElement('path', { d: 'M15.5 16.5l2-2' }),
-          react.createElement('path', { d: 'M17.5 18.5l2-2' }),
-        ),
-        // 小点放在图标**左上角**：右上角会跟宿主其他角标撞位置（synchub 踩过）。
-        (bad || warn) && react.createElement('span', {
-          style: {
-            position: 'absolute', top: -1, left: -2,
-            width: 5, height: 5, borderRadius: '50%',
-            background: bad
-              ? 'var(--dsw-alias-state-error-primary, #dc2626)'
-              : 'var(--dsw-alias-state-warn-primary, #d97706)',
-            boxShadow: `0 0 0 1.5px ${bad ? 'rgba(220,38,38,.22)' : 'rgba(217,119,6,.22)'}`,
-            pointerEvents: 'none',
-          },
-        }),
-      );
-    }
 
 
     // ── 插件入口 ──────────────────────────────────────────────────────────
@@ -1050,10 +988,10 @@ window.__ModuleLoader__.load({
         ctx.locale.register(NS, {
           // 显示名统一为「M + 技能名」，全小写（2026-11-16 约定）。
           // 品牌标识 M 是固定前缀；仓库目录仍为 dsh-gitok，两者不要混。
-          // nav    = 设置分区 + 侧边栏条目的显示名
-          // panelName 与 getbrain 保持同名键，方便两者对照维护
-          zh: { nav: 'Mgitok', panelName: 'Mgitok' },
-          en: { nav: 'Mgitok', panelName: 'Mgitok' },
+          // nav = 设置分区的显示名。
+          // 不需要 panelName：那是给侧边栏用的，本插件不注册 sidebar.panellist。
+          zh: { nav: 'Mgitok' },
+          en: { nav: 'Mgitok' },
         }),
         'gitok: settings dictionaries',
       );
@@ -1078,33 +1016,12 @@ window.__ModuleLoader__.load({
         'gitok: settings section',
       );
 
-      // 侧边栏入口。order 取 465：synchub 是 460，排在它之后。
-      // sidebar.panellist 必须与一个 main 面板同时注册：点图标后打开的
-      // 就是这个 main（key 对应）。不注册 main 时图标点不动。
-      // main 面板直接复用 GitokSection，与设置里那个是同一个组件。
-      // main 面板：点侧栏图标后打开的就是它（key 与 sidebar 条目的 id 对应）。
-      // 单独 inject('main') 而不是塞进 sidebar 的回调里：
-      // 宿主没有 sidebar 插槽时，面板本体仍应能打开（getbrain/synchub 都是这个结构）。
-      ctx.effect(
-        () =>
-          ctx.slots.inject('main', () =>
-            ctx.slots.register({ name: 'main', key: 'gitok', id: 'gitok-main', locale: NS }, GitokSection),
-          ),
-        'gitok: main panel',
-      );
 
-      // 侧边栏入口图标。order 取 465：synchub 是 460，排在它之后。
-      // label 用 panelName 键（与 getbrain 同名），文字由插槽渲染，组件里不要再写名字。
-      ctx.effect(
-        () =>
-          ctx.slots.inject('sidebar.panellist', () =>
-            ctx.slots.register(
-              { name: 'sidebar.panellist', id: 'gitok', order: 465, label: () => t('panelName'), locale: NS },
-              GitokIcon,
-            ),
-          ),
-        'gitok: sidebar entry',
-      );
+      // ⚠ 刻意【不】注册 sidebar.panellist 与 main：
+      // gitok 的功能全部在设置面板里，侧边栏只是同一组件的第二个入口，
+      // 两处并存等于重复（用户 2026-11-16：「gitok 在设置就看就可以了 不用侧边栏」）。
+      // 这样 sideBar 少一个图标，也少一次无谓的状态探测。
+      // 若日后要恢复：重新注册 sidebar.panellist（icon 组件需一并恢复）+ main（key 对应）。
 
       // 自报一次，便于黑盒确认 slot 注册真的执行了（失败不影响界面）。
       try {

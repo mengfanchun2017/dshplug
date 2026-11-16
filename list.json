@@ -35,7 +35,7 @@
     {
       "name": "dsh-gitok",
       "dir": "dsh-gitok",
-      "version": "0.3.4",
+      "version": "0.3.5",
       "description": "Git 认证一站式管理，分 Init / Manage / Monitor 三层。设置里有一个「Mgitok」面板（四态状态卡 + 六项持续监控 + 一键初始化/重新登录/撤销按钮 + WSL 接管说明 + 原始报告）。底层 9 个 gitok_* 工具（doctor/list/verify/login/revoke/adopt/bootstrap/rotate/monitor），凭据收敛到 Windows 凭据管理器（DPAPI，出机器不可用），WSL 经 interop 借用不落盘。文档三份：README（怎么用）/ BOOTSTRAP（怎么做）/ ADR（为什么，含决策 D）。",
       "installedOn": [
         "REDMIPRO"

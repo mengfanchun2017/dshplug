@@ -263,6 +263,10 @@ git -c credential.helper=<Windows GCM 路径> \
 
 在「设置」侧边栏注册一顶层分区 **Git 认证**（`settings.section`，`id: gitok`，`order: 65`）。
 
+> **只有这一个入口**（2026-11-16 起）。v0.3.0–v0.3.4 曾在应用侧边栏另起一个 `sidebar.panellist` 图标 +
+> `main` 面板，但两处显示的是**同一个组件**，功能完全重复。用户：“gitok 在设置就看就可以了 不用侧边栏”
+> → v0.3.5 删掉侧栏与图标（`GitokIcon` 一并移除）。理由与恢复方法见 `ADR-010`。
+
 面板做什么：
 
 | 区域 | 内容 |
@@ -751,10 +755,14 @@ mod.apply({ effect: f => f(), slots: { inject(){}, register(){ return ()=>{} } }
 
 ### 8.13 从没注册过 `sidebar.panellist`，侧边栏当然没有
 
+> **看这节前先确认版本**：v0.3.5 起 gitok **故意不注册侧栏**（ADR-011）。
+> 设置里能用、侧栏没图标，**这是设计如此，不是 bug**。
+> 下面这些内容仍适用于其他插件（如 synchub / getbrain 都是双入口）。
+
 **症状**：设置里有面板了，但**侧边栏**没有入口。
 
-**根因**：不是 bug，是**没写**。v0.2.0 只注册了 `settings.section`，
-侧栏入口是 v0.3.2 才补的。
+**根因**：不是 bug，是**没写**。`sidebar.panellist` 与 `settings.section` 是**两个独立插槽**，
+只注册后者就只有设置入口。gitok 在 v0.3.2 一度补上，v0.3.5 又按用户要求删掉。
 
 **要点**（照 `dsh-synchub` / `dsh-getbrain` 的结构抄）：
 
