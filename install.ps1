@@ -1,11 +1,11 @@
-﻿# dsh-plugins · 按 list.json 注册自研插件到 DSH profile
+# dshplug · 按 list.json 注册自研插件到 DSH profile
 #
 # 用法：
-#   & "C:\dsh\dsh-plugins\install.ps1"                     # 装全部 status=active 的插件
-#   & "C:\dsh\dsh-plugins\install.ps1" -Only dsh-synchub   # 只装一个
-#   & "C:\dsh\dsh-plugins\install.ps1" -List               # 只看清单
-#   & "C:\dsh\dsh-plugins\install.ps1" -Check              # 体检（含链接形态与是否已断链）
-#   & "C:\dsh\dsh-plugins\install.ps1" -Force              # 已是最新也强制重装
+#   & "C:\dsh\dshplug\install.ps1"                     # 装全部 status=active 的插件
+#   & "C:\dsh\dshplug\install.ps1" -Only dsh-synchub   # 只装一个
+#   & "C:\dsh\dshplug\install.ps1" -List               # 只看清单
+#   & "C:\dsh\dshplug\install.ps1" -Check              # 体检（含链接形态与是否已断链）
+#   & "C:\dsh\dshplug\install.ps1" -Force              # 已是最新也强制重装
 #
 # 设计要点：用 `link:` 而不是 `file:`。
 #   file: → pnpm 把每个文件**硬链接**进 node_modules。任何「删除+重建」的保存

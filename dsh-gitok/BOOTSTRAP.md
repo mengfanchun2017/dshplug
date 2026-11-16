@@ -3,7 +3,7 @@
 > 命令行手册：**装机、验证、排错、迁移**。全部命令可直接复制。
 > 代码怎么设计、为什么这么定 → 见 [`ADR.md`](./ADR.md)；面板长什么样 → 见 [`README.md`](./README.md)。
 >
-> 快照时间：**2026-11-16** ｜ 版本 **0.3.7** ｜ 宿主机 `REDMIPRO` ｜ profile `desktop`
+> 快照时间：**2026-11-16** ｜ 版本 **0.3.8** ｜ 宿主机 `REDMIPRO` ｜ profile `desktop`
 
 ---
 
@@ -76,7 +76,7 @@ $node = "$env:USERPROFILE\AppData\Local\Programs\DeepSeek Harness\resources\runt
 & $node -e "const j=require('C:/dsh/dshplug/dsh-gitok/package.json');console.log(j.version, !!j.dsh.client, j.files)"
 ```
 
-期望：两次 `--check` 都不输出内容（exit 0）；第三行打印 `0.3.7 true [...]`。
+期望：两次 `--check` 都不输出内容（exit 0）；第三行打印 `0.3.8 true [...]`。
 
 ### 2.2 第二层：宿主半注册（mock ctx，不起 DSH）
 
@@ -195,8 +195,20 @@ summary : 已配置，认证可用
 creds   : 1
 ```
 
-**404 的含义**：路由没挂上。按顺序排查 ①DSH 是否在 `index.js` 修改**之后**启动的
-②是否重装过 ③`webServer` 服务是否存在（纯 CLI 模式没有）。
+**404 的含义**：路由没挂上。按顺序排查：
+① DSH 是否在 `index.js` 修改**之后**启动的 ② 是否重装过
+③ `webServer` 服务是否存在（纯 CLI 模式没有）。
+
+> **❗ 500 先说这一条，不要先去改代码**：若错误串形如 `XXX is not defined`，
+> 而源码里这个常量确实存在（`Select-String lib\index.js -Pattern 'const XXX'`），
+> 那十有八九是「**代码已修、进程未重启**」——正在跑的 DSH 里还是旧模块。
+> 对比两个时间即可确认：
+> ```powershell
+> Get-Process | Where-Object { $_.ProcessName -like '*Harness*' } | Select-Object Id, StartTime
+> (Get-Item C:\dsh\dshplug\dsh-gitok\lib\index.js).LastWriteTime
+> ```
+> 进程 `StartTime` **早于** `LastWriteTime` → 必须完全退出 DSH（关窗口不算）再打开。
+> 这类问题的特征是：**冒烟测试是绿的，路由却是 500 的**（因为测试 import 的是磁盘新文件）。
 
 面板里看不见「Mgitok」分区时，先跑这一条 —— 能返回 JSON 就说明问题在浏览器半（`dsh.client`），
 返回 404 就说明问题在宿主半（重启/重装）。
@@ -336,7 +348,7 @@ cd C:\dsh\dshplug
 & git log --oneline -3
 ```
 
-应看到与 `dsh-gitok v0.3.5` 相关的提交在最近几条里。
+应看到与 `dsh-gitok v0.3.8` 相关的提交在最近几条里。
 
 ### 5.2 切换 DSH 工作区
 
@@ -429,7 +441,7 @@ cd $env:USERPROFILE\.dsh\profiles\desktop
 ## 8. 验收清单（迁移后逐条打勾）
 
 ```text
-[ ] install.ps1 -Check 显示 dsh-gitok v0.3.7 status=active link-junction
+[ ] install.ps1 -Check 显示 dsh-gitok v0.3.8 status=active link-junction
 [ ] node --check lib/index.js 通过
 [ ] node --check lib/client.js 通过
 [ ] mock ctx 测试：tools=9, routes=5（status + login/revoke/rotate/bootstrap）

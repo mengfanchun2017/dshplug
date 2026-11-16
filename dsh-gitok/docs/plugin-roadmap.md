@@ -19,7 +19,7 @@
 
 ## 0. 结论先行
 
-把插件从「6 个零散工具 + 一个只读面板」升级成一条闭环：
+把插件从「6 个零散工具 + 一个只读面板」升级成 **9 工具 + 5 路由**的闭环（**已完成，见 §5**）：
 
 ```
 Init  从零到可用   →   Manage  查 / 切 / 换 / 删   →   Monitor  持续可观测
@@ -92,7 +92,7 @@ Claude 报告里最有价值的是 `ccconfig` 那套**初始化/监控的工程�
 
 ---
 
-## 2. 现状：6 个工具落在哪一层（本次实测）
+## 2. 立项前基线：6 个工具落在哪一层（本段记录立项时状态）
 
 | 层 | 现有能力 | 落点 | 主要缺口 |
 |---|---|---|---|
@@ -158,7 +158,7 @@ Claude 报告里最有价值的是 `ccconfig` 那套**初始化/监控的工程�
 | 加密 / 不落明文 | ✅ | ✅ |
 | 最小权限 | ❌ `gho_` 是 `gist, repo, workflow` 全宽 | ✅ 命中 Claude §9.1 |
 | 可按机器命名 / 单独吊销 | ❌ GitHub 只显示「Git Credential Manager」 | ✅ |
-| 插件现有支持 | ✅ `gitok_login` 直接支持 | ⚠️ 需新增 `store` 封装，当前 6 工具没有 |
+| 插件现有支持 | ✅ `gitok_login` 直接支持 | 立项时此功能缺口已由 `gitok_bootstrap` 覆盖 |
 | 轮换 | 重新 login，无需管 token | 人工 Regenerate + 重新 store |
 
 > 两份材料**独立得出同一结论**：Claude §2/§9.1 与 `README.md` §3 都建议「靠向 fine-grained PAT」。
@@ -234,7 +234,7 @@ useHttpPath: false                # ← 注释「推荐 true」与值矛盾，�
 要到**下次完全退出 DSH 再打开**才生效，验收时必须显式重启一次。
 
 **③ 装机步骤统一**（BOOTSTRAP §1 / §8）：
-`install.ps1 -Check` → `-Only dsh-gitok -Force` → **完全退出 DSH 再打开** → 三层验证（语法 / mock ctx 6 工具+1 路由 / `/plugins/gitok/status`）→ 面板验收清单。
+`install.ps1 -Check` → `-Only dsh-gitok -Force` → **完全退出 DSH 再打开** → 三层验证（语法 / mock ctx 9 工具+5 路由 / `/plugins/gitok/status`）→ 面板验收清单。
 
 **④ 改什么要重启 / 改什么刷页面**（BOOTSTRAP §0.2 四行表，多机部署最易误判）：
 `lib/index.js` 与 `cordis.patch.yml` 的 `config:` → 完全退出重开；`lib/client.js` → 刷新页面；
@@ -273,7 +273,7 @@ useHttpPath: false                # ← 注释「推荐 true」与值矛盾，�
 | 15 | 修 §4⑤ 四处文档不一致 | 多机 | 纯文档 | ✅ 完成 |
 | 16 | D/E 方案择一，新增 ADR 条目（结论→理由→反面代价→已否决） | 决策 | `ADR.md` | ✅ 完成（ADR-008，已选 D） |
 
-> 16 项中 14 项已落地；剩下 1、2、4 是**用户动作**（轮换 PAT / 给私钥设口令 / 看一眼面板）。
+> 本表实为 **17 行**（含 4b）：**12 项完全落地**、**3 项部分落地**（#2 只报不修、#8 回滚不含凭据、#3 与 README 曾不一致）、
 > 另：本批新增了 `BOOTSTRAP.md` §9~12（新机从零、三层更新边界、给 Claude 的自包含说明）。
 >
 > **复核轮（2026-11-13）额外修掉三处真缺陷：**

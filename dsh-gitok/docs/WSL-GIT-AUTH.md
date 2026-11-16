@@ -68,7 +68,10 @@ cp ~/.gitconfig ~/.gitconfig.bak.gitok-$(date +%Y%m%d%H%M%S)
 # ③ 按 host 精确接管（不是 --global helper，别一把梭）
 for h in github.com gist.github.com; do
   git config --global --unset-all "credential.https://$h.helper" 2>/dev/null || true
-  git config --global --add "credential.https://$h.helper" "!$GCM"
+  # 注意内层双引号要转义写成 \" ：外层 shell 会剥掉最外层引号，
+  # 只有转义的内层引号才能让 git 存下 !"<路径>"。
+  # 不转义 → 存储值无引号 → 路径带空格时 sh 按空格拆开报 not found。
+  git config --global --add "credential.https://$h.helper" "!\"$GCM\""
 done
 
 # ④ 复查：每个 host 只应剩一条

@@ -802,7 +802,10 @@ window.__ModuleLoader__.load({
         [
           'for h in github.com gist.github.com; do',
           'git config --global --unset-all "credential.https://$h.helper" 2>/dev/null || true',
-          'git config --global --add "credential.https://$h.helper" "!' + gcmWsl + '"',
+          // 内层双引号必须转义写：外层 shell 会剥掉最外一层，只有转义的内层引号
+          // 才能让 git 存下 `!"<路径>"`。不转义则存储值无引号，路径带空格时
+          // sh 按空格拆开报 `not found`（实测 WSL git 2.53）。
+          'git config --global --add "credential.https://$h.helper" "!\\"' + gcmWsl + '\\""',
           'done',
         ].join('\n');
       const step4 =

@@ -60,7 +60,7 @@ C:\dsh\dshplug\
 │  ├─ cordis.patch.yml
 │  ├─ index.js + client.js + gn.py / gn.ps1
 │  └─ SKILL.md        # 整理纪律
-├─ dsh-gitok\        ← 插件 4：Git 认证一站式管理（v0.3.5 active）
+├─ dsh-gitok\        ← 插件 4：Git 认证一站式管理（v0.3.8 active）
 │  ├─ package.json    # dsh.bundle.patch + dsh.client（有浏览器半）
 │  ├─ cordis.patch.yml
 │  ├─ lib\index.js    # 9 个 gitok_* 工具 + 5 条 /plugins/gitok/* 路由
@@ -85,7 +85,7 @@ C:\dsh\dshplug\
 
 ### 目录名与包名
 
-**当前四个自研插件的「目录名 = 包名 = 清单 name」三者一致**（`dsh-synchub` / `dsh-getbrain` / `dsh-pixel` / `dsh-larkcli`），
+**当前自研插件的「目录名 = 包名 = 清单 name」三者一致**（`dsh-synchub` / `dsh-getbrain` / `dsh-gitok` / `dsh-larkcli`），
 `plugpush.ps1 <名字>` 与 `install.ps1 -Only <名字>` 直接用清单 `name` 即可。
 
 > 历史：`dsh-getbrain` 早期包名是 `@local/getnote-organize`（Get笔记 时代留下），当时靠 `list.json` 的

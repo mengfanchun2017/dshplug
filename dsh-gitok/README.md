@@ -6,7 +6,7 @@ Git 认证一站式管理插件：**检查 / 建议 / 配置 / 验证 / 撤销**
 （DPAPI 加密、绑定用户+本机、出机器解不开）。WSL 通过 interop 直接调用 Windows 的
 `git-credential-manager.exe`，**自己一个字节的密钥都不存**。
 
-> **版本 0.3.7 ｜ 状态 active ｜ 2026-11-16**
+> **版本 0.3.8 ｜ 状态 active ｜ 2026-11-16**
 > 未发布 npm，已用 `link:` 装进 `desktop` profile（宿主机 `REDMIPRO`）。
 > 这份 README 是**交接文档**：设计、机制、实测数据、踩过的坑全在里面，换机器/换工作区照着读就能接着开发。
 
@@ -457,12 +457,13 @@ $node = "$env:USERPROFILE\AppData\Local\Programs\DeepSeek Harness\resources\runt
 - ✅ `gitok_adopt` 接管 claude 后 helper 只剩一条，且端到端仍可用
 - ✅ 修复后已把 claude 的 `.gitconfig` 还原（493 字节，与原始一致）
 - ✅ `runDoctor` + `parseStatus` 在真实体检输出上验证：`level=ok`、`creds=1`
-- ✅ mock ctx 验证：9 个工具 + 5 条路由均能注册（v0.3.0 实测）
+- ✅ mock ctx 验证：9 个工具 + 5 条路由均能注册（`tools/smoke-route.mjs`，含写路由guard 与 `requiresConfirm` 断言）
 
 ### 7.2 待办
 
-- [ ] `gitok_login` 未做真实登录实测（会弹浏览器，需人工在场）
-- [ ] 没有 mock ctx 的自动化测试（`test/` 目录还没建）
+- [x] ✅ `gitok_login` 已做过一次真实登录实测（GCM 返回 `oauth, len=40`，2026-11-13）；
+      失败路径（网络断开 / 拒绝授权）仍未覆盖
+- [x] ✅ mock ctx 自动化测试已建：`tools/smoke-route.mjs`（用法见 §8.12）
 - [x] ✅ **已装进 `desktop` profile**（2026-11-12，`list.json` 里 `status: active`、`installedOn: ["REDMIPRO"]`）
 - [x] ✅ **重启后已验证**：`gitok_doctor` 在会话里实际可用（2026-11-12 16:37）
 - [x] ✅ **v0.2.0 设置面板**：`lib/client.js` + `dsh.client` + Host 路由已写完
@@ -471,12 +472,14 @@ $node = "$env:USERPROFILE\AppData\Local\Programs\DeepSeek Harness\resources\runt
 - [x] ✅ 面板「重新登录 / 一键初始化 / 撤销凭据」按钮已做（`ActionButtons`），需 `dsh.client` 重启后可见
 - [x] ✅ `gitok_adopt` 已支持 `dryRun`（只报将执行什么，不改文件）
 - [x] ✅ `gitok_rotate` / `gitok_bootstrap` / `gitok_monitor` 均已实现
-- [ ] 没处理 `gitok_revoke` 之后「其他仓库还在用旧凭据」的提示
+- [x] ✅ `revokeImpact` 已实现（扫各仓库 `remote get-url origin` 匹配 host，撤销前先告知影响面）；
+      未做的是「其他仓库仍在用旧凭据」的**跨仓依赖分析**
 
 ### 7.3 已知限制
 
 - 只覆盖 **HTTPS** 认证。SSH 密钥不在管理范围（`gitok_doctor` 能看到现状但不管）
-- 代理默认值 `127.0.0.1:7897` 是本机端口，换机器要改
+- 代理**默认空**，自动探测：插件 `proxy` 配置 → git 全局 `http.proxy` → 系统代理 → 直连。
+  不要硬编码本机端口 —— 本插件的 config 属于 profileConfig 同步面，写死会导致换机器后「git 认证莫名坏了」
 - `wincredman` 在网络登录 / SSH 会话下不可用（改用 `dpapi` store）
 - `gitok_doctor` 的 Windows 半边依赖 `pwsh` 在 PATH（PowerShell 7）
 - **WSL 功能默认关闭**：`cordis.patch.yml` 的 `targets` 目前只有 `windows`。
@@ -1091,7 +1094,7 @@ cd C:\dsh\dshplug; & git pull --ff-only
 | Windows 凭据 | ✅ GCM `wincredman`，`git:https://github.com`，用户 `mengfanchun2017` |
 | WSL `claude` | ⏸ **未改动**，仍用 gh helper + 明文 PAT（按用户要求保持原样） |
 | WSL `u26claude4` | ⏸ **未改动**，仍有空口令 SSH 私钥（待后续处理） |
-| 本插件 | ✅ `status: active`，已装进 `desktop`（v0.3.7，link-junction） |
+| 本插件 | ✅ `status: active`，已装进 `desktop`（v0.3.8，link-junction） |
 | 设置面板 | ✅ 代码已完成（宿主路由 + 浏览器半）；需重启 DSH 后在界面上确认 |
 ---
 

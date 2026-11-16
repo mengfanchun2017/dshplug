@@ -240,6 +240,36 @@ function toWslPath(winPath) {
 }
 
 /**
+ * 把 helper 路径包成 git **存储值**里的形式：`!"<路径>"`。
+ *
+ * 【为什么必须加引号】git 对 `!` 前缀的值是把**后面整串**交给 sh 执行。
+ * 路径里有空格时（Git for Windows 默认就装在 `C:\\Program Files\\Git\\...`），
+ * 不包引号会被 sh 按空格拆开，报 `/mnt/c/Program: not found`。
+ * 实测（WSL claude, git 2.53）：存储 `!/mnt/c/Spr Dir/good.sh` → 失败；
+ *                           存储 `!"/mnt/c/Spr Dir/good.sh"` → 成功。
+ *
+ * 本函数只负责**展示**用的值；写进命令还要再过一层 shellArg。
+ */
+function helperDisplay(p) {
+  return '!"' + String(p).replace(/"/g, '\\"') + '"'
+}
+
+/**
+ * 把 helper 存储值变成 `git config --add` 的**命令行参数**。
+ *
+ * 【关键】外层 shell 会把最外一层双引号剥掉，所以内层的双引号必须转义着写，
+ * 才能让 git 存下带字面双引号的值。实测对比：
+ *   命令里写 "!$GCM"        → 存储 !/a b/gcm       → sh 拆开 → 失败
+ *   命令里写 "!\"$GCM\""   → 存储 !"/a b/gcm"     → 正常   → 成功
+ * 本机 MinGit 路径无空格，所以旧代码看上去一直是对的；换到默认的
+ * `C:\\Program Files\\Git\\...` 就会坏。
+ */
+function shellArg(p) {
+  const inner = helperDisplay(p).replace(/["$`\\]/g, (c) => '\\' + c)
+  return '"' + inner + '"'
+}
+
+/**
  * 在指定端点上运行一条命令。
  * target === 'windows' → 直接用本机；否则经 wsl.exe -d <name> -e bash -lc '...'
  */
@@ -316,6 +346,14 @@ if ($keys.Count -gt 0) {
     "ssh nopass:      " + $(if ($np.Count) { $np -join ',' } else { 'none' })
   } else { "ssh nopass:      could-not-check" }
 } else { "ssh nopass:      no-keys" }
+# 下面两行必须显式输出：parseStatus 的 plaintext 检查靠它们。
+# 历史：probeWindows 曾经没有这两行，解析器把「取不到」当成「没发现明文」，
+# 实测往 ~/.git-credentials 写入假凭据后仍然报 plaintext=ok（假阴性）。
+$gc = "$env:USERPROFILE\\.git-credentials"
+"plaintext creds: " + $(if (Test-Path $gc) { "present($((Get-Item $gc).Length)b)" } else { 'none' })
+# gh 的 hosts.yml 只要里面还有 oauth_token 才算明文；gh auth logout 会清成空对象但留文件。
+$ghf = "$env:USERPROFILE\\.config\\gh\\hosts.yml"
+"gh hosts file:   " + $(if (Test-Path $ghf) { if ((Get-Content $ghf -Raw -ErrorAction SilentlyContinue) -match 'oauth_token') { 'has-token' } else { 'empty-file' } } else { 'none' })
 "ssh-agent:       " + ((Get-Service ssh-agent -ErrorAction SilentlyContinue).Status)
 $env:WSL_UTF8='1'
 "wsl distros:     " + ((@(wsl.exe -l -q 2>$null) | Where-Object { $_.Trim() -ne '' }) -join ',')
@@ -522,6 +560,20 @@ function parseStatus(text, gcmPath, extra = {}) {
       }
     }
 
+    // helper 叠加（bare 形式）：Windows 上 credential.helper 是个多值键，
+    // probeWindows 用 ` | ` 把它拼成一行。
+    // 【坑】旧代码只看 helper(scoped)，而 Windows 几乎没有 scoped 配置（它是全局 manager），
+    // 于是「manager + 另一个代答器」这种典型叠加在 Windows 上**永远报 ok**（已实测）。
+    // 注意：bare 值也可以来自 includeIf / 系统级，所以只报数不猜来源。
+    const bareRaw = pick(body, /^helper:[ \t]*(.*)$/m)
+    if (bareRaw) {
+      const bareVals = bareRaw.split('|').map((x) => x.trim()).filter(Boolean)
+      if (bareVals.length > 1) {
+        helperStacked = true
+        stackedAt.push('credential.helper=' + bareVals.length)
+      }
+    }
+
     // 收集 WSL 端点状态（windows 本机不算，它就是「源头」）
     if (sec.name && sec.name !== 'windows') {
       const raw = pick(body, /^helper\(scoped\):[ \t]*(.*)$/m)
@@ -535,8 +587,12 @@ function parseStatus(text, gcmPath, extra = {}) {
           return sp === -1 ? '' : x.slice(sp).trim()
         })
         .filter(Boolean)
-      // adopted = 只指向 GCM（路径里含 git-credential-manager），且没有其他代答器叠加
-      const adopted = ghHelpers.length === 1 && /git-credential-manager/i.test(ghHelpers[0])
+      // adopted = 所有 github 相关 helper 都指向 GCM，且至少有一条。
+      // 【坑】旧写法是 ghHelpers.length === 1 —— 那样「github.com 和 gist.github.com 各一条、
+      // 都指向 GCM」这种**完全正确**的接管状态会被判成未接管（总数=2），
+      // 面板上显示「⚠️ 未接管」而实际早就配好了。
+      // 正确的语义不是「只有一条」，而是「没有任何非 GCM 的代答器在抢答」。
+      const adopted = ghHelpers.length > 0 && ghHelpers.every((h) => /git-credential-manager/i.test(h))
       wslEndpoints.push({
         name: sec.name,
         adopted,
@@ -587,12 +643,16 @@ function parseStatus(text, gcmPath, extra = {}) {
 
   // ---- f：依赖漂移（GCM / 代理 / 端点可达） ----
   const gcmMissing = !gcmPath
+  // undefined = 本次没探（没使用代理）；true/false 才是真实结果。
+  // 不能把 undefined 当成 ok 的旁证 —— 它只意味着「没查」，不等于「查了没问题」。
   const proxyStr = extra.proxyReachable
   let depLevel = 'ok'
   let depDetail = 'GCM 就位，端点探测正常'
   if (gcmMissing) { depLevel = 'error'; depDetail = '未找到 GCM，无法管理凭据' }
   else if (endpointTimeout) { depLevel = 'error'; depDetail = '有端点探测超时或失败（WSL 可能未启动）' }
   else if (proxyStr === false) { depLevel = 'warn'; depDetail = '代理端口连不上，git 可能超时' }
+  else if (proxyStr === true) { depDetail = 'GCM 就位，端点探测正常，代理端口可连' }
+  else { depDetail = 'GCM 就位，端点探测正常（本次未走代理，未探代理端口）' }
   add('deps', '依赖与网络', depLevel, depDetail)
 
   // ---- 汇总 ----
@@ -843,7 +903,7 @@ async function toolAdopt(api, args) {
       lines.push(`  1. 备份 \`~/.gitconfig\` → \`~/.gitconfig.bak.gitok-<时间戳>\``)
       for (const h of hosts) {
         lines.push(`  2. \`git config --global --unset-all credential.https://${h}.helper\``)
-        lines.push(`  3. \`git config --global --add credential.https://${h}.helper "!${gWsl}"\``)
+        lines.push(`  3. \`git config --global --add credential.https://${h}.helper ${shellArg(gWsl)}\``)
         if (uhp) lines.push(`  4. \`git config --global credential.https://${h}.useHttpPath true\``)
       }
       lines.push('')
@@ -862,7 +922,7 @@ async function toolAdopt(api, args) {
     const cmds = []
     for (const h of hosts) {
       cmds.push(`git config --global --unset-all "credential.https://${h}.helper" 2>/dev/null || true`)
-      cmds.push(`git config --global --add "credential.https://${h}.helper" "!${gWsl}"`)
+      cmds.push(`git config --global --add "credential.https://${h}.helper" ${shellArg(gWsl)}`)
       if (uhp) cmds.push(`git config --global "credential.https://${h}.useHttpPath" true`)
     }
     const w = await runOn(target, cmds.join('; '), { timeoutMs: api.probeTimeout() })
@@ -1079,7 +1139,7 @@ async function toolBootstrap(api, args) {
       const steps = [
         `cp ~/.gitconfig ~/.gitconfig.bak.gitok-$(date +%Y%m%d%H%M%S) 2>/dev/null || true`,
         `git config --global --unset-all "credential.https://github.com.helper" 2>/dev/null || true`,
-        `git config --global --add "credential.https://github.com.helper" "!${gWsl}"`,
+        `git config --global --add "credential.https://github.com.helper" ${shellArg(gWsl)}`,
         `git config --global --get-all "credential.https://github.com.helper"`,
       ]
       const w = await runOn(target, steps.join('; '), { timeoutMs: api.probeTimeout() })
@@ -1528,7 +1588,13 @@ export function apply(ctx, config) {
         }
       }
 
-      const p = proxy()
+      // 代理探活必须用 effectiveProxy()，不能用 proxy()。
+      // proxy() 只读插件配置，而它默认是空字符串（为了多机可移植，见 ADR/yml 注释），
+      // 于是 if (p) 永远不成立、proxyReachable 恒为 undefined，
+      // deps 检查就永远不会报「代理连不上」—— 而 git 自己很可能配了 http.proxy。
+      // 实测本机：git http.proxy=http://127.0.0.1:7897，插件 proxy=空，旧写法直接漏报。
+      const proxyInfo = await api.effectiveProxy(null)
+      const p = proxyInfo.value
       let proxyReachable
       if (p) {
         const m = /^(?:https?:\/\/)?([^:/]+):(\d+)/.exec(p)
@@ -1644,6 +1710,10 @@ export function apply(ctx, config) {
       },
       {
         path: '/plugins/gitok/rotate',
+        // 轮换也是破坏性操作：它先 GCM erase 再重新登录，erase 不可回滚。
+        // 漏了 requiresConfirm 就会让一个合法 POST 直接删除凭据 ——
+        // 本插件的 smoke 测试真的因为这个把作者本机的 github 凭据删掉过一次。
+        requiresConfirm: true,
         run: async (body) => toolRotate(api, { host: body.host, url: body.url, dryRun: body.dryRun === true }),
       },
       {
@@ -1656,6 +1726,10 @@ export function apply(ctx, config) {
       webCtx.effect(() => webCtx.webServer.register({
         kind: 'exact',
         path: route.path,
+        // 让 smoke 测试能断言「破坏性路由确实声明了确认」——
+        // 这是元数据，不改变运行时行为，但让「漏写 requiresConfirm」从
+        // 「一个合法 POST 就把凭据删了」变成「测试报红」。
+        requiresConfirm: route.requiresConfirm === true,
         handler: async (req, res) => {
           if (!guard(req, res)) return
           if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'POST only' })
