@@ -1,12 +1,12 @@
 {
   "schema": 1,
-  "updated": "2026-11-12",
+  "updated": "2026-11-16",
   "note": "本机自研插件清单。install.ps1 按此表决定装哪些；plugpush.ps1 按此表决定推哪些。新增插件时加一条即可。",
   "plugins": [
     {
       "name": "dsh-synchub",
       "dir": "dsh-synchub",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "description": "同步中心：会话/工作区/附件/技能/配置层 → 各自私有 Git 仓库；同步面分级 + 危险目录守卫 + 环境切换检测 + 一键同步",
       "installedOn": [
         "FRANCIS-HOME-I7"
@@ -24,18 +24,18 @@
     {
       "name": "dsh-getbrain",
       "dir": "dsh-getbrain",
-      "version": "2.3.0",
-      "description": "得到大脑（原 Get 笔记）整理插件：官方 OpenAPI 全量下载到统一数据目录（默认 = 仓库同级 data-getbrain，自动创建、不进 Git），默认只读、写操作需确认、删除双重闸门；附 SKILL.md 整理纪律",
+      "version": "2.5.0",
+      "description": "得到大脑（原 Get 笔记）整理插件：官方 OpenAPI 全量下载到统一数据目录（默认 = 仓库同级 data-getbrain，自动创建、不进 Git），默认只读、写操作需确认、删除双重闸门；侧边栏 Mgetbrain 工作台有真实可展开的「知识库→目录→书→讲」层级树（本地重建，不依赖服务器）、分类调整（勾选→计划→干跑→双点真写）与真实审计日志；附 SKILL.md 整理纪律",
       "installedOn": [
         "FRANCIS-HOME-I7"
       ],
       "status": "active",
-      "note": "2.3.0 起 dataDir 默认值改由代码推导 = 仓库同级 data-<短名>（本机 C:\\dsh\\data-getbrain），cordis.patch.yml 里 dataDir 留空，不再写死绝对路径；C:\\dsh\\getbraindata 已整体迁移为 C:\\dsh\\data-getbrain。目录名、包名、清单 name 统一为 dsh-getbrain（2026-11-12）。"
+      "note": "2.5.0（2026-11-16）：写操作接通——新增 gn.py resolve（层级路径→note_id，不调 API）+ POST /plugins/getnote/plan（只写计划文件、白名单四 op）+ POST /plugins/getnote/apply（默认干跑、真写需 confirm:APPLY + dryRun:false，>200 动作要 allowHighRisk）+ GET /plugins/getnote/log（读 logs/<日期>.jsonl 尾部）。侧边栏四页全部接真数据：分类调整树带目标选择器（知识库/标签）、确认执行带干跑与双点真写、执行日志显示 OK/FAIL/DRY-RUN。19 个离线渲染场景全绿。实测：resolve 三层（12 讲 / 140 书 / 905 目录）与树显示数量逐一吻合；apply --dry-run 发 0 个请求。删除仍未接进面板（必须走 gn.py note-delete + --confirm DELETE 独立流程）。2.4.0：新增 gn.py inventory（本地重建层级）+ 侧边栏重写成真操作界面；显示名统一 Mgetbrain。"
     },
     {
       "name": "dsh-gitok",
       "dir": "dsh-gitok",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "description": "Git 认证一站式管理，分 Init / Manage / Monitor 三层。设置里有一个「Mgitok」面板（四态状态卡 + 六项持续监控 + 一键初始化/重新登录/撤销按钮 + WSL 接管说明 + 原始报告）。底层 9 个 gitok_* 工具（doctor/list/verify/login/revoke/adopt/bootstrap/rotate/monitor），凭据收敛到 Windows 凭据管理器（DPAPI，出机器不可用），WSL 经 interop 借用不落盘。文档三份：README（怎么用）/ BOOTSTRAP（怎么做）/ ADR（为什么，含决策 D）。",
       "installedOn": [
         "REDMIPRO"

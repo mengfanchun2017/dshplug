@@ -290,6 +290,9 @@ Get-Command git-credential-manager -ErrorAction SilentlyContinue
 | `resolveGcm` 报 schemastery 找不到 | link 安装下模块解析路径不同 | 已用 `createRequire(path.join(c,'package.json')).resolve(...)` 解决（见 README 8.4） |
 | 面板「仓库级 helper」显示了 `credentialStore: ...` | 正则 `\s*` 吃掉换行 | 已改用 `[ \t]*` + `(.*)`（见 README 8.7） |
 | 侧边栏导航文字没翻译 | `t` 写成了直通函数 | 必须 `ctx.locale.bind(NS)`（见 README 8.8） |
+| **设置和侧边栏都没有它，控制台干净** | `exports` 缺 `"./client"`（8.11）**或** `inject` 漏列 `locale`（8.12） | 先跑 §2.2 看 apply 是否抛错；不抛就查 `exports` |
+| **设置里有、侧边栏没有** | 没注册 `sidebar.panellist`（8.13） | 补 `sidebar.panellist` + `main` 两个插槽 |
+| 徽标显示「未知」但各项都正常 | 未配置的 `heartbeat` 拉低了整体等级（8.14） | 已修；或配 `heartbeatUrl` |
 
 ---
 

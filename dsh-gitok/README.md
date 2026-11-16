@@ -715,6 +715,94 @@ req.resolve('dsh-gitok/client');   // 能解析 = 入口存在；抛 ERR_PACKAGE
 **已修的三个导出**：`./client`（浏览器入口）、`./locale/*.json`（语言包）、`./icon`（图标）。
 同时新建了缺失的 `locale/zh.json`、`locale/en.json`、`icon.svg`。
 
+### 8.12 【同样难查】`inject` 漏列服务，`apply` 直接抛错，浏览器半整体崩掉
+
+**症状**：与 8.11 几乎一样 —— 设置和侧边栏都没有它，控制台**也不报错**。
+但 8.11 的 `exports` 这次是齐的，所以按 8.11 查会一无所获。
+
+**根因**：`client.js` 里 `const inject = ['slots']`，但 `apply` 里调用了
+`ctx.locale.register(...)` 和 `ctx.locale.bind(...)`。Cordis 只把 `inject` 里列出的
+服务注入进 `ctx`；没列 `locale` 时 `ctx.locale` 是 `undefined`，
+`apply` 第一行就抛 `Cannot read properties of undefined (reading 'register')`。
+
+宿主只加载浏览器半的 `apply`，它抛错就等于整个半区没注册 —— **但不弹错误、不写日志**。
+
+```js
+// ❌ 错的：只写 slots，却用了 locale
+const inject = ['slots'];
+
+// ✅ 对的：apply 里访问了哪个服务，inject 就必须列哪个
+const inject = ['slots', 'locale'];
+```
+
+**铁律**：`inject` 是「我依赖谁」的**声明**，不是「我大概需要谁」的猜测。
+写 `apply` 时每出现一次 `ctx.xxx`，就回去检查 `inject` 里有没有 `xxx`。
+
+对照：`dsh-synchub` 写 `['slots']` 是**对的**，因为它确实一次都没碰 `ctx.locale`；
+`dsh-getbrain` 写 `['slots','locale','configForms','remote']` 也是对的。
+
+**验证方法（不靠重启，秒级出结果）** —— 用打桩 ctx 跑一遍 `apply`，缺什么立刻抛：
+
+```js
+// 只给 slots，不给 locale —— 复现故障
+mod.apply({ effect: f => f(), slots: { inject(){}, register(){ return ()=>{} } } });
+// → ❌ Cannot read properties of undefined (reading 'register')
+```
+
+### 8.13 从没注册过 `sidebar.panellist`，侧边栏当然没有
+
+**症状**：设置里有面板了，但**侧边栏**没有入口。
+
+**根因**：不是 bug，是**没写**。v0.2.0 只注册了 `settings.section`，
+侧栏入口是 v0.3.2 才补的。
+
+**要点**（照 `dsh-synchub` / `dsh-getbrain` 的结构抄）：
+
+1. 侧栏条目和主面板是**两个插槽**，要分别注册：
+   `sidebar.panellist`（图标）+ `main`（点开后显示的面板，`key` 对应条目的 `id`）。
+2. 两者**各自独立** `ctx.slots.inject(...)`，不要把 `main` 塞进 sidebar 的回调里 ——
+   宿主没有 sidebar 插槽时，面板本体仍应能打开。
+3. **组件里不要写插件名字**：文字由插槽元数据的 `label` 渲染，组件里再写会重复两遍。
+4. 状态小点放图标**左上角**（`top:-1, left:-2`）。放右上角会跟宿主自己的角标撞位置。
+
+```js
+ctx.slots.inject('main', () =>
+  ctx.slots.register({ name: 'main', key: 'gitok', id: 'gitok-main', locale: NS }, GitokSection),
+);
+ctx.slots.inject('sidebar.panellist', () =>
+  ctx.slots.register(
+    { name: 'sidebar.panellist', id: 'gitok', order: 465, label: () => t('panelName'), locale: NS },
+    GitokIcon,
+  ),
+);
+```
+
+### 8.14 未配置的心跳项把整体状态压成 `unknown`，徽标永远显示「未知」
+
+**症状**：六项检查里五项 `ok`、一项 `unknown`（`heartbeat` 未配 `heartbeatUrl`），
+但整体 `level` 变成 `unknown`，面板徽标写「未知」—— 新手以为是坏了。
+
+**根因**：等级聚合取「最差项」，而 `rank` 里 `unknown`(=1) 高于 `ok`(=0)。
+`unknown` 参与聚合的初衷是对的（「没查 ≠ 通过」），但它混淆了两种 `unknown`：
+
+| 类型 | 含义 | 该不该拉低整体 |
+|---|---|---|
+| 未配置（`heartbeatUrl` 为空） | **没查** | ❌ 不该 |
+| 查了但失败 | **查不出** | ✅ 该 |
+
+**修法**：只把「未配置」这一种排除出聚合，仍如实留在 `checks` 里展示：
+
+```js
+for (const c of checks) {
+  if (c.id === 'heartbeat' && c.level === 'unknown') continue   // 没查 ≠ 不健康
+  if (rank[c.level] > rank[level]) level = c.level
+}
+```
+
+修完 `level` 由 `unknown` 变 `ok`、`summary` 变「已配置，认证可用」，
+而 `checks` 里 `heartbeat` 依旧如实写着「未配置……不假装健康」。
+**诚实与好用并不冲突** —— 把「没查」从「健康度」里摘出去，而不是把它改成 ok。
+
 ---
 
 ## 9. 换工作区继续开发（交接清单）

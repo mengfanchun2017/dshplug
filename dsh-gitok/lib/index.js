@@ -589,9 +589,17 @@ function parseStatus(text, gcmPath, extra = {}) {
   add('deps', '依赖与网络', depLevel, depDetail)
 
   // ---- 汇总 ----
+  // rank 里 unknown 比 ok 高，是因为「没查 ≠ 通过」：有项没查就不能冒充健康。
+  // 但它不应把「其他五项都 ok」的体检拉成整体 unknown：
+  // heartbeat 默认不配（heartbeatUrl 为空），若算进来，面板徽标会永远停在
+  // 「未知」——新手看到的是「坏了」，实际一切正常。
+  // 所以：未配置心跳（不是「查了但失败」）不计入等级聚合，只在 checks 里如实展示。
   const rank = { error: 3, warn: 2, unknown: 1, ok: 0 }
   let level = 'ok'
-  for (const c of checks) if (rank[c.level] > rank[level]) level = c.level
+  for (const c of checks) {
+    if (c.id === 'heartbeat' && c.level === 'unknown') continue
+    if (rank[c.level] > rank[level]) level = c.level
+  }
   if (gcmMissing) level = 'error'
 
   const summary =
