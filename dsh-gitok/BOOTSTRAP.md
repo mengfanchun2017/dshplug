@@ -3,7 +3,7 @@
 > 命令行手册：**装机、验证、排错、迁移**。全部命令可直接复制。
 > 代码怎么设计、为什么这么定 → 见 [`ADR.md`](./ADR.md)；面板长什么样 → 见 [`README.md`](./README.md)。
 >
-> 快照时间：**2026-11-16** ｜ 版本 **0.3.6** ｜ 宿主机 `REDMIPRO` ｜ profile `desktop`
+> 快照时间：**2026-11-16** ｜ 版本 **0.3.7** ｜ 宿主机 `REDMIPRO` ｜ profile `desktop`
 
 ---
 
@@ -76,7 +76,7 @@ $node = "$env:USERPROFILE\AppData\Local\Programs\DeepSeek Harness\resources\runt
 & $node -e "const j=require('C:/dsh/dshplug/dsh-gitok/package.json');console.log(j.version, !!j.dsh.client, j.files)"
 ```
 
-期望：两次 `--check` 都不输出内容（exit 0）；第三行打印 `0.3.6 true [...]`。
+期望：两次 `--check` 都不输出内容（exit 0）；第三行打印 `0.3.7 true [...]`。
 
 ### 2.2 第二层：宿主半注册（mock ctx，不起 DSH）
 
@@ -200,6 +200,49 @@ creds   : 1
 
 面板里看不见「Mgitok」分区时，先跑这一条 —— 能返回 JSON 就说明问题在浏览器半（`dsh.client`），
 返回 404 就说明问题在宿主半（重启/重装）。
+
+**500 的含义与 404 完全不同**：**路由挂上了，但执行时抛错了**。响应正文里带 `error` 字段，
+直接读它就能定位（例如 `{"ok":false,"error":"DOCS_WSL is not defined"}`）。
+不要往「端口/代理/网络」方向查——500 是纯代码错误，本机回环，与 VPN 无关。
+
+### 2.3b 第三层·路由冒烟测试：专治「语法通过但运行时 ReferenceError」
+
+**为什么需要这一层**：`node --check` 只验**语法**，不验**作用域**。
+常量如果被误粘进某个函数体内，`--check` 照样 exit 0，模块 `import` 也照样成功
+（只有函数被调用时才抛），直到浏览器请求路由才暴露成 500。
+v0.3.4 的 `DOCS_WSL` 就是这么漏的，潜伏到 v0.3.7 才被用户撞上。
+
+所以：**改完 `lib/index.js`，重启 DSH 之前先跑一次这个脚本。**
+它用打桩 ctx 真调 `apply`，再真调 status 路由的 handler，**不等 DSH 重启**。
+
+保存为 `C:\dsh\dshplug\dsh-gitok\tools\smoke-route.mjs`（见下），然后：
+
+```powershell
+$node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
+& $node C:\dsh\dshplug\dsh-gitok\tools\smoke-route.mjs
+```
+
+期望输出（任一 `FAIL` 都别急着重启，先修）：
+
+```
+routes    = /plugins/gitok/status /plugins/gitok/login /plugins/gitok/revoke /plugins/gitok/rotate /plugins/gitok/bootstrap
+http      = 200
+ok        = true
+docsPath  = C:\dsh\dshplug\dsh-gitok\docs\WSL-GIT-AUTH.md
+docsExists= true
+level     = ok | summary = 已配置，认证可用
+checks    = heartbeat:unknown plaintext:ok sshkey:ok helper:ok creds:ok deps:ok
+```
+
+两个关键断言，缺一不可：
+
+| 断言 | 抓的是什么 |
+|---|---|
+| `docsExists = true` | 路径类常量算错（`here` 指向 `lib` 而非插件根时，拼出的文件不存在） |
+| `checks` 六项齐全且无 `FAIL` | 路由体内的作用域错误（`X is not defined`）在这里必然现形 |
+
+> `heartbeat:unknown` 是**正常的**：没配 `heartbeatUrl` 时该项如实报「没查」，
+> 不等于失败。详见 ADR 里四态模型 `ok / warn / error / unknown`。
 
 ---
 
@@ -349,6 +392,8 @@ Get-Command git-credential-manager -ErrorAction SilentlyContinue
 | 面板里没有「Mgitok」分区 | 加 `dsh.client` 后没重装 / 没重启 | `install.ps1 -Force` + 完全退出重开 |
 | 面板报「状态接口不可用」 | `/plugins/gitok/status` 404 | 跑 §2.2 确认路由注册了；确认 `index.js` 修改早于进程启动 |
 | `/status` 一直转圈超 30s | `probeTimeoutMs` 太长或 pwsh 卡住 | `cordis.patch.yml` 把 `probeTimeoutMs` 降到 10000 |
+| **`/status` 返回 HTTP 500，正文 `XXX is not defined`** | 常量被误写进函数体内，路由在模块作用域取不到 → 运行时 `ReferenceError` | **`node --check` 查不出来**（只验语法、不验作用域）。必须真跑一次路由，见 §2.3b。v0.3.4 的 `DOCS_WSL` 就是此因，v0.3.7 修 |
+| `/status` 返回的 `docsPath` 指向不存在的文件 | `here` 语义搞错：它应当是**插件根**（`lib` 的上一级），不是 `lib` | `libDir = dirname(fileURLToPath(import.meta.url))`，再 `here = dirname(libDir)` |
 | `没有匹配的插件（检查 -Only 或 list.json 的 status）` | `list.json` 那条不是 `active` | 改 `status: "active"` |
 | `gitok_doctor` 输出中文乱码 | pwsh 输出编码不是 UTF-8 | 代码里已设 `[Console]::OutputEncoding`；外部脚本自己也要设 |
 | helper 写了但没生效 | `git config key ""` **不清空**旧值 | 必须 `--unset-all` 再 `--add`（见 README 8.1） |
@@ -384,7 +429,7 @@ cd $env:USERPROFILE\.dsh\profiles\desktop
 ## 8. 验收清单（迁移后逐条打勾）
 
 ```text
-[ ] install.ps1 -Check 显示 dsh-gitok v0.3.6 status=active link-junction
+[ ] install.ps1 -Check 显示 dsh-gitok v0.3.7 status=active link-junction
 [ ] node --check lib/index.js 通过
 [ ] node --check lib/client.js 通过
 [ ] mock ctx 测试：tools=9, routes=5（status + login/revoke/rotate/bootstrap）

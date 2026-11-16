@@ -6,7 +6,7 @@ Git 认证一站式管理插件：**检查 / 建议 / 配置 / 验证 / 撤销**
 （DPAPI 加密、绑定用户+本机、出机器解不开）。WSL 通过 interop 直接调用 Windows 的
 `git-credential-manager.exe`，**自己一个字节的密钥都不存**。
 
-> **版本 0.3.6 ｜ 状态 active ｜ 2026-11-16**
+> **版本 0.3.7 ｜ 状态 active ｜ 2026-11-16**
 > 未发布 npm，已用 `link:` 装进 `desktop` profile（宿主机 `REDMIPRO`）。
 > 这份 README 是**交接文档**：设计、机制、实测数据、踩过的坑全在里面，换机器/换工作区照着读就能接着开发。
 
@@ -969,6 +969,64 @@ json(res, 200, { ok: true, status, report: cache.text, docsPath: DOCS_WSL })
 > 每一步的命令和真实输出都要贴给我。
 
 这比让用户自己找文档、自己描述需求可靠得多。
+> ⚠️ **但这里有一个极易踩的坑**（v0.3.4 踩了，潜伏到 v0.3.7 才被用户撞上）：
+> 这个常量**必须定义在模块顶层**。若它被粘进某个函数体（例如 `loadSchemastery()`）里，
+> 路由 handler 在模块作用域取不到，运行时抛 `ReferenceError` → 接口返回 **HTTP 500**，
+> 而 `node --check` **完全查不出来**（它只验语法、不验作用域）。详见 ADR-013 与 §8.20。
+
+### 8.20 【潜伏三个版本】常量写进函数体，`node --check` 查不出来，接口 500
+
+**现象**：`/plugins/gitok/status` 返回 HTTP 500，正文 `{"ok":false,"error":"DOCS_WSL is not defined"}`。
+浏览器里只看到面板转圈或报「状态接口不可用」，开不开 VPN 都一样（本机回环，与网络无关）。
+
+**根因**：v0.3.4（`e77a680`）加 `docsPath` 功能时，注释和常量一起被粘进了函数体内：
+
+```js
+async function loadSchemastery() {
+  const req = createRequire(import.meta.url)
+  const here = path.dirname(...)
+  /** WSL 接入说明的绝对路径… */
+  const DOCS_WSL = path.join(here, 'docs', 'WSL-GIT-AUTH.md')   // ← 在函数里
+}
+// 路由 handler 在模块作用域，这里取不到 → ReferenceError
+```
+
+**为什么三个版本都没发现**——下面这些检查全都「通过」了，但通过的原因与 bug 无关：
+
+| 检查 | 结果 | 盲区 |
+|---|---|---|
+| `node --check` | exit 0 | 只验语法，不验作用域 |
+| `import()` 模块 | 成功 | 函数没被调用，不触发 ReferenceError |
+| `exports` 解析 | 全通 | 与作用域无关 |
+| 仓库/部署逐字节比对 | 一致 | 两边错得一模一样 |
+
+**能通过的检查 ≠ 检查覆盖了这个 bug。**
+
+**修法**：常量提到模块顶层；顺带修 `here` 的语义。
+
+```js
+const libDir = path.dirname(fileURLToPath(import.meta.url))  // …/dsh-gitok/lib
+const here   = path.dirname(libDir)                          // …/dsh-gitok（插件根）
+const DOCS_WSL = path.join(here, 'docs', 'WSL-GIT-AUTH.md')
+```
+
+**第二个 bug 一并暴露**：`here` 原来指向 `lib\` 而非插件根，
+`docsPath` 拼成 `lib\docs\WSL-GIT-AUTH.md` —— **该文件不存在**。
+所以冒烟测试把 `docsExists` 也列为硬断言。
+
+**验证方法**（`tools/smoke-route.mjs`，真调 handler，不等重启）：
+
+```powershell
+$node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
+& $node C:\dsh\dshplug\dsh-gitok\tools\smoke-route.mjs
+```
+
+**已实测它能抓到本 bug**：在隔离副本里复现后，`node --check` 仍 exit 0，
+而冒烟脚本 exit 1 并打出 `服务端错误: DOCS_WSL is not defined`。
+
+**顺带**：`new URL(import.meta.url).pathname` 不处理百分号编码，
+路径含空格或中文时拿到的是 `%20`、`%E4%B8%AD`，`existsSync` 直接为假。
+一律用 `fileURLToPath`。
 
 
 ---
@@ -1033,7 +1091,7 @@ cd C:\dsh\dshplug; & git pull --ff-only
 | Windows 凭据 | ✅ GCM `wincredman`，`git:https://github.com`，用户 `mengfanchun2017` |
 | WSL `claude` | ⏸ **未改动**，仍用 gh helper + 明文 PAT（按用户要求保持原样） |
 | WSL `u26claude4` | ⏸ **未改动**，仍有空口令 SSH 私钥（待后续处理） |
-| 本插件 | ✅ `status: active`，已装进 `desktop`（v0.3.6，link-junction） |
+| 本插件 | ✅ `status: active`，已装进 `desktop`（v0.3.7，link-junction） |
 | 设置面板 | ✅ 代码已完成（宿主路由 + 浏览器半）；需重启 DSH 后在界面上确认 |
 ---
 

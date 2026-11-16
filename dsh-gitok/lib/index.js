@@ -34,16 +34,20 @@ import { existsSync } from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import { createRequire } from 'node:module'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+
+/** 本文件所在目录（即插件的 lib\\）。 */
+const libDir = path.dirname(fileURLToPath(import.meta.url))
+/** 插件根目录（lib 的上一级）。宿主算好给前端，避免前端拼路径。 */
+const here = path.dirname(libDir)
+/** WSL 接入说明的绝对路径。面板要「把路径复制给 Claude」，必须由宿主算，不能前端拼。 */
+const DOCS_WSL = path.join(here, 'docs', 'WSL-GIT-AUTH.md')
 
 // schemastery 由 DSH 宿主提供。本 bundle 若是 link: 安装的本地目录，
 // 静态 import 可能解析不到，所以从几个已知位置动态取；全都失败就退化成「无 Config」
 // （插件仍可用，只是设置面板不出现表单）。
 async function loadSchemastery() {
   const req = createRequire(import.meta.url)
-  const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'))
-/** WSL 接入说明的绝对路径。面板里要「复制路径给 Claude」，必须由宿主算，不能前端拼。 */
-const DOCS_WSL = path.join(here, 'docs', 'WSL-GIT-AUTH.md')
   const candidates = []
 
   try { candidates.push(req.resolve('@deepseek-ai/schemastery')) } catch { /* not linked here */ }
@@ -53,6 +57,7 @@ const DOCS_WSL = path.join(here, 'docs', 'WSL-GIT-AUTH.md')
 
   const dirs = []
   if (profileName) dirs.push(path.join(dshHome, 'profiles', profileName, 'node_modules', '@deepseek-ai', 'schemastery'))
+  // 插件根目录下的 node_modules（here 是插件根，不是 lib）
   dirs.push(path.join(here, 'node_modules', '@deepseek-ai', 'schemastery'))
   dirs.push(path.join(process.cwd(), 'node_modules', '@deepseek-ai', 'schemastery'))
   for (const p of dirs) if (existsSync(p)) candidates.push(p)

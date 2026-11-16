@@ -490,3 +490,110 @@ const DISPLAY_NAME = 'Mgitok';
 | 文档里指代技术主题的「git 认证」 | ❌ | 如「三套互不相通的 git 认证」 |
 
 规范已写入 `C:\dsh\dshplug\BOOTSTRAP.md` §5.1 与 `~/.dsh/AGENTS.md` 开发约定，后续新插件照此执行。
+
+---
+
+## ADR-013 · 路由冒烟测试必须真调 handler，`node --check` 不能作为验证依据
+
+**日期**：2026-11-16 ｜ **状态**：已采纳 ｜ **触发版本**：v0.3.7
+
+### 结论
+
+`node --check` 通过 **不等于** 插件能用。改完 `lib/index.js`，在重启 DSH 之前
+必须跑一次 `tools/smoke-route.mjs`，它会真调 `apply()` 并真调 status 路由的 handler。
+
+### 背景：一次潜伏了三个版本的 500
+
+用户报告 `/plugins/gitok/status` 返回 **HTTP 500**，且「开不开 VPN 都一样」。
+
+错误正文：
+
+```json
+{ "ok": false, "error": "DOCS_WSL is not defined" }
+```
+
+根因：`e77a680`（v0.3.4）把常量定义误粘进了 `loadSchemastery()` 的**函数体内**：
+
+```js
+async function loadSchemastery() {
+  const req = createRequire(import.meta.url)
+  const here = path.dirname(...)
+  /** WSL 接入说明的绝对路径… */          // ← 注释和常量都在函数里
+  const DOCS_WSL = path.join(here, 'docs', 'WSL-GIT-AUTH.md')
+  ...
+}
+
+// 路由处理函数在模块作用域，取不到函数内的 DOCS_WSL
+json(res, 200, { ok: true, status, report: cache.text, docsPath: DOCS_WSL })
+```
+
+**为什么整整三个版本没被发现**：
+
+| 检查手段 | 结果 | 为什么漏了 |
+|---|---|---|
+| `node --check` | exit 0 | 只验**语法**，不验**作用域** |
+| `import()` 模块 | 成功 | 函数没被调用，`ReferenceError` 不触发 |
+| `exports` 子路径解析 | 全部可解析 | 与作用域无关 |
+| 文件逐字节比对仓库/部署 | 完全一致 | 两边错得一模一样 |
+| **唯一能抓到的** | — | 真调 handler |
+
+第 3、4 项特别有欺骗性：它们都「通过」了，但通过的原因与 bug 无关。
+**能通过检查 ≠ 检查覆盖了这个 bug。**
+
+### 第二个 bug：`here` 的语义
+
+修作用域时又发现 `here` 指向的是 `lib\` 而不是插件根，导致
+`docsPath` 拼成 `lib\docs\WSL-GIT-AUTH.md`——**该文件不存在**。
+
+正确写法：
+
+```js
+const libDir = path.dirname(fileURLToPath(import.meta.url))  // …/dsh-gitok/lib
+const here   = path.dirname(libDir)                          // …/dsh-gitok
+const DOCS_WSL = path.join(here, 'docs', 'WSL-GIT-AUTH.md')  // 真实存在
+```
+
+顺带把手写的 `new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')`
+换成 `fileURLToPath`：前者不处理百分号编码，路径含空格或中文时会拿到
+`%20`、`%E4%B8%AD` 这种未解码字符串，`existsSync` 直接为假。
+
+### 冒烟测试的两个硬断言
+
+单纯「跑完不报错」没有价值——上面的 bug 在 handler 被调用前都不会报错。所以断言必须打在执行结果上：
+
+| 断言 | 抓什么 |
+|---|---|
+| `docsExists === true` | 路径类常量算错（`here` 语义错时拼出的路径不存在） |
+| 六项 checks 齐全且无 FAIL | 路由体内的作用域错误（`X is not defined` 必然现形） |
+
+### 已证明它能抓到这个 bug
+
+不是「写了就算」。在隔离副本里把 `DOCS_WSL` 挪回函数内复现：
+
+```
+node --check        → exit 0        （查不出来）
+smoke-route.mjs     → exit 1        （FAIL: 期望 200，实际 500）
+                       服务端错误: DOCS_WSL is not defined
+```
+
+同一个 bug，一个漏、一个抓，这才证明这套验证有意义。
+
+### 反面代价
+
+1. **多维护一个脚本**：`tools/smoke-route.mjs` 里的 ctx 桩是手写的，
+   宿主侧 API 变了（如 `ctx.inject` 签名改动）它自己会先坏。桩坏了是「假通过」，
+   比没有更危险，所以桩要尽量薄、只依赖 `inject` / `effect` / `webServer` 三个。
+2. **仍不是端到端**：打桩跑通不等于真实进程跑通（权限、编码、并发都没覆盖）。
+   它只能替代「语法检查」，不能替代 §2.3 的真机验证。
+3. **默认值陷阱**：`smoke-route.mjs` 用 `new Config({})` 默认配置跑，
+   用户的实际配置（如 `heartbeatUrl`、`targets`）不参与，
+   所以它验证的是「代码路径通」，不是「你的配置对」。
+
+### 已否决的替代方案
+
+| 方案 | 否决理由 |
+|---|---|
+| 只加 `node --check` | 已证明查不出此类 bug，是本次事故的直接原因 |
+| 靠 lint（eslint `no-undef`） | 需要额外配置与依赖；`no-undef` 对 ESM 顶层常量误报多，且本仓库无 lint 流程 |
+| 加个「重启后人工点一下页面」 | 靠人不靠机器，且 v0.3.4→v0.3.7 已证明人工验证会跳过 |
+| 改成 CommonJS 避免 TDZ | 与 DSH 的 ESM 加载方式不符，成本远大于收益 |
