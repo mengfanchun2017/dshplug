@@ -209,6 +209,42 @@ window.__ModuleLoader__.load({
 
     const LEVEL_TEXT = { ok: '正常', warn: '待处理', error: '异常', unknown: '未知' };
 
+    // 每一项「到底在查什么、看不懂该怎么办」。
+    // 用户反馈：「端到端通路 未配置 heartbeatUrl…这里是检查什么需要搞好么 看不懂要做什么」
+    // → 光报状态不够，得说清「它想确认什么 / 不配有什么后果 / 怎么配」。
+    const CHECK_HELP = {
+      heartbeat: {
+        what: '拿一个真实仓库试跑一次 git 拉取，确认「凭据 → 网络 → GitHub」整条链是通的。',
+        why: '上面几项查的都是配置对不对；只有这一项能证明「真的能用」。不配也能用，只是没有这项保险。',
+        how: '要测就在设置里把 heartbeatUrl 填成任意一个你有权限的仓库地址，例如 https://github.com/你的用户名/某个仓库.git。留空 = 跳过，不影响使用。',
+      },
+      plaintext: {
+        what: '查有没有把 token / 密码以明文形式存在磁盘上（~/.git-credentials、gh 的 hosts.yml 等）。',
+        why: '明文文件一旦被备份、上传或打进镜像，密钥就等于泄露了。',
+        how: '发现明文就照面板里 WSL 区的顺序处理：先接管 → 验证通过 → 再删明文。',
+      },
+      sshkey: {
+        what: '查 SSH 私钥是否存在、有没有设口令。',
+        why: '空口令的私钥被人拿到文件就能直接用。',
+        how: '用 ssh-keygen -p -f ~/.ssh/id_ed25519 加口令，或改用 GCM（本插件推荐的方式，不需要 SSH 密钥）。',
+      },
+      helper: {
+        what: '查 git 的 credential.helper 有没有叠加配置（多个 helper 会互相抢答，行为难预测）。',
+        why: '叠加时到底是哪个 helper 应答，取决于顺序，出问题极难排查。',
+        how: '按 host 只保留一条。面板 WSL 区第③步就是按这个原则写的，可以照抄。',
+      },
+      creds: {
+        what: '查 Windows 凭据管理器里有没有 git 的凭据条目、是什么类型。',
+        why: '这是「已经登录过」的直接证据。',
+        how: '没有就点上面的「登录 GitHub」；要删就点「撤销凭据」。',
+      },
+      deps: {
+        what: '查 GCM 是否装好、git 版本、以及代理端口能不能连通。',
+        why: '环境缺件时，后面所有步骤都会失败，先把这里弄绿。',
+        how: '代理连不上通常是 VPN 没开；GCM 缺失要重装 Git for Windows（自带 GCM）。',
+      },
+    };
+
     // ── 主面板组件 ────────────────────────────────────────────────────────
     function GitokSection() {
       const [data, setData] = useState(null);
@@ -329,7 +365,7 @@ window.__ModuleLoader__.load({
               react.createElement(ActionButtons, { st, busy, act }),
               // 必须用 createElement 而不是直接调用 WslGuide(st)：
               // 它内部有 useState，当普通函数调会报「Rendered more hooks than during the previous render」。
-              react.createElement(WslGuide, { st }),
+              react.createElement(WslGuide, { st, docsPath: data && data.docsPath }),
             ),
 
           err &&
@@ -449,21 +485,79 @@ window.__ModuleLoader__.load({
         { style: { marginTop: 14, paddingTop: 12, borderTop: `1px solid ${C.border}` } },
         react.createElement('div', { style: { fontWeight: 600, marginBottom: 8 } }, '持续监控'),
         checks.map((c) =>
-          react.createElement(
-            'div',
-            { key: c.id, style: { ...S.row, alignItems: 'flex-start' } },
-            react.createElement(
-              'span',
-              { style: { ...S.k, minWidth: 110, color: color(c.level), fontWeight: 500 } },
-              mark(c.level) + ' ' + c.label,
-            ),
-            react.createElement(
-              'span',
-              { style: { ...S.v, fontFamily: 'inherit', textAlign: 'left', color: C.fg3 } },
-              c.detail,
-            ),
+          react.createElement(CheckRow, { key: c.id, c, mark, color }),
+        ),
+      );
+    }
+
+    // 单行检查项。点行首的「?」展开说明 —— 用户看不懂这一项在查什么时，
+    // 不用去翻文档，就地能读到「查什么 / 为什么 / 怎么办」。
+    function CheckRow({ c, mark, color }) {
+      const [open, setOpen] = useState(false);
+      const help = CHECK_HELP[c.id];
+      const e = react.createElement;
+
+      return e(
+        'div',
+        { style: { borderBottom: `1px solid ${C.borderSoft}` } },
+        e(
+          'div',
+          { style: { ...S.row, alignItems: 'flex-start', borderBottom: 'none', paddingBottom: open ? 2 : 5 } },
+          e(
+            'span',
+            { style: { ...S.k, minWidth: 110, color: color(c.level), fontWeight: 500, display: 'inline-flex', gap: 5 } },
+            mark(c.level) + ' ' + c.label,
+            help &&
+              e(
+                'span',
+                {
+                  title: open ? '收起说明' : '这一项在查什么？点开看',
+                  onClick: () => setOpen(!open),
+                  style: {
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: 14,
+                    height: 14,
+                    borderRadius: '50%',
+                    border: `1px solid ${C.fg3}`,
+                    color: C.fg3,
+                    fontSize: 10,
+                    lineHeight: 1,
+                    cursor: 'pointer',
+                    flex: '0 0 auto',
+                    userSelect: 'none',
+                  },
+                },
+                open ? '−' : '?',
+              ),
+          ),
+          e(
+            'span',
+            { style: { ...S.v, fontFamily: 'inherit', textAlign: 'left', color: C.fg3 } },
+            c.detail,
           ),
         ),
+        open &&
+          help &&
+          e(
+            'div',
+            {
+              style: {
+                margin: '0 0 9px 0',
+                padding: '8px 11px',
+                background: C.code,
+                border: `1px solid ${C.borderSoft}`,
+                borderRadius: C.radius,
+                fontSize: 12,
+                lineHeight: 1.7,
+                color: C.fg2,
+              },
+            },
+            e('div', null, e('strong', { style: { color: C.fg } }, '查什么：'), help.what),
+            e('div', { style: { marginTop: 4 } }, e('strong', { style: { color: C.fg } }, '为什么：'), help.why),
+            e('div', { style: { marginTop: 4 } }, e('strong', { style: { color: C.fg } }, '怎么办：'), help.how),
+          ),
       );
     }
 
@@ -544,165 +638,344 @@ window.__ModuleLoader__.load({
     }
 
 
-    // ── WSL 接管说明 ────────────────────────────────────────────────────
+    // ── 复制到剪贴板 ──────────────────────────────────────────────────────
+    // 宿主支持 navigator.clipboard（已确认 app.asar 里有），失败时的回退必须
+    // **明确告诉用户「文本只是被选中，没有进剪贴板」** —— 否则按一下没反应，
+    // 会以为复制成功了。这个回退路径照抄 dsh-getbrain，它是踩过才写出来的。
+    function useCopy() {
+      const [state, setState] = useState(null); // null | 'ok' | 'manual' | 'fail'
+      const copy = async (text, elId) => {
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+          } else {
+            throw new Error('no clipboard api');
+          }
+          setState('ok');
+          setTimeout(() => setState(null), 2000);
+        } catch {
+          // 回退：选中目标区域，用户按 Ctrl+C
+          let selected = false;
+          try {
+            const el = elId && document.getElementById(elId);
+            if (el) {
+              const sel = window.getSelection();
+              const range = document.createRange();
+              range.selectNodeContents(el);
+              sel.removeAllRanges();
+              sel.addRange(range);
+              selected = true;
+            }
+          } catch { /* ignore */ }
+          setState(selected ? 'manual' : 'fail');
+          setTimeout(() => setState(null), 6000);
+        }
+      };
+      return { copy, state };
+    }
+
+    // 一行「复制」按钮 + 状态反馈
+    function CopyBtn({ text, elId, label = '复制', small }) {
+      const { copy, state } = useCopy();
+      const hint =
+        state === 'ok' ? '已复制 ✓' : state === 'manual' ? '已选中，按 Ctrl+C' : state === 'fail' ? '复制失败，请手动选' : null;
+      return react.createElement(
+        'span',
+        { style: { display: 'inline-flex', alignItems: 'center', gap: 6 } },
+        react.createElement(
+          'button',
+          {
+            type: 'button',
+            onClick: () => copy(text, elId),
+            style: {
+              ...S.btn,
+              padding: small ? '2px 9px' : '4px 12px',
+              fontSize: small ? 11.5 : 12,
+              background: state === 'ok' ? 'rgba(22,163,74,.12)' : 'transparent',
+              borderColor: state === 'ok' ? C.ok : C.border,
+              color: state === 'ok' ? C.ok : C.fg2,
+            },
+          },
+          state === 'ok' ? '✓ 已复制' : label,
+        ),
+        hint &&
+          react.createElement(
+            'span',
+            { style: { fontSize: 11.5, color: state === 'ok' ? C.ok : C.warn } },
+            hint,
+          ),
+      );
+    }
+
+    // ── 代码块（带标题 + 复制） ────────────────────────────────────────────
+    // 用 whiteSpace:'pre-wrap' + wordBreak:'break-word'，不要用 'pre' 配 overflowX。
+    // 原来写 'pre' 就必然横向滚动条，命令一长右侧被裁，用户以为内容不全；
+    // 而且 'pre' 会把面板源码里的缩进原样带出来，看着歪。
+    function CodeBlock({ label, text, elId, hint }) {
+      return react.createElement(
+        'div',
+        { style: { marginTop: 10 } },
+        (label || text) &&
+          react.createElement(
+            'div',
+            {
+              style: {
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                justifyContent: 'space-between',
+                marginBottom: 5,
+              },
+            },
+            react.createElement(
+              'span',
+              { style: { fontSize: 12.5, fontWeight: 600, color: C.fg } },
+              label || '',
+            ),
+            react.createElement(CopyBtn, { text, elId, small: true }),
+          ),
+        react.createElement(
+          'pre',
+          {
+            id: elId,
+            style: {
+              margin: 0,
+              padding: '9px 11px',
+              background: C.code,
+              border: `1px solid ${C.borderSoft}`,
+              borderRadius: C.radius,
+              fontSize: 11.5,
+              lineHeight: 1.6,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              fontFamily: 'var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)',
+              color: C.fg2,
+            },
+          },
+          text,
+        ),
+        hint && react.createElement('div', { style: { fontSize: 11.5, color: C.fg3, marginTop: 4 } }, hint),
+      );
+    }
+
+
+    // ── WSL 接入区 ────────────────────────────────────────────────────────
     // 决策 D 的实现方式：WSL 不存密钥，git 需要凭据时 fork 调用 Windows 的 GCM，
     // 由 GCM 从 Windows 凭据管理器（DPAPI）取出后直接回给 git。
-    // 这里把「原理 + 当前端点状态 + 可复制命令」放在面板里，
-    // 因为 BOOTSTRAP.md 里的命令用户到了现场未必翻得开。
+    //
+    // 用户反馈两轮迭代后的形态：
+    //   v0.3.3：命令全堆在一个 <pre> 里 → 「点击看到好多命令，也不能复制」
+    //   v0.3.4：拆成 4 个独立步骤，每步自带复制按钮；顶部给「复制文档路径」，
+    //           用户直接把路径贴给 Claude，让 Claude 自己去读文档、自己装。
+    //
+    // 缩进问题：<pre> 里绝不能再有源码缩进。命令文本一律从行首写起（用数组 join），
+    // 不要像以前那样写成 '  git config ...' —— 那是源码缩进，会原样显示出来。
     function WslGuide(props) {
       // 注意：props 是对象（createElement 传的）。不要写成 WslGuide(st) 直接调用——
       // 那样内部 useState 会跨组件边界，报「Rendered more hooks than during the previous render」。
       const st = props && props.st;
+      const docsPath = (props && props.docsPath) || '';
       const [open, setOpen] = useState(false);
       const eps = (st && st.wslEndpoints) || [];
-      const code = (s) =>
-        react.createElement(
-          'pre',
-          {
-            style: {
-              margin: '6px 0 0',
-              padding: '8px 10px',
-              background: C.code,
-              border: `1px solid ${C.border}`,
-              borderRadius: 6,
-              fontSize: 12,
-              lineHeight: 1.5,
-              overflowX: 'auto',
-              whiteSpace: 'pre',
-            },
-          },
-          s,
-        );
+      const e = react.createElement;
 
       // 命令里必须写真实的 GCM 路径；拿不到就退回占位符，并提示怎么找。
       const gcm = (st && st.gcmPath) || '<你的 GCM 路径>';
-      const toWsl = (p) => p.replace(/^([A-Za-z]):\\/, (_, d) => '/mnt/' + d.toLowerCase() + '/').replace(/\\/g, '/');
+      const toWsl = (p) =>
+        p.replace(/^([A-Za-z]):\\/, (_, d) => '/mnt/' + d.toLowerCase() + '/').replace(/\\/g, '/');
       const gcmWsl = gcm.indexOf('<') === 0 ? gcm : toWsl(gcm);
 
-      return react.createElement(
+      // 每一步一个字符串，行首零缩进 —— 直接就是用户要粘进终端的样子。
+      const step1 =
+        'test -x "' + gcmWsl + '" && echo OK || echo MISSING';
+      const step2 =
+        [
+          'cp ~/.gitconfig ~/.gitconfig.bak.gitok-$(date +%Y%m%d%H%M%S)',
+        ].join('\n');
+      const step3 =
+        [
+          'for h in github.com gist.github.com; do',
+          'git config --global --unset-all "credential.https://$h.helper" 2>/dev/null || true',
+          'git config --global --add "credential.https://$h.helper" "!' + gcmWsl + '"',
+          'done',
+        ].join('\n');
+      const step4 =
+        [
+          'timeout 40 git ls-remote origin HEAD; echo "REAL_EXIT=$?"',
+        ].join('\n');
+      const step5 =
+        [
+          'gh auth logout -h github.com 2>&1 || true',
+          'rm -f ~/.git-credentials',
+        ].join('\n');
+
+      // 给 AI 的一句话：把文档路径交给 Claude，让它自己读自己配。
+      const aiPrompt =
+        '请阅读 ' + (docsPath || '<文档路径>') +
+        ' ，按里面的「第二部分：粘给 AI 的指令」帮我配置 WSL 的 git 认证。' +
+        '每一步的命令和真实输出都要贴给我。';
+
+      const stepTitle = (n, title) =>
+        e(
+          'div',
+          { style: { fontSize: 12.5, fontWeight: 600, marginTop: 12, marginBottom: 2, color: C.fg } },
+          n + '  ' + title,
+        );
+
+      return e(
         'div',
         { style: { marginTop: 14, paddingTop: 12, borderTop: `1px solid ${C.border}` } },
-        react.createElement(
+
+        // 折叠头
+        e(
           'div',
           {
             style: { display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' },
             onClick: () => setOpen(!open),
           },
-          react.createElement('span', { style: { fontWeight: 600 } }, 'WSL 里怎么用（决策 D）'),
-          react.createElement('span', { style: { color: C.fg3, fontSize: 12 } }, open ? '收起 ▲' : '展开 ▼'),
+          e('span', { style: { fontWeight: 600 } }, 'WSL 里怎么用'),
+          e('span', { style: { color: C.fg3, fontSize: 12 } }, open ? '收起 ▲' : '展开看步骤 ▼'),
         ),
 
+        // 折叠时的摘要（把结论先说清楚）
         !open &&
-          react.createElement(
+          e(
             'div',
-            { style: { marginTop: 6, fontSize: 12, color: C.fg3 } },
-            'WSL 不存密钥，每次由 Windows 凭据管理器代答。所以只需在 Windows 登录一次，所有发行版跟着变。',
+            { style: { marginTop: 6, fontSize: 12, color: C.fg3, lineHeight: 1.65 } },
+            'WSL 不存密钥，每次由 Windows 凭据管理器代答。在 Windows 登录一次，所有发行版跟着变。',
           ),
 
         open &&
-          react.createElement(
+          e(
             'div',
             { style: { marginTop: 10 } },
-            react.createElement(
+
+            // ── 最快的路：把路径丢给 AI ──
+            e(
               'div',
-              { style: { fontSize: 13, lineHeight: 1.7, color: C.fg3 } },
-              'WSL 的 git 需要凭据时，会执行 ', 
-              react.createElement('code', null, 'credential.https://<host>.helper'),
-              ' 里那行命令。只要它指向 Windows 的 ', 
-              react.createElement('code', null, 'git-credential-manager.exe'),
-              '（经 ', 
-              react.createElement('code', null, '/mnt/c/...'),
-              ' 由 WSL interop 调用），凭据就从 Windows 凭据管理器（DPAPI）取出后直接回给 git。',
-              react.createElement('br'),
-              '结果：WSL 磁盘上零密钥；轮换时只在 Windows 重登一次。',
+              {
+                style: {
+                  padding: 11,
+                  background: 'var(--dsw-alias-state-success-tertiary, rgba(22,163,74,.08))',
+                  border: '1px solid var(--dsw-alias-state-success-primary, #16a34a)',
+                  borderRadius: C.radius,
+                  marginBottom: 4,
+                },
+              },
+              e('div', { style: { fontSize: 13, fontWeight: 600, marginBottom: 5, color: C.fg } },
+                '最省事：把下面这段话直接发给 Claude'),
+              e('div', { style: { fontSize: 12, color: C.fg2, lineHeight: 1.7, marginBottom: 6 } },
+                '它会自己读文档、探测环境、配好并验证。你只需要把输出贴回来核对。'),
+              e(CodeBlock, {
+                label: '',
+                text: aiPrompt,
+                elId: 'gitok-ai-prompt',
+                hint: docsPath ? null : '（文档路径没拿到，先点上面的「重新检查」）',
+              }),
             ),
 
-            // 当前端点的真实状态（有数据才显示）
+            // ── 文档绝对路径 ──
+            e(
+              'div',
+              { style: { marginTop: 10 } },
+              e('div', { style: { fontSize: 12.5, fontWeight: 600, marginBottom: 2, color: C.fg } },
+                '文档绝对路径'),
+              e(CodeBlock, {
+                label: '',
+                text: docsPath || '(未获取，点上面「重新检查」)',
+                elId: 'gitok-docs-path',
+                hint: 'WSL 里也能读：把 C:\\ 换成 /mnt/c/，反斜杠改正斜杠。',
+              }),
+            ),
+
+            // ── 手工步骤 ──
+            e('div', { style: { fontSize: 13, fontWeight: 600, marginTop: 16, marginBottom: 2 } },
+              '想自己动手？五步，每步都能单独复制'),
+            e('div', { style: { fontSize: 12, color: C.fg3, lineHeight: 1.7 } },
+              '「claude」是发行版名，换成你自己的（', e('code', { style: S.inlineCode }, 'wsl -l -v'), ' 可查）。'),
+
+            stepTitle('①', '确认 WSL 能执行到 Windows 的 GCM'),
+            e(CodeBlock, {
+              text: step1,
+              elId: 'gitok-wsl-1',
+              hint: '必须回 OK。回 MISSING 说明 /mnt/c 没挂或 interop 被关，先解决这个。',
+            }),
+
+            stepTitle('②', '备份现有配置'),
+            e(CodeBlock, { text: step2, elId: 'gitok-wsl-2', hint: '改坏了能退，文件名带时间戳。' }),
+
+            stepTitle('③', '按 host 精确接管'),
+            e(CodeBlock, {
+              text: step3,
+              elId: 'gitok-wsl-3',
+              hint: '只动 github.com 和 gist，不碰飞书等其他 helper。',
+            }),
+
+            stepTitle('④', '验证（必须看到 40 位 SHA）'),
+            e(CodeBlock, {
+              text: step4,
+              elId: 'gitok-wsl-4',
+              hint: '在任意一个 git 仓库里跑。别接管道——`| head` 会把超时伪装成成功。',
+            }),
+
+            stepTitle('⑤', '验证通过后才删明文'),
+            e(CodeBlock, {
+              text: step5,
+              elId: 'gitok-wsl-5',
+              hint: '顺序不能反！先删后接会直接丢认证。删完再跑一次第④步确认。',
+            }),
+
+            // ── 当前端点状态 ──
             eps.length > 0 &&
-              react.createElement(
+              e(
                 'div',
-                { style: { marginTop: 10 } },
-                react.createElement('div', { style: { fontWeight: 600, fontSize: 13 } }, '当前端点'),
-                eps.map((e) =>
-                  react.createElement(
+                { style: { marginTop: 14 } },
+                e('div', { style: { fontWeight: 600, fontSize: 12.5, marginBottom: 4 } }, '当前端点'),
+                eps.map((ep) =>
+                  e(
                     'div',
-                    { key: e.name, style: { ...S.row, alignItems: 'flex-start' } },
-                    react.createElement(
+                    { key: ep.name, style: { ...S.row, alignItems: 'flex-start' } },
+                    e(
                       'span',
-                      { style: { ...S.k, minWidth: 110, color: e.adopted ? C.ok : C.warn, fontWeight: 500 } },
-                      (e.adopted ? '✅ ' : '⚠️ ') + e.name,
+                      { style: { ...S.k, minWidth: 110, color: ep.adopted ? C.ok : C.warn, fontWeight: 500 } },
+                      (ep.adopted ? '✅ ' : '⚠️ ') + ep.name,
                     ),
-                    react.createElement(
+                    e(
                       'span',
                       { style: { ...S.v, fontFamily: 'inherit', textAlign: 'left', color: C.fg3, fontSize: 12 } },
-                      e.adopted ? '已接管，借用 Windows 凭据' : '未接管：' + (e.helper || '无 helper'),
+                      ep.adopted ? '已接管，借用 Windows 凭据' : '未接管：' + (ep.helper || '无 helper'),
                     ),
                   ),
                 ),
               ),
 
-            react.createElement(
+            // ── 两个必须知道的坑 ──
+            e(
               'div',
-              { style: { marginTop: 12, fontSize: 13, fontWeight: 600 } },
-              '在 WSL 里执行（把 claude 换成发行版名）',
-            ),
-            code(
-              'GCM=' + gcmWsl + '\n' +
-              '\n' +
-              '# ① 确认 interop 能执行到 GCM\n' +
-              'test -x "$GCM" && echo OK || echo MISSING\n' +
-              '\n' +
-              '# ② 先备份，改坏了能退\n' +
-              'cp ~/.gitconfig ~/.gitconfig.bak.gitok-$(date +%Y%m%d%H%M%S)\n' +
-              '\n' +
-              '# ③ 按 host 精确接管（不要动飞书那条 helper）\n' +
-              'for h in github.com gist.github.com; do\n' +
-              '  git config --global --unset-all "credential.https://$h.helper" 2>/dev/null || true\n' +
-              '  git config --global --add "credential.https://$h.helper" "!$GCM"\n' +
-              'done\n' +
-              '\n' +
-              '# ④ 复查：每个 host 应当只剩一条\n' +
-              'git config --global --get-all "credential.https://github.com.helper"',
-            ),
-
-            react.createElement(
-              'div',
-              { style: { marginTop: 12, fontSize: 13, fontWeight: 600 } },
-              '验证（必须看到 40 位 SHA）',
-            ),
-            code(
-              '# 不要接管道！`| head` 会把超时伪装成 exit=0\n' +
-              'cd ~/git/<某个仓库>\n' +
-              'timeout 40 git ls-remote origin HEAD; echo "REAL_EXIT=$?"',
-            ),
-
-            react.createElement(
-              'div',
-              { style: { marginTop: 12, fontSize: 13, fontWeight: 600 } },
-              '验证通过后才删明文 PAT',
-            ),
-            code(
-              'gh auth logout -h github.com 2>&1 || true\n' +
-              'rm -f ~/.git-credentials\n' +
-              '\n' +
-              '# 删完立刻再验一次（此时完全依赖 interop）\n' +
-              'cd ~/git/<某个仓库> && timeout 40 git ls-remote origin HEAD; echo "REAL_EXIT=$?"',
-            ),
-
-            react.createElement(
-              'div',
-              { style: { marginTop: 12, padding: 10, background: 'var(--dsw-alias-state-warn-tertiary, rgba(217,119,6,.10))', border: '1px solid var(--dsw-alias-state-warn-primary, #b45309)', borderRadius: C.radius, fontSize: 12, lineHeight: 1.7, color: C.fg } },
-              react.createElement('strong', null, '顺序不能反：'),
+              {
+                style: {
+                  marginTop: 14,
+                  padding: 10,
+                  background: 'var(--dsw-alias-state-warn-tertiary, rgba(217,119,6,.10))',
+                  border: '1px solid var(--dsw-alias-state-warn-primary, #b45309)',
+                  borderRadius: C.radius,
+                  fontSize: 12,
+                  lineHeight: 1.7,
+                  color: C.fg,
+                },
+              },
+              e('strong', null, '顺序不能反：'),
               '先接管 → 验证通过 → 再删明文。反了会直接丢认证。',
-              react.createElement('br'),
-              react.createElement('strong', null, '网络先排查：'),
-              'VPN 没开时任何 helper 都会超时（DNS 污染）。先跑 ',
-              react.createElement('code', null, 'curl -sS -o /dev/null https://github.com'),
+              e('br'),
+              e('strong', null, '网络先排查：'),
+              'VPN 没开时任何 helper 都会超时。先跑 ',
+              e('code', { style: S.inlineCode }, 'curl -sS -o /dev/null https://github.com'),
               '，它也慢就是网络问题，不是 GCM 坏了。',
             ),
           ),
       );
     }
+
 
     // ── 侧边栏入口图标 ────────────────────────────────────────────────────
     // 与 dsh-synchub 同形态：这里只画一个图标 + 状态小点，

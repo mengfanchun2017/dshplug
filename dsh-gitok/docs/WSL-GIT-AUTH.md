@@ -5,6 +5,14 @@
 > - **想让 AI 帮你配** → 直接跳到[第二部分](#第二部分粘给-ai-的指令)，复制那段话贴给 Claude / Codex 即可。
 >
 > 相关：`ADR-006`（WSL 功能默认冻结）、`README.md` §5（面板里的 WSL 折叠区）。
+>
+> **本文件绝对路径**（直接复制给 Claude，让它自己读）：
+>
+> ```text
+> C:\dsh\dshplug\dsh-gitok\docs\WSL-GIT-AUTH.md
+> ```
+>
+> 面板里也显示这个路径并带一键复制：侧边栏 Mgitok → 持续监控下方「WSL 里怎么用」展开。
 
 ---
 

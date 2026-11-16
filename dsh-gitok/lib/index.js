@@ -42,6 +42,8 @@ import { pathToFileURL } from 'node:url'
 async function loadSchemastery() {
   const req = createRequire(import.meta.url)
   const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'))
+/** WSL 接入说明的绝对路径。面板里要「复制路径给 Claude」，必须由宿主算，不能前端拼。 */
+const DOCS_WSL = path.join(here, 'docs', 'WSL-GIT-AUTH.md')
   const candidates = []
 
   try { candidates.push(req.resolve('@deepseek-ai/schemastery')) } catch { /* not linked here */ }
@@ -457,7 +459,7 @@ function parseStatus(text, gcmPath, extra = {}) {
   if (extra.heartbeat) {
     add('heartbeat', '端到端通路', extra.heartbeat.level, extra.heartbeat.detail)
   } else {
-    add('heartbeat', '端到端通路', 'unknown', '未配置 heartbeatUrl 或本次未跑（不假装健康）')
+    add('heartbeat', '端到端通路', 'unknown', '未测试（可选）：没有指定测试仓库，所以没跑这一步。想测就在设置里填 heartbeatUrl')
   }
 
   // ---- 逐端点检查 ----
@@ -1611,7 +1613,9 @@ export function apply(ctx, config) {
           const url = new URL(req.url || '/', 'http://127.0.0.1')
           const force = url.searchParams.get('refresh') === '1'
           const status = await build(force)
-          json(res, 200, { ok: true, status, report: cache.text })
+          // docsPath 给面板用：用户要「直接把路径复制给 Claude 去装」，
+          // 手打 \ 或 / 很容易错，这里由宿主算好绝对路径返回。
+          json(res, 200, { ok: true, status, report: cache.text, docsPath: DOCS_WSL })
         } catch (err) {
           json(res, 500, { ok: false, error: String(err && err.message || err) })
         }
