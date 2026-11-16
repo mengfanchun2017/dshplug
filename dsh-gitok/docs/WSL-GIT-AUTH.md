@@ -2,11 +2,11 @@
 
 > **两种用法**
 > - **想自己看懂 / 自己动手** → 读[第一部分](#第一部分原理与手工配置)，有完整解释。
-> - **想让 AI 帮你配** → 直接跳到[第二部分](#第二部分粘给-ai-的指令)，复制那段话贴给 Claude / Codex 即可。
+> - **想让 AI 帮你配** → 直接跳到[第二部分](#第二部分粘给-ai-的指令)，复制那段话贴给任意 Vibe Coding Agent（Claude Code / Codex / Cursor / Trae 等）即可。
 >
 > 相关：`ADR-006`（WSL 功能默认冻结）、`README.md` §5（面板里的 WSL 折叠区）。
 >
-> **本文件绝对路径**（直接复制给 Claude，让它自己读）：
+> **本文件绝对路径**（直接复制给 agent，让它自己读）：
 >
 > ```text
 > C:\dsh\dshplug\dsh-gitok\docs\WSL-GIT-AUTH.md
@@ -120,7 +120,7 @@ cp "$(ls -t ~/.gitconfig.bak.gitok-* | head -1)" ~/.gitconfig
 
 ## 第二部分：粘给 AI 的指令
 
-> 用法：**把下面整段（从「你是」到最后一个 ``` 结束）原样粘给 Claude / Codex**，
+> 用法：**把下面整段（从「你是」到最后一个 ``` 结束）原样粘给任意 Vibe Coding Agent**（Claude Code / Codex / Cursor / Trae 都行），
 > 它会自己探测、自己配置、自己验证。不需要你补任何信息。
 
 ````text

@@ -40,7 +40,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const libDir = path.dirname(fileURLToPath(import.meta.url))
 /** 插件根目录（lib 的上一级）。宿主算好给前端，避免前端拼路径。 */
 const here = path.dirname(libDir)
-/** WSL 接入说明的绝对路径。面板要「把路径复制给 Claude」，必须由宿主算，不能前端拼。 */
+/** WSL 接入说明的绝对路径。面板要「把路径复制给 agent」，必须由宿主算，不能前端拼。 */
 const DOCS_WSL = path.join(here, 'docs', 'WSL-GIT-AUTH.md')
 
 // schemastery 由 DSH 宿主提供。本 bundle 若是 link: 安装的本地目录，
@@ -1744,7 +1744,7 @@ export function apply(ctx, config) {
           const url = new URL(req.url || '/', 'http://127.0.0.1')
           const force = url.searchParams.get('refresh') === '1'
           const status = await build(force)
-          // docsPath 给面板用：用户要「直接把路径复制给 Claude 去装」，
+          // docsPath 给面板用：用户要「直接把路径复制给 agent 去装」，
           // 手打 \ 或 / 很容易错，这里由宿主算好绝对路径返回。
           json(res, 200, { ok: true, status, report: cache.text, docsPath: DOCS_WSL })
         } catch (err) {

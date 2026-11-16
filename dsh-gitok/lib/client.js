@@ -435,6 +435,11 @@ window.__ModuleLoader__.load({
             react.createElement('pre', { style: S.pre }, data.report || '(空)'),
           ),
 
+        // ── 授权对账：按账号给链接 + 怎么判断本机是哪个 ──
+        data && data.status
+          ? react.createElement(CredAccountCard, { st: data.status })
+          : null,
+
         // ── 给新手的说明 ──
         react.createElement(
           'div',
@@ -531,6 +536,171 @@ window.__ModuleLoader__.load({
         checks.map((c) =>
           react.createElement(CheckRow, { key: c.id, c, mark, color }),
         ),
+      );
+    }
+
+    /**
+     * 授权对账卡片：把「本机存的是谁」变成可点击的 GitHub 链接。
+     *
+     * 为什么需要它：用户问「我要去 GitHub 做清理，但不知道从哪进、也不知道
+     * 这台机器的授权到底对应网页上哪一条」。GitHub 不提供枚举 OAuth token 的 API
+     * （实测 /applications/grants 404、/user/installations 403），所以只能：
+     *   ① 用本机已经探到的账号名，直接拼出该账号的设置页链接，省得用户自己找；
+     *   ② 把「怎么判断哪条是这台机器」的真实可行手段写清楚。
+     *
+     * 【关键】不要承诺做不到的事：OAuth token 在网页上不显示名字/后4位，
+     * 无法把「本机凭据」和「网页某一行」一一对应。唯一能对上的依据是
+     * 安全日志里的 oauth_access 事件（带时间 + IP/城市）。
+     */
+    function CredAccountCard(props) {
+      const st = (props && props.st) || {};
+      const e = react.createElement;
+      const [open, setOpen] = useState(false);
+
+      // 已存凭据的账号名（去重）；拿不到就退化成通用链接。
+      const users = st.credAccounts
+        ? [...new Set(Object.values(st.credAccounts).filter(Boolean))]
+        : [];
+      const nCred = st.credTargets ? st.credTargets.length : 0;
+      const primary = users[0] || '';
+
+      // 带账号名的链接。GitHub 设置页不需要带用户名（登录后就是自己），
+      // 但把它写进 URL 哈希对用户有提示作用，且直接写 /settings/xxx 最稳。
+      const base = 'https://github.com/settings';
+      const link = (href, text) =>
+        e(
+          'a',
+          {
+            href,
+            target: '_blank',
+            rel: 'noreferrer noopener',
+            style: {
+              color: 'var(--dsw-alias-label-link, ' + C.brand + ')',
+              textDecoration: 'underline',
+              cursor: 'pointer',
+            },
+          },
+          text,
+        );
+
+      const title = 'GitHub 授权对账' + (primary ? '（账号：' + primary + '）' : '');
+
+      return e(
+        'div',
+        { style: S.card },
+        e('div', { style: { fontWeight: 600, marginBottom: 8 } }, title),
+
+        // 账号未探测到时的降级提示
+        nCred === 0
+          ? e(
+              'div',
+              { style: { ...S.hint, marginBottom: 8 } },
+              '本机还没有存凭据，所以拼不出账号专属链接。先登录一次（上面的「登录 GitHub」），' +
+                '这里就会告诉你该去哪个账号下检查。',
+            )
+          : e(
+              'div',
+              { style: { ...S.hint, marginBottom: 10 } },
+              '本机存的凭据属于 ', e('strong', null, primary || '(未知账号)'),
+              '。带着这个账号名去下面两个页面，就不用在多个账号之间猜。',
+            ),
+
+        // ── 三个直达链接 ──
+        e(
+          'div',
+          { style: { fontSize: 12.5, lineHeight: 2, color: C.fg2 } },
+          e('div', { style: { fontWeight: 600, color: C.fg, marginBottom: 2 } },
+            '① 这里能看到「哪个 App 在用你的账号」（本插件的授权在这里）'),
+          e('div', null, link(base + '/applications', base + '/applications'),
+            ' → Authorized OAuth Apps'),
+          e('div', { style: { ...S.hint, marginLeft: 14, marginBottom: 8 } },
+            'GCM 登录产生的是 gho_ 开头的 OAuth token，在这里只会显示成一条「Git Credential Manager」。'),
+
+          e('div', { style: { fontWeight: 600, color: C.fg, marginBottom: 2 } },
+            '② 这里能看到「手动建的令牌」（有名字、后 4 位）'),
+          e('div', null, link(base + '/tokens', base + '/tokens'),
+            ' → Personal access tokens'),
+          e('div', { style: { ...S.hint, marginLeft: 14, marginBottom: 8 } },
+            '只有这一页的 token 能单条删、且不影响到别的机器。'),
+
+          e('div', { style: { fontWeight: 600, color: C.fg, marginBottom: 2 } },
+            '③ 这里能查到「哪次授权来自哪个地方」（判断本机的唯一依据）'),
+          e('div', null, link(base + '/security-log', base + '/security-log'),
+            ' → Security log'),
+          e('div', { style: { ...S.hint, marginLeft: 14, marginBottom: 8 } },
+            '搜 ', e('code', { style: S.inlineCode }, 'oauth_access'),
+            ' 事件，每条带时间和 IP/城市。'),
+        ),
+
+        // ── 可展开：怎么判断这台机器是哪个授权 ──
+        e(
+          'div',
+          {
+            onClick: () => setOpen(!open),
+            style: {
+              cursor: 'pointer',
+              fontSize: 12.5,
+              color: C.brand,
+              userSelect: 'none',
+              marginTop: 4,
+            },
+          },
+          (open ? '− ' : '+ ') + '怎么判断「这台机器」对应哪个授权？',
+        ),
+
+        open
+          ? e(
+              'div',
+              { style: { ...S.hint, marginTop: 8, lineHeight: 1.8 } },
+              e('div', { style: { fontWeight: 600, color: C.fg, marginBottom: 4 } },
+                '先说结论：没有一步到位的对应关系'),
+              'OAuth token 在 GitHub 网页上', e('strong', null, '不显示名字、不显示后 4 位'),
+              '，所以「本机的这一条」和「网页上的某一行」没法直接配对。',
+              '（这正是为什么本插件不给你假指纹 —— 给了也对不上。）',
+              e('br'),
+              e('br'),
+              e('div', { style: { fontWeight: 600, color: C.fg, marginBottom: 4 } },
+                '可行的判断方法（按可靠度排序）'),
+              e('div', { style: { marginBottom: 6 } },
+                e('strong', null, '方法 1（最准）：看安全日志的 IP/城市'),
+                e('br'),
+                '在 ③ 里搜 ', e('code', { style: S.inlineCode }, 'oauth_access'),
+                '，找 ', e('code', { style: S.inlineCode }, 'oauth_authorization.create'),
+                ' 那几条。刚登录完就刷新，',
+                e('strong', null, '时间最新、地点和你当前出口 IP 一致'),
+                '的那条，就是这台机器刚才产生的。',
+                e('br'),
+                '如果开了代理（本插件探到代理：',
+                e('code', { style: S.inlineCode }, st.proxy || st.sysProxy || '(未配置)'),
+                '），GitHub 看到的可能是代理出口 IP 而不是你家宽带。',
+              ),
+              e('div', { style: { marginBottom: 6 } },
+                e('strong', null, '方法 2：用「撤销 + 重登」反推'),
+                e('br'),
+                '在 ① 里把「Git Credential Manager」撤销掉 → 这台机器（以及其他所有用 GCM 的机器）',
+                '下一次 pull 会要求重新登录。重登完再回 ① 看最近使用时间是否刷新。',
+                e('strong', null, '代价：所有机器一起失效'),
+                '，不是单机操作。',
+              ),
+              e('div', null,
+                e('strong', null, '方法 3：不猜，直接分账号'),
+                e('br'),
+                '如果你有多个 GitHub 账号，最干净的做法是',
+                e('strong', null, '每个账号各用各的机器/用户配置'),
+                '，而不是在同一台机器上反复换号 —— 那会覆盖掉同一 target 的凭据，',
+                '事后无法从网页侧分辨。',
+              ),
+              e('br'),
+              e('div', { style: { fontWeight: 600, color: C.fg, marginBottom: 4 } },
+                '建议的清理顺序'),
+              '① 先在 ', e('code', { style: S.inlineCode }, 'tokens'),
+              ' 里删掉不再用的 PAT（能单条删、影响最小）；',
+              e('br'),
+              '② 再决定是否撤销 OAuth App 授权（影响所有机器，需重新登录）；',
+              e('br'),
+              '③ 最后回本面板点「撤销凭据」，把本机这份也清掉。',
+            )
+          : null,
       );
     }
 
@@ -810,7 +980,7 @@ window.__ModuleLoader__.load({
     // 用户反馈两轮迭代后的形态：
     //   v0.3.3：命令全堆在一个 <pre> 里 → 「点击看到好多命令，也不能复制」
     //   v0.3.4：拆成 5 个独立步骤，每步自带复制按钮；顶部给「复制文档路径」，
-    //           用户直接把路径贴给 Claude，让 Claude 自己去读文档、自己装。
+    //           用户直接把路径贴给 agent，让 agent 自己去读文档、自己装。
     //
     // 缩进问题：<pre> 里绝不能再有源码缩进。命令文本一律从行首写起（用数组 join），
     // 不要像以前那样写成 '  git config ...' —— 那是源码缩进，会原样显示出来。
@@ -856,10 +1026,12 @@ window.__ModuleLoader__.load({
           'rm -f ~/.git-credentials',
         ].join('\n');
 
-      // 给 AI 的一句话：把文档路径交给 Claude，让它自己读自己配。
+      // 给 AI 的一句话：把文档路径交给 agent，让它自己读自己配。
+      // 不要写死「Claude」—— 用户可能用 Claude Code / Codex / Cursor / Trae 等任何 agent，
+      // 写死品牌会让用户以为只能配合特定工具。
       const aiPrompt =
         '请阅读 ' + (docsPath || '<文档路径>') +
-        ' ，按里面的「第二部分：粘给 AI 的指令」帮我配置 WSL 的 git 认证。' +
+        '，按里面的「第二部分：粘给 AI 的指令」帮我配置 WSL 的 git 认证。' +
         '每一步的命令和真实输出都要贴给我。';
 
       const stepTitle = (n, title) =>
@@ -910,9 +1082,10 @@ window.__ModuleLoader__.load({
                 },
               },
               e('div', { style: { fontSize: 13, fontWeight: 600, marginBottom: 5, color: C.fg } },
-                '最省事：把下面这段话直接发给 Claude'),
+                '最省事：把下面这段话发给任意 Vibe Coding Agent'),
               e('div', { style: { fontSize: 12, color: C.fg2, lineHeight: 1.7, marginBottom: 6 } },
-                '它会自己读文档、探测环境、配好并验证。你只需要把输出贴回来核对。'),
+                'Claude Code、Codex、Cursor、Trae 都行 —— 任选一个你手边在用的。' +
+                '它会自己读文档、探测环境、配好并验证，你只需把输出贴回来核对。'),
               e(CodeBlock, {
                 label: '',
                 text: aiPrompt,

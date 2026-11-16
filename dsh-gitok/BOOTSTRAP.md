@@ -3,7 +3,7 @@
 > 命令行手册：**装机、验证、排错、迁移**。全部命令可直接复制。
 > 代码怎么设计、为什么这么定 → 见 [`ADR.md`](./ADR.md)；面板长什么样 → 见 [`README.md`](./README.md)。
 >
-> 快照时间：**2026-11-16** ｜ 版本 **0.3.9** ｜ 宿主机 `REDMIPRO` ｜ profile `desktop`
+> 快照时间：**2026-11-16** ｜ 版本 **0.3.10** ｜ 宿主机 `REDMIPRO` ｜ profile `desktop`
 
 ---
 
@@ -76,7 +76,7 @@ $node = "$env:USERPROFILE\AppData\Local\Programs\DeepSeek Harness\resources\runt
 & $node -e "const j=require('C:/dsh/dshplug/dsh-gitok/package.json');console.log(j.version, !!j.dsh.client, j.files)"
 ```
 
-期望：两次 `--check` 都不输出内容（exit 0）；第三行打印 `0.3.9 true [...]`。
+期望：两次 `--check` 都不输出内容（exit 0）；第三行打印 `0.3.10 true [...]`。
 
 ### 2.2 第二层：宿主半注册（mock ctx，不起 DSH）
 
@@ -348,7 +348,7 @@ cd C:\dsh\dshplug
 & git log --oneline -3
 ```
 
-应看到与 `dsh-gitok v0.3.9` 相关的提交在最近几条里。
+应看到与 `dsh-gitok v0.3.10` 相关的提交在最近几条里。
 
 ### 5.2 切换 DSH 工作区
 
@@ -441,7 +441,7 @@ cd $env:USERPROFILE\.dsh\profiles\desktop
 ## 8. 验收清单（迁移后逐条打勾）
 
 ```text
-[ ] install.ps1 -Check 显示 dsh-gitok v0.3.9 status=active link-junction
+[ ] install.ps1 -Check 显示 dsh-gitok v0.3.10 status=active link-junction
 [ ] node --check lib/index.js 通过
 [ ] node --check lib/client.js 通过
 [ ] mock ctx 测试：tools=9, routes=5（status + login/revoke/rotate/bootstrap）
@@ -719,9 +719,10 @@ git config --global --get-all 'credential.https://github.com.helper'
 恢复到原 helper 后，如果之前已经 `gh auth logout`，需要重新 `gh auth login`
 才能让 gh helper 重新可用。
 
-### 10.4 给 Claude（或任何其他 agent）的详细操作说明
+### 10.4 给 Vibe Coding Agent（Claude Code / Codex / Cursor / Trae 等）的详细操作说明
 
-如果你想让 **Claude 自己去把 `claude` 发行版的 git 认证修好**，把下面这段直接贴给它：
+如果你想让 **agent 自己去把 `claude` 发行版的 git 认证修好**，把下面这段直接贴给它
+（Claude Code / Codex / Cursor / Trae 都行；下面的 `claude` 是 **WSL 发行版名**，不是工具名，别搞混）：
 
 ```text
 你在 WSL 发行版 claude 里。目标：让 git 能推拉 GitHub，且不在本机落盘任何明文密钥。

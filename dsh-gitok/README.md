@@ -6,7 +6,7 @@ Git 认证一站式管理插件：**检查 / 建议 / 配置 / 验证 / 撤销**
 （DPAPI 加密、绑定用户+本机、出机器解不开）。WSL 通过 interop 直接调用 Windows 的
 `git-credential-manager.exe`，**自己一个字节的密钥都不存**。
 
-> **版本 0.3.9 ｜ 状态 active ｜ 2026-11-16**
+> **版本 0.3.10 ｜ 状态 active ｜ 2026-11-16**
 > 未发布 npm，已用 `link:` 装进 `desktop` profile（宿主机 `REDMIPRO`）。
 > 这份 README 是**交接文档**：设计、机制、实测数据、踩过的坑全在里面，换机器/换工作区照着读就能接着开发。
 
@@ -954,7 +954,7 @@ code(['for h in github.com; do', 'git config ...', 'done'].join('\n'))
 
 ### 8.19 绝对路径要让宿主算，不要让用户拼
 
-用户要「把文档路径复制给 Claude 让它自己去装」。
+用户要「把文档路径复制给 agent 让它自己去装」。
 
 不要在前端拼路径（`C:\\dsh\\dshplug\\...` 里的反斜杠在 JS 字符串里要转义，
 用户手打也容易错）。做法：宿主半在路由响应里带上，前端只负责显示和复制。
@@ -966,7 +966,7 @@ const DOCS_WSL = path.join(here, 'docs', 'WSL-GIT-AUTH.md')
 json(res, 200, { ok: true, status, report: cache.text, docsPath: DOCS_WSL })
 ```
 
-前端 `WslGuide` 拿 `props.docsPath`，同时生成一句**可直接粘给 AI 的话**：
+前端 `WslGuide` 拿 `props.docsPath`，同时生成一句**可直接粘给 agent 的话**：
 
 > 请阅读 `<绝对路径>`，按里面的「第二部分：粘给 AI 的指令」帮我配置 WSL 的 git 认证。
 > 每一步的命令和真实输出都要贴给我。
@@ -1094,7 +1094,7 @@ cd C:\dsh\dshplug; & git pull --ff-only
 | Windows 凭据 | ✅ GCM `wincredman`，`git:https://github.com`，用户 `mengfanchun2017` |
 | WSL `claude` | ⏸ **未改动**，仍用 gh helper + 明文 PAT（按用户要求保持原样） |
 | WSL `u26claude4` | ⏸ **未改动**，仍有空口令 SSH 私钥（待后续处理） |
-| 本插件 | ✅ `status: active`，已装进 `desktop`（v0.3.9，link-junction） |
+| 本插件 | ✅ `status: active`，已装进 `desktop`（v0.3.10，link-junction） |
 | 设置面板 | ✅ 代码已完成（宿主路由 + 浏览器半）；需重启 DSH 后在界面上确认 |
 ---
 
@@ -1106,7 +1106,7 @@ cd C:\dsh\dshplug; & git pull --ff-only
 - [`BOOTSTRAP.md`](./BOOTSTRAP.md) —— 怎么做（安装/验证/排错/迁移）
 - [`ADR.md`](./ADR.md) —— 为什么（七条决策 + 反面代价 + 已否决方案）
 - [`docs/git-auth-audit-2026-11-12.md`](docs/git-auth-audit-2026-11-12.md) —— 原始盘点报告
-- [`docs/WSL-GIT-AUTH.md`](docs/WSL-GIT-AUTH.md) —— **WSL 里怎么让 git 用上 Windows 凭据**：手工步骤 + 可直接粘给 AI 自动配置的指令
+- [`docs/WSL-GIT-AUTH.md`](docs/WSL-GIT-AUTH.md) —— **WSL 里怎么让 git 用上 Windows 凭据**：手工步骤 + 可直接粘给 Vibe Coding Agent 自动配置的指令
 
 仓库级：
 

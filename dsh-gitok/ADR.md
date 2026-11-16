@@ -354,7 +354,7 @@ v0.3.2 补上时，最初把 `main` 塞进了 `sidebar.panellist` 的回调里�
 
 | 项 | 值 |
 |---|---|
-| 版本 | **0.3.9** |
+| 版本 | **0.3.10** |
 | 历史版本 | 0.3.5（2026-11-16 之前的快照） |
 | 状态 | `active` |
 | 安装形态 | `link-junction` → `C:\dsh\dshplug\dsh-gitok` |
@@ -664,3 +664,33 @@ smoke-route.mjs     → exit 1        （FAIL: 期望 200，实际 500）
   | 建一个「每机命名细粒度 PAT」来做可区分授权 | 即 ADR-008 已否决的方案：要用户手动建 PAT、管过期、逐机配置，成本远高于收益 |
   | 用 GitHub API 枚举并展示授权列表 | API 不存在（404/403 实测），做不到 |
   | 插件代删 GitHub 侧授权 | 需要用户 token 且有 `delete_repo` 之类高危 scope，违反 ADR-002 |
+### 2026-11-16 · v0.3.10 补遗：按账号给出链接 + 「哪台机器」的判断方法
+
+用户反馈：**「如果做清理和 GitHub 上授权的检查，没有看到反馈；在设置中增加这块的描述最好
+根据授权的用户给出链接，并写清楚如何判断这台机器的授权是哪个」**。
+
+面板新增 `CredAccountCard`（放在状态卡之后、原始报告之前）：
+
+1. **标题带账号名** —— 直接从 `credAccounts` 取，`GitHub 授权对账（账号：xxx）`。
+   用户不用在多个账号之间猜该去哪个账号下检查。
+2. **三个直达链接**（`target=_blank`）：
+   - `settings/applications` → Authorized OAuth Apps（GCM 的 `gho_` 授权在这里）
+   - `settings/tokens` → PAT（唯一能单条删、不影响其他机器的）
+   - `settings/security-log` → 搜 `oauth_access`（**判断「哪台机器」的唯一依据**）
+3. **可展开说明**「怎么判断这台机器对应哪个授权」，写三种按可靠度排序的方法：
+   - 方法 1（最准）：安全日志里 `oauth_authorization.create` 的时间 + IP/城市，
+     刚登录完刷新，时间最新且出口 IP 对得上的那条就是。**注意代理会改变 GitHub 看到的 IP**。
+   - 方法 2：撤销 + 重登反推，代价是所有机器一起失效。
+   - 方法 3：多账号不要在同一台机器反复换号（会覆盖同一 target 的凭据）。
+4. **明确写「没有一步到位的对应关系」**，并解释为什么不给假指纹 ——
+   这与 ADR-014 一致：OAuth token 网页端不显示名字/后 4 位，给了也对不上。
+
+同时按用户要求把文案里的「发给 Claude」统一改成
+「发给任意 Vibe Coding Agent（Claude Code / Codex / Cursor / Trae 都行）」，
+涉及 `client.js`（两处 UI 文案 + aiPrompt 注释）、`BOOTSTRAP.md` §10.4、
+`docs/WSL-GIT-AUTH.md` 开头与第二部分、`plugin-roadmap.md` §1.4 共 11 处。
+`BOOTSTRAP.md` §10.4 额外标注：那里的 `claude` 是 **WSL 发行版名**，不是工具名，避免混淆。
+
+**验证**：`node --check` 通过；用最小 React 桩把 `CredAccountCard` 真渲染了三种输入
+（有凭据 / 无凭据 / 全空），标题与降级提示都正确分支；静态扫了 `C.*` / `S.*` 的
+13 + 14 个引用，确认无未定义键（这是 `node --check` 查不出的一类错误）。
