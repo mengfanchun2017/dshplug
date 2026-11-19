@@ -780,7 +780,10 @@ export function apply(ctx, config) {
             if (raw.length > 4 * 1024 * 1024) throw new Error('请求体太大')
           }
           const body = JSON.parse(raw || '{}')
-          const paths = Array.isArray(body.paths) ? body.paths.filter(Boolean) : []
+          // 树里的层级用 \u0000 分隔，gn.py 要 \x1f；不转就永远匹配不上。
+          const paths = (Array.isArray(body.paths) ? body.paths.filter(Boolean) : [])
+            .map((p) => String(p).split('\u0000')
+              .filter((s) => s && s !== '\u0001flat').join('\u001f'))
           const target = body.target || {}
           if (!paths.length) return send(400, { ok: false, error: '没有收到任何选中项' })
           if (paths.length > 2000) return send(400, { ok: false, error: '单次超过 2000 个选中项，请分批' })
@@ -1307,9 +1310,16 @@ export function apply(ctx, config) {
             if (raw.length > 256 * 1024) throw new Error('请求体太大')
           }
           const body = JSON.parse(raw || '{}')
-          const paths = Array.isArray(body.paths) ? body.paths.filter(Boolean) : []
-          if (!paths.length) return send(400, { ok: false, error: '没有收到任何选中项' })
-          if (paths.length > 2000) return send(400, { ok: false, error: '单次超过 2000 项，请分批' })
+          const rawPaths = Array.isArray(body.paths) ? body.paths.filter(Boolean) : []
+          if (!rawPaths.length) return send(400, { ok: false, error: '没有收到任何选中项' })
+          if (rawPaths.length > 2000) return send(400, { ok: false, error: '单次超过 2000 项，请分批' })
+          // 树里用 \u0000 当层级分隔（见 client.js 的 ck / bKey / lk），
+          // gn.py 要的是 \x1f。不转就会把整串当成一个库名，永远匹配不上。
+          // \u0001flat 是扁形书（无书名）的占位层：树里要占位才能对齐列，
+          // 而 gn.py 的镜像里根本没有这一层，必须抹掉，否则永远 0 命中。
+          const toGnPath = (p) => String(p).split('\u0000')
+            .filter((s) => s && s !== '\u0001flat').join('\u001f')
+          const paths = rawPaths.map(toGnPath)
           const out = await runGn(config, resolveCreds(),
             ['resolve', '--paths', ...paths], undefined, 60000)
           const txt = String(out.output || '')

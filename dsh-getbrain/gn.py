@@ -1778,14 +1778,24 @@ def _save_to_trash(client, note_id):
     所以这只是「内容救得回来」，不是「可逆操作」。界面上必须这么说。
     """
     detail = client.detail(sid(note_id))
-    data = detail.get("data") if isinstance(detail, dict) else None
-    # detail 返回 {data: {...}}；部分版本直接返回笔记体，两种都兼容。
+    # 实测形状是 {"note": {...}}；早期版本曾用 {"data": {...}}，两种都接。
+    data = None
+    if isinstance(detail, dict):
+        for key in ("note", "data", "result"):
+            cand = detail.get(key)
+            if isinstance(cand, dict) and cand:
+                data = cand
+                break
+        if data is None and detail.get("content"):
+            data = detail
     if not isinstance(data, dict) or not data:
-        data = detail if isinstance(detail, dict) else {}
-    if not data or not data.get("content"):
+        raise RuntimeError("note/detail 返回空，不敢删")
+    # 正文可能在 content，也可能只有 ref_content，都当作正文兜底
+    body_text = (data.get("content") or data.get("ref_content") or "").strip()
+    if not body_text:
         raise RuntimeError("note/detail 没返回正文，不敢删")
     TRASH.mkdir(parents=True, exist_ok=True)
-    title = (data.get("title") or "(无标题)").strip()
+    title = (data.get("title") or data.get("display_title") or "(无标题)").strip()
     safe = re.sub(r'[\\/:*?"<>|\r\n\t]', "_", title)[:60].strip() or "note"
     out = TRASH / f"{sid(note_id)}_{safe}.md"
     body = [
@@ -1793,12 +1803,12 @@ def _save_to_trash(client, note_id):
         "",
         f"- note_id: `{sid(note_id)}`",
         f"- 已删除于: {now_iso()}",
-        f"- 类型: {data.get('note_type') or data.get('type') or ''}",
-        f"- 原始链接: https://www.biji.com/note/{sid(note_id)}",
+        f"- 类型: {data.get('note_type') or data.get('entry_type') or ''}",
+        f"- 原始链接: {data.get('note_url') or ('https://www.biji.com/note/' + sid(note_id))}",
         "",
         "## 原文（删除前备份）",
         "",
-        str(data.get("content") or ""),
+        body_text,
     ]
     out.write_text("\n".join(body), encoding="utf-8")
     # 同时留一份原始 JSON：Markdown 丢了格式，救的时候可能需要字段。

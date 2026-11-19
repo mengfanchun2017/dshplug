@@ -948,7 +948,9 @@ window.__ModuleLoader__.load({
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             credentials: 'same-origin',
-            body: JSON.stringify({ confirm: 'DELETE', acknowledged: true,
+            // acknowledged 必须反映真实勾选：写死 true 等于把服务端的
+            // 二次确认变成摆设，勾框就成了纯装饰。
+            body: JSON.stringify({ confirm: 'DELETE', acknowledged: !!delAck,
               dryRun: dry, noteId: delNoteId }),
           })
           const d = await r.json()
@@ -959,7 +961,7 @@ window.__ModuleLoader__.load({
         } finally {
           setDelBusy(false)
         }
-      }, [delNoteId, delBusy])
+      }, [delNoteId, delBusy, delAck])
 
       // 把树上勾的层级路径转成 note_id。
       // 为何必须做这一步：直接要求用户手填 19 位 note_id 等于没法用。

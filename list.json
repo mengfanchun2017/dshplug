@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated": "2026-11-16",
+  "updated": "2026-11-19",
   "note": "本机自研插件清单。install.ps1 按此表决定装哪些；plugpush.ps1 按此表决定推哪些。新增插件时加一条即可。",
   "plugins": [
     {
@@ -27,13 +27,13 @@
     {
       "name": "dsh-getbrain",
       "dir": "dsh-getbrain",
-      "version": "2.6.0",
-      "description": "得到大脑（原 Get 笔记）整理插件：官方 OpenAPI 全量下载到统一数据目录（默认 = 仓库同级 data-getbrain，自动创建、不进 Git），默认只读、写操作需确认、删除双重闸门；侧边栏 Mgetbrain 工作台有真实可展开的「知识库→目录→书→讲」层级树（本地重建，不依赖服务器）、分类调整（勾选→计划→干跑→双点真写）与真实审计日志；附 SKILL.md 整理纪律",
+      "version": "2.7.0",
+      "description": "得到大脑（原 Get 笔记）整理插件：官方 OpenAPI 全量下载到统一数据目录（默认 = 仓库同级 data-getbrain，自动创建、不进 Git），默认只读、写操作需确认、删除四道闸门+本地 trash 兜底；侧边栏 Mgetbrain 工作台有真实可展开的「知识库→目录→书→讲」层级树（本地重建，不依赖服务器）、分类调整（勾选→计划→干跑→双点真写）与真实审计日志；附 SKILL.md 整理纪律",
       "installedOn": [
         "FRANCIS-HOME-I7"
       ],
       "status": "active",
-      "note": "2.6.0（2026-11-18）：知识管理能力三大块。① **拖拽 + 撤销**：树里目录/书行可拖到自建知识库（书架不可作目标，避免造出无法收拾的双重归属）；新增 gn.py undo-snapshot（只读拍「归属」快照）+ gn.py undo（状态收敛回滚，非逆操作）+ POST /undo、GET /undos；/apply 真写前自动拍快照，**拍不到就中止写入**。实测闭环：[] → icosa → []，三个原有标签一条无损；重复撤销/缺 confirm/dry-run 三道闸门全部生效。② **发芽/审问/连线**：实测官方只有 GET /resource/note/sprout（POST 404、13 个其他 AI 端点全 404），所以平台侧只能查不能生成；新增 gn.py sprout / context-pack（本地素材包，纯本地不联网）/ prompts（提示词存 dataDir/prompts，改文件即生效）。新增侧边栏「AI 动作」页：取素材包 → 选按钮（每按钮绑一份可编辑提示词）→ 拼好发给 AI，结果**不自动写回**。③ **理论沉淀**：docs/PKM-THEORY.md（实测 94% 是课程划线 4053 条、仅 6% 是自有记录 269 条，故两堆分开处理）、docs/UNDO-DESIGN.md、docs/AI-ACTIONS.md。同时修：全部颜色变量从编造的 --dsh-* 改为真存在的 --dsw-alias-*（浅色主题白底白字隐患）；去掉「非书本／单篇」伪层级（63 个目录 61 个只有它）；每一层都能勾选（父层级不再只能逐篇点）。2.5.0（2026-11-16）：写操作接通——gn.py resolve + /plan + /apply + /log，侧边栏四页接真数据。"
+      "note": "2.7.0（2026-11-19）：修用户报的三个 bug，并补删除能力。① **白底白字**：根因不是用错变量，而是用了**根本不存在的变量**。实测 app.asar 里 --dsw-alias-* 出现 155 个、**真正定义只有 138 个**，17 个只被用从没定义（--dsw-alias-fill-l1 / bg-l1 / bg-elevated / label-error 等）；var(--x) 查不到就是空 → 背景透明 + 硬编码 #fff 文字 = 深色主题白底白字。改用 state-business-primary 做填充、label-primary-foreground 做前景（该 token 浅色 #fff / 深色 #0f1115，会随主题翻转）。client.js 用到的 15 个 token 逐个比对 asar **15/15 全部已定义**，硬编码 #fff 清零。② **知识库 ID 要手填做不到**：inventory 一直就返回 knowledge_bases[].id，只是界面没接；改成下拉选择 + 「新建库」只填名字（后端 kb_ensure 按名幂等），不需要任何人看见 ID。③ **删除（带提醒）**：官方 FAQ 自列「删除后直接彻底删除、未进回收站」。四道闸门：默认收起 / 勾「我知道可能不可恢复」（服务端校验 acknowledged，不勾直接 400）/ 干跑 / 二次点真删。关键：删前必须存本地副本 _save_to_trash()（trash/<note_id>_<标题>.md + .json），**存不下来就拒绝删除**（返回 4），不给“反正有回收站”的幻觉；诚实边界：只保证内容救得回来，不是操作可撤销（重建后 note_id 变、引用断）。新增 POST /delete（需 confirm:'DELETE' + acknowledged）与 POST /resolve（勾选层级→note_id，只读不联网）。④ 顺带修两个静默 bug：树里路径用 \\u0000 分隔而 gn.py 要 \\x1f（不转永远 0 命中且不报错）；扁形书占位层 \\u0001flat 在镜像里不存在，必须剔除。实测：单层/两层/三层含 flat 四种路径均正确命中 120 条；删除干跑写出 483 字节含全文；acknowledged:false 返回 400。新增 docs/PKM-ROADMAP.md（按实测数据给的开发建议：94% 是课程摘录不要重分类、名字做外键是最大隐患、镜像缺一致性校验、Agent 缺面向工作内容的入口）。上一版 2.6.0：拖拽+撤销、发芽/审问/连线、PKM 理论沉淀。"
     },
     {
       "name": "dsh-gitok",
