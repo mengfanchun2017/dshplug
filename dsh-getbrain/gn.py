@@ -1060,6 +1060,706 @@ def cmd_topics(args):
     return 0
 
 
+# ── 层级清单（分类调整的依据）──────────────────────────────────────
+#
+# 为何要单独一个子命令：官方 topics 是**平**的（实测 /resource/knowledge/list
+# 只返 id/name/scope/stats，没有 parent/folder 字段），所以「知识库 → 目录 →
+# 书 → 讲 → 划线」不可能靠服务器结构表达。真实数据里能当层级的只有三样，
+# 全部靠本地重建：
+#   1) 知识库（topics）：最大集合，一阶；
+#   2) 标签里的 system 标签（如「万维钢·精英日课6」）：就是「目录／专栏」；
+#   3) reference 的 article 标题：《智能简史》5：模型思考者 → 书 + 讲。
+# 本命令只读本地镜像，不调 API、不耗配额。
+
+def _parse_md_head(path):
+    """从镜像 Markdown 头部抽出分类所需的几个字段（不解析全文）。"""
+    out = {"note_id": None, "type": None, "topics": [], "topic_ids": {},
+           "tags": [], "source": None, "title": None, "url": None}
+    try:
+        txt = path.read_text(encoding="utf-8", errors="replace")[:4096]
+    except OSError:
+        return out
+    m = re.search(r"- note_id: `(\d+)`", txt)
+    if m:
+        out["note_id"] = m.group(1)
+    m = re.search(r"^- 类型: (\S+)", txt, re.M)
+    if m:
+        out["type"] = m.group(1)
+    # 知识库/标签在 md 里是 Python 字面量列表：[{'name': 'x', 'type': 'system'}, ...]
+    m = re.search(r"^- 知识库: (.+)$", txt, re.M)
+    if m and m.group(1).strip() not in ("None", "[]", ""):
+        raw = m.group(1)
+        out["topics"] = re.findall(r"'name': '([^']+)'", raw)
+        # 知识库的 id 也要留着：镜像里不带 scope，光凭名字无法区分
+        # 「我的知识库」与「得到电子书书架」（两者会重名），必须靠 id 查缓存。
+        for tid, nm in re.findall(r"'id': '([^']*)', 'name': '([^']+)'", raw):
+            if tid and nm:
+                out["topic_ids"][nm] = tid
+    m = re.search(r"^- 标签: (.+)$", txt, re.M)
+    if m and m.group(1).strip() not in ("None", "[]", ""):
+        out["tags"] = re.findall(r"'name': '([^']+)'", m.group(1))
+    m = re.search(r"^- 来源: (.+)$", txt, re.M)
+    if m:
+        out["source"] = m.group(1).strip()
+    # 真正可读的「讲/篇」标题就在文件的 H1（`# 《智能简史》5：模型思考者`）。
+    # 之前想用 `原文标题` 是错的：那个字段只在 article.title 与 title 不同时才写，
+    # 实测绝大多数文件根本没有它，于是所有笔记都被归到「(非书本／单篇)」。
+    m = re.search(r"^# (.+)$", txt, re.M)
+    if m:
+        out["title"] = m.group(1).strip()
+    return out
+
+
+# 载体类标签：说明「这条笔记是怎么记下来的」（录音 / 拍图 / 存链接），
+# 不是「它讲什么」。早先把它们当目录，结果树里冒出「录音笔记 149 条」这种
+# 伪目录——点进去全是互不相关的会议、课程、随手记，没有任何分类价值。
+CARRIER_TAGS = {"录音笔记", "录音卡笔记", "AI链接笔记", "图片笔记",
+                "本地录音", "录音卡", "会议记录"}
+CARRIER_PREFIX = ("AI链接", "图片笔记", "录音笔")
+
+
+def _is_carrier(name):
+    if not name:
+        return False
+    return name in CARRIER_TAGS or name.startswith(CARRIER_PREFIX)
+
+
+def _content_tags(head):
+    """去掉「得到」与载体类标签后剩下的标签，才是真正的目录候选。"""
+    return [t for t in (head.get("tags") or [])
+            if t and t != "得到" and not _is_carrier(t)]
+
+
+def _course_of(head):
+    """一篇笔记属于哪个「目录／专栏」：优先 system 标签，其次 ref 来源。"""
+    ct = _content_tags(head)
+    if ct:
+        return ct[0]
+    return head.get("source") or "(无来源)"
+
+
+def _book_of(head):
+    """一篇笔记属于哪本「书」：《智能简史》5：模型思考者 → 智能简史。
+
+    没有书名时返回 None（**不是**「(非书本／单篇)」）。
+    早先给个占位名作为兜底，看起来「结构完整」，实际造出垃圾层级：
+    63 个目录里有 61 个，书层只有一个子女节点叫「非书本／单篇」，
+    占着树里一整层的缩进和一行点击，信息量为零。
+    返回 None 让调用方直接跳过这一层，笔记抬到目录下面，少一层噪声。
+    """
+    art = head.get("title") or ""
+    m = re.match(r"^《([^》]+)》", art)
+    return m.group(1) if m else None
+
+def cmd_kb_scopes(args):
+    """把「哪些是真知识库、哪些是得到电子书书架」写成缓存文件。
+
+    为何需要单独一步：本地镜像的「- 知识库:」字段只有 id 和 name，**不带 scope**。
+    但两者语义完全不同——
+      · scope=DEFAULT   = 用户自建知识库（实测 11 个）
+      · scope=BOOKSPACE = 得到电子书自动生成的「书架」，一本书一个（实测 111 个）
+    两者混在一起，侧边栏树就会出现 123 个顶层节点，看着像「我有 123 个知识库」。
+
+    这个命令只在用户手动刷新时跑一次（几次只读请求），结果落到
+    <dataDir>/state/kb_scopes.json，inventory 读它给顶层节点打标签。
+    """
+    c = make_client(args, dry_run=False)
+    out = {}
+    for scope in ("DEFAULT", "BOOKSPACE"):
+        page = 1
+        while page <= 20:
+            try:
+                d = c.call("GET", "/resource/knowledge/list",
+                           params={"page": page, "scope": scope, "size": 200},
+                           note=f"list_topics[{scope}]")
+            except ApiError as exc:
+                print(f"[warn] scope={scope} page={page} 失败：{redact(str(exc))}",
+                      file=sys.stderr)
+                break
+            topics = (d or {}).get("topics") or []
+            for t in topics:
+                tid = t.get("topic_id") or t.get("id")
+                if not tid:
+                    continue
+                out[tid] = {"name": t.get("name") or "",
+                            "scope": t.get("scope") or scope,
+                            "note_count": ((t.get("stats") or {}).get("note_count") or 0),
+                            "book": bool(t.get("book_info")),
+                            "author": ((t.get("book_info") or {}).get("author") or "")}
+            if not (d or {}).get("has_more") or not topics:
+                break
+            page += 1
+
+    STATE.mkdir(parents=True, exist_ok=True)
+    path = STATE / "kb_scopes.json"
+    path.write_text(jdump({"generated_at": now_iso(), "topics": out}), encoding="utf-8")
+    own = sum(1 for v in out.values() if v["scope"] == "DEFAULT")
+    shelf = len(out) - own
+    print(f"已写入 {path}")
+    print(f"  自建知识库 {own} 个｜电子书书架 {shelf} 个｜合计 {len(out)}")
+    return 0
+
+
+def cmd_inventory(args):
+    """本地重建层级清单：知识库 → 目录（专栏/课程）→ 书 → 讲（篇）。
+
+    纯读本地镜像，不调 API。--json 输出给侧边栏工作台直接渲染。
+    """
+    base = (DATA_DIR / args.into) if getattr(args, "into", "") else (DATA_DIR / "current")
+    if not base.is_dir():
+        print(f"❌ 镜像目录不存在：{base}\n   先跑：gn.ps1 download --into current", file=sys.stderr)
+        return 2
+
+    # 三层嵌套桶：知识库 → 目录 → 书 → [讲]
+    kb_ids = {}
+    tree = {}
+    untopiced = 0
+    no_source = 0
+    total = 0
+    carriers = {}
+    # 知识库 id → {name, scope, book, author}；没缓存时退化为 unknown，不影响出树
+    try:
+        scopes = (json.loads((STATE / "kb_scopes.json").read_text(encoding="utf-8"))
+                  .get("topics") or {})
+    except (OSError, ValueError):
+        scopes = {}
+    for f in sorted(base.glob("*.md")):
+        total += 1
+        h = _parse_md_head(f)
+        for t in (h.get("tags") or []):
+            if _is_carrier(t):
+                carriers[t] = carriers.get(t, 0) + 1
+        rec = {"note_id": h["note_id"], "type": h["type"],
+               "article": h.get("title") or "", "file": f.name}
+        course = _course_of(h)
+        book = _book_of(h)
+        kbs = h.get("topics") or []
+        if not kbs:
+            untopiced += 1
+            kbs = ["(未归知识库)"]
+        if course == "(无来源)":
+            no_source += 1
+        # book 为 None 表示「没有书名」：这类笔记直接挂在目录下，
+        # 不再经过一层「非书本／单篇」伪节点。用空串作内部 key，
+        # 下面 build() 会自动把它展平成目录的直系子项。
+        bkey = book if book else ""
+        for kname in kbs:
+            # topic_ids 是 名字→id（和 topics 反过来），别拿错方向
+            for nm, tid in (h.get("topic_ids") or {}).items():
+                if nm == kname:
+                    kb_ids.setdefault(kname, tid)
+                    break
+            (tree.setdefault(kname, {})
+                 .setdefault(course, {})
+                 .setdefault(bkey, [])
+                 ).append(rec)
+
+    def build(kb_node):
+        """把嵌套 dict 转成可排序的列表（大的在前），并给出每层 count。
+
+        层级：目录（course）→ 书（book）→ 讲（lecture，同一篇文章的多条划线归一组）。
+        「讲」这一层很关键：一本书通常被拆成 5–8 讲，每讲的划线分散在多个
+        笔记里（一篇平均 21 条）。不按文章题目聚合的话，905 条划线就是一堆
+        看不出结构的碎片。
+        """
+        out = []
+        for course_name, books in kb_node.items():
+            flat = []
+            blist = []
+            for book_name, notes in books.items():
+                # 按「讲」的完整标题聚合；同一讲的多条划线归到同一个 lecture
+                lec = {}
+                for n in notes:
+                    lec.setdefault(n["article"] or "(无标题)", []).append(n)
+                lectures = [{"name": k, "count": len(v),
+                             "notes": sorted(v, key=lambda x: x["note_id"] or "")}
+                            for k, v in lec.items()]
+                lectures.sort(key=lambda x: x["name"])
+                if args.summary:
+                    lec_out = [{"name": x["name"], "count": x["count"]} for x in lectures]
+                else:
+                    lec_out = lectures
+                # 空 book_name = 没有书名的单篇：不造「书」层，
+                # 直接把这批讲抬到目录层，前端就不会多一层空壳。
+                if not book_name:
+                    flat.extend(lec_out)
+                    continue
+                blist.append({"name": book_name, "count": len(notes),
+                              "lectures": lec_out})
+            blist.sort(key=lambda x: -x["count"])
+            # 展平的讲统一排在真书后面，不抢排序位置。
+            if flat:
+                total_flat = sum(x["count"] for x in flat)
+                blist.append({"name": "", "count": total_flat,
+                              "lectures": flat, "flat": True})
+                flat = []
+            out.append({"name": course_name,
+                        "count": sum(b["count"] for b in blist),
+                        "books": blist})
+        out.sort(key=lambda x: -x["count"])
+        return out
+
+    kbs = []
+    for kname, node in tree.items():
+        courses = build(node)
+        kbs.append({"name": kname, "id": kb_ids.get(kname) or "",
+                    "count": sum(c["count"] for c in courses),
+                    "courses": courses})
+    kbs.sort(key=lambda x: -x["count"])
+    # 给每个顶层节点标上「这是真知识库还是电子书书架」。
+    # 镜像里只有 id 和名字，必须靠 state/kb_scopes.json 才能区分；没缓存就标 unknown，
+    # 不假装——否则 111 个书架会被当成 111 个知识库展示给用户。
+    for kb in kbs:
+        if kb["name"] == "(未归知识库)":
+            # 这不是真知识库，是「还没归位的 2055 条」。必须单独一种 kind，
+            # 否则它会和「未知 scope」混在一起，界面也没法把它渲染成待处理入口。
+            kb["scope"], kb["kind"], kb["book_author"] = "NONE", "untopiced", ""
+            continue
+        info = scopes.get(kb.get("id") or "") or {}
+        kb["scope"] = info.get("scope") or "UNKNOWN"
+        kb["kind"] = ("book_shelf" if kb["scope"] == "BOOKSPACE"
+                      else "kb" if kb["scope"] == "DEFAULT" else "unknown")
+        kb["book_author"] = info.get("author") or ""
+
+    own_kb = [x for x in kbs if x["kind"] == "kb"]
+    shelves = [x for x in kbs if x["kind"] == "book_shelf"]
+    unt = [x for x in kbs if x["kind"] == "untopiced"]
+    unknown = [x for x in kbs if x["kind"] == "unknown"]
+    data = {"dir": str(base), "total": total, "knowledge_bases": kbs,
+            "own_kb_count": len(own_kb), "shelf_count": len(shelves),
+            "untopiced_count": len(unt),
+            "unknown_count": len(unknown),
+            "carriers": dict(sorted(carriers.items(), key=lambda x: -x[1])),
+            "scopes_cached": bool(scopes),
+            "untopiced": untopiced, "no_source": no_source,
+            "generated_at": now_iso()}
+    print(jdump(data))
+    return 0
+
+
+# ── AI 动作的默认提示词 ──────────────────────────────────
+#
+# 为何放在代码里而又是「默认」：首次使用时写一份到 <dataDir>/prompts，
+# 之后用户改那份文件就生效，不用改代码。
+# 这样既能开箱即用，又能让用户按自己的理解重写——这是可扩展性的关键。
+DEFAULT_PROMPTS = {
+    "sprout": """你是我的第二大脑。下面给你一条我自己的笔记，以及它周围的上下文。
+
+请你做「发芽」：不要复述我说过的，而是长出我没说的。具体四件事：
+
+1. **补全**：这个框架里有没有明显缺失的一环？（例如我说了硬技能三块、软技能只说了一块）
+2. **延伸**：基于同系列的其他讲、跨系列的相关段落，还有哪些相关观点我没想到？
+   引用时要说清楚来自哪一条，不要编造。
+3. **缺口**：我哪里说得含糊、下次可以想清楚？
+4. **下一步**：给 2–3 个具体行动或思考题（不要泛泛而谈）。
+
+约束：
+- 只基于我给你的素材，不要引入外部知识充数；若素材不够，直接说「素材不足以判断」。
+- 任何「相关」必须指出它和我的原话怎么相关，不要只给关键词。
+- 用中文，像同事讨论，不要写成报告。
+""",
+
+    "interrogate": """你是严格的审阅者，不是助手。下面是我的笔记。
+
+请你「审问」我：出 5 个问题，逼我确认自己真的懂了。要求：
+
+1. 问题不要能用一个词回答，要需要我自己组织语言。
+2. 至少 2 个问题要指向「我可能没想清楚的地方」（矛盾、缺证据、概念混用）。
+3. 至少 1 个问题要把这条笔记和我其他笔记联系起来。
+4. **不要给答案**。如果我想对答案，我会再问你。
+
+问题按「最容易被我忽略的」到「最基础的」排序。
+用中文。语气像导师，不像客服。
+""",
+
+    "link": """下面是一条中心笔记，以及若干条它「可能相关」的笔记片段。
+
+请你判断这些相关是真相关还是假相关，并找出真正值得建立的联系：
+
+1. 逐条判断：这条真的和中心笔记讲同一件事吗？还是只是词语撞了？
+2. 挑出 1–2 条真正有洞察的联系，说清它们的共同内核是什么。
+3. 如果有两条笔记实际上在说相反的事，请指出来——这往往最有价值。
+
+约束：如果没有真联系，就直说「没有值得建立的联系」。
+不要为了凑数而编造关联。用中文。
+""",
+}
+
+# 内置按钮：名字 → 用哪份提示词。用户可改 actions.json 增删。
+DEFAULT_ACTIONS = [
+    {"id": "sprout", "label": "发芽", "prompt": "sprout",
+     "hint": "联想/补全/指出缺口", "needsPack": True},
+    {"id": "interrogate", "label": "审问", "prompt": "interrogate",
+     "hint": "出题，逼真理解（不给答案）", "needsPack": True},
+    {"id": "link", "label": "连线", "prompt": "link",
+     "hint": "辨别真假相关，找出真联系", "needsPack": True},
+]
+
+PROMPT_DIR = DATA_DIR / "prompts"
+
+
+def _ensure_prompts(write=True):
+    """确保 prompts 目录与文件存在。返回 ({name: path}, 创建了哪些)。
+
+    幂等：已存在的文件绝不覆盖——用户改过的提示词一个字都不能丢。
+    """
+    created = []
+    paths = {}
+    PROMPT_DIR.mkdir(parents=True, exist_ok=True)
+    for name, body in DEFAULT_PROMPTS.items():
+        p = PROMPT_DIR / f"{name}.md"
+        paths[name] = p
+        if not p.exists() and write:
+            p.write_text(body, encoding="utf-8")
+            created.append(p.name)
+    acts = PROMPT_DIR / "actions.json"
+    paths["actions"] = acts
+    if not acts.exists() and write:
+        acts.write_text(jdump(DEFAULT_ACTIONS), encoding="utf-8")
+        created.append(acts.name)
+    return paths, created
+
+
+def cmd_prompts(args):
+    """列出 / 初始化 / 查看 AI 动作提示词。"""
+    paths, created = _ensure_prompts(write=True)
+    if created:
+        print(f"[prompts] 已创建 {len(created)} 个默认文件：{', '.join(created)}")
+    else:
+        print("[prompts] 文件已存在（不会覆盖你改过的内容）")
+    if args.name:
+        key = args.name.strip()
+        p = paths.get(key) or (PROMPT_DIR / f"{key}.md")
+        if not p.exists():
+            raise ApiError(f"没有这份提示词：{key}；现有 {sorted(DEFAULT_PROMPTS)}")
+        print(f"\n===== {p.name} =====")
+        print(p.read_text(encoding="utf-8"))
+        return 0
+    print(f"\n目录：{PROMPT_DIR}")
+    for name in DEFAULT_PROMPTS:
+        p = paths[name]
+        size = p.stat().st_size if p.exists() else 0
+        print(f"  {name:<12} {size:>5} 字节  {p}")
+    acts = paths["actions"]
+    if acts.exists():
+        try:
+            arr = json.loads(acts.read_text(encoding="utf-8"))
+            print(f"\n按钮（{len(arr)} 个）：")
+            for a in arr:
+                print(f"  {a.get('label','?'):<8} → 提示词 {a.get('prompt','?'):<12} {a.get('hint','')}")
+        except ValueError:
+            print("  actions.json 解析失败，请检查 JSON 格式")
+    return 0
+
+
+def cmd_sprout(args):
+    """查一条笔记的「发芽」状态。
+
+    为何只能查不能生成：实测官方只开了 GET /resource/note/sprout?id=<note_id>，
+    返回 {"sprout": {...}|null, "has_sprout": bool}；POST 同一路径是 404。
+    所以「让 AI 发芽」这个动作必须在 DSH 侧做（见 SKILL.md），
+    本命令负责把平台已有的发芽内容拿回来，不重复生成。
+    """
+    c = make_client(args, dry_run=False)
+    nid = str(args.note_id)
+    r = c.call("GET", "/resource/note/sprout", params={"id": nid}, note="note_sprout")
+    if args.json:
+        print(jdump(r))
+        return 0
+    sprout = (r or {}).get("sprout")
+    has = bool((r or {}).get("has_sprout"))
+    print(f"笔记 {nid}：has_sprout={has}")
+    if not sprout:
+        print("  平台侧还没有发芽内容。")
+        print("  两条路：① 在得到 App 里对这条笔记点「发芽」；")
+        print("          ② 用本插件的「发芽」按钮，由 DSH 的 AI 基于 context-pack 生成。")
+        return 0
+    # 结构未知时不要假装知道字段名，原样展示
+    if isinstance(sprout, dict):
+        for k, v in sprout.items():
+            text = v if isinstance(v, str) else jdump(v)
+            print(f"  {k}: {str(text)[:2000]}")
+    else:
+        print(str(sprout)[:4000])
+    return 0
+
+
+def _keywords_of(text, n=8, df_map=None):
+    """从正文抽「有区分度」的关键词。
+
+    经过两轮失败才定下来这个做法，记在后面别重蹈覆辙：
+      第一版：滑窗取 2-4 字 → 抽出「整体来讲」「的东西」「后续再继」；
+      第二版：加黑名单 + 提高门槛 → 好一些了，但仍会抽出「这一块」「整体来」
+              这种跨词碎片，因为滑窗本身不认词边界。
+
+    现在的做法（不需要分词库，只靠统计）：
+      1) 仍然滑窗，但**任何含虚词的片段直接丢**（两端 + 内部都查）；
+      2) 用 df_map（全库文档频次）算「这词是不是到处都有」：
+         到处都有 = 没区分度，丢掉。这是 TF-IDF 的思路，
+         而 df_map 本来就存在（inventory 扫全库时顺手能建）。
+      3) 剩下的按频次排序、去冗余。
+
+    df_map 为空时退化为「只靠虚词过滤」，会比有 df 时差，但不会崩。
+    """
+    if not text:
+        return []
+    FILLER = set("""
+        整体来讲 整体来说 总的来说 基本上 实际上 其实 就是说 然后呢
+        的东西 的时候 的情况 的话 对吧 好吧 是吧 对不对 有没有 能不能
+        后续再 再继续 后面再 我们看 你看 这个呢 那个呢 这样的 这样的
+        一些可 有可能 可能是 应该是 不会 就是为了 因为所以
+        第一个 第二个 第三个 第一部分 第二部分 反正 那那个
+    """.split())
+    # 虚词表：只要求片段**不包含**它们，而不是只在首尾。
+    # 为何这么严：滑窗一定会跨词，温和的过滤拦不住「这一块」「整体来」。
+    FUNC = "的了着就是在和也都而且呢吧啊还又很最更把被给对从向吗么呀哦嗯这那他她它我你您"
+
+    cnt = {}
+    for w in re.findall(r"[A-Za-z][A-Za-z\-]{3,}", text):
+        lw = w.lower()
+        if lw not in FILLER and lw not in (
+                "that", "this", "with", "they", "have", "from", "what", "just", "like",
+                "there", "then", "than", "them", "some", "were", "will", "your"):
+            cnt[lw] = cnt.get(lw, 0) + 1
+
+    # 中文：关键改进在于**先按停顿切短句**，再在短句内部滑窗。
+    #
+    # 为何必须切：之前直接对整句（一串几十个汉字）滑窗，一定会跨词、
+    # 跨逗号切出「体来讲」「一块儿」这种垃圾——加了黑名单也拦不住。
+    # 切短句后，跨度变小，加上虚词过滤，碎片率大幅下降。
+    #
+    # 另一个要求：片段必须在**不同短句**里都出现（至少 2 次），
+    # 只在一句里出现的是偶然词组，不是主题词。
+    # 更彻底的过滤：片段必须「干净」。
+    # 干净 = 首字不是虚词/数词/代词，且整段不含虚词。
+    # 实测「体来讲」「一块儿」这两个典型垃圾：
+    #   「体来讲」— 不含虚词，但是从「整体来讲」中间切出来的（首字「体」不虚）；
+    #   「一块儿」— 含数词「一」。
+    # 因此再加一条硬规则：**片段必须作为完整短句的子串出现至少 2 次**，
+    # 且不能是某个更长频次更高片段的后缀。后者在下面的「去冗余」里处理。
+    BAD_HEAD = "一体个把被给对从向很最更还又也都就而是的了着过"
+    # 子串级排除：只要待选片段是某个填充词的**子串**，就丢掉。
+    # 为何需要：黑名单只能拦全字匹配，「体来讲」是「整体来讲」的子串，
+    # 拼合检查才能拦住这类“从长词中间切出来的碎片”。
+    FILLER_SUB = [x for x in FILLER if len(x) >= 3]
+    CLAUSE_SPLIT = re.compile(r"[，。！？；：、\n\r\t（）()【】「」“”\"'…\-—]+")
+    for clause in CLAUSE_SPLIT.split(text):
+        seg_hits = {}
+        for run_ in re.findall(r"[\u4e00-\u9fff]+", clause):
+            L = len(run_)
+            for size in (4, 3):
+                for i in range(0, L - size + 1):
+                    seg = run_[i:i + size]
+                    if seg in FILLER:
+                        continue
+                    if any(ch in FUNC for ch in seg):
+                        continue
+                    if seg[0] in BAD_HEAD:      # 不从虚词/数词/代词开头
+                        continue
+                    if any(seg in fs or fs in seg for fs in FILLER_SUB):
+                        continue
+                    seg_hits[seg] = seg_hits.get(seg, 0) + 1
+        for seg in seg_hits:
+            cnt[seg] = cnt.get(seg, 0) + 1
+
+    items = [(k, v) for k, v in cnt.items() if v >= 2]
+
+    # 区分度过滤：df_map 里出现率超过 15% 的片段视为「到处都有」，没信息量。
+    # 没有这一步，任何一条录音都会抽出「工作」「时间」这类泛词。
+    if df_map:
+        total = max(1, len(df_map))
+        items = [(k, v) for k, v in items if df_map.get(k, 0) / total <= 0.15]
+
+    items.sort(key=lambda x: (-x[1], -len(x[0])))
+
+    # 去冗余：短片段是长片段子串且频次不更高时，丢弃短的
+    out = []
+    for k, v in items:
+        if any((k != o and k in o) for o in out):
+            continue
+        out.append(k)
+        if len(out) >= n:
+            break
+    return out
+
+
+def cmd_context_pack(args):
+    """把一条笔记及其「上下文」拼成给 AI 的素材包（只读）。
+
+    为何需要这个：AI 要能「发芽」或「审问」，光给一条笔记是不够的 ——
+    它需要知道这条笔记在哪个系列里、同系列别讲了什么、本地还有哪些段落提到同样的事。
+    本命令把这些从本地镜像里凑齐，一次性交给 AI 侧，避免 AI 自己乱翻 4321 个文件。
+
+    产物结构（json）：
+      { center: {...}, siblings: [...], related: [...], keywords: [...] }
+    """
+    base = DATA_DIR / "current"
+    if not base.is_dir():
+        raise ApiError(f"镜像目录不存在：{base}")
+    nid = str(args.note_id)
+
+    # 1) 扫一遍镜像，建立索引 + 关键词的「文档频次」（df）。
+    #
+    # df 的用途：判断一个片段是不是「到处都有」。实测发现，没有 df 时
+    # 任何一条录音都会抽出「这一块」「整体来」这类碎片，把它们当关键词去
+    # 找相关段落，结果全是噪声。有了 df 就能把「泛词」和「真主题词」分开。
+    heads = {}
+    df_map = {}
+    for f in sorted(base.glob("*.md")):
+        h = _parse_md_head(f)
+        if not h.get("note_id"):
+            continue
+        h["_file"] = f
+        heads[h["note_id"]] = h
+        # 每条笔记对同一个片段最多贡献 1 次（文档频次，不是词频）
+        try:
+            txt = f.read_text(encoding="utf-8", errors="replace")[:4000]
+        except OSError:
+            continue
+        seen = set()
+        for run_ in re.findall(r"[\u4e00-\u9fff]+", txt):
+            L = len(run_)
+            for size in (3, 4):
+                for i in range(0, max(0, L - size + 1)):
+                    seen.add(run_[i:i + size])
+        for seg in seen:
+            df_map[seg] = df_map.get(seg, 0) + 1
+    if nid not in heads:
+        raise ApiError(f"镜像里没有笔记 {nid}（先跑一次 download）")
+    center = heads[nid]
+    c_course = _course_of(center)
+    c_book = _book_of(center)
+    c_title = center.get("title") or ""
+
+    def body_of(h, limit=4000):
+        try:
+            t = h["_file"].read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+        # 只取正文部分（跳过元数据头与 AI 总结尾巴），太长则截断
+        i = t.find("## 原文")
+        if i >= 0:
+            t = t[i:]
+        return t[:limit]
+
+    center_body = body_of(center)
+    kws = _keywords_of(center_body, args.keywords, df_map=df_map)
+
+    # 2) 同系列的其他讲（这是最重要的上下文：同一门课的前后文）
+    siblings = []
+    for h in heads.values():
+        if h["note_id"] == nid:
+            continue
+        if _course_of(h) != c_course:
+            continue
+        siblings.append({
+            "note_id": h["note_id"],
+            "title": h.get("title") or "",
+            "book": _book_of(h) or "",
+            "excerpt": body_of(h, 600).replace("\n", " ")[:600],
+        })
+    # 同一本书（=同一讲的多个划线）优先排前面
+    siblings.sort(key=lambda x: (0 if x["book"] == c_book else 1, x["title"]))
+    siblings = siblings[:args.limit]
+
+    # 3) 跨系列的相关段落：用关键词在其他笔记里找
+    related = []
+    if kws:
+        for h in heads.values():
+            if h["note_id"] == nid or _course_of(h) == c_course:
+                continue
+            txt = body_of(h, 2500)
+            hit = [k for k in kws if k in txt]
+            if len(hit) >= 2:   # 至少命中 2 个关键词才算相关，避免噪声
+                related.append({
+                    "note_id": h["note_id"],
+                    "course": _course_of(h),
+                    "title": h.get("title") or "",
+                    "matched": hit[:6],
+                    "excerpt": txt.replace("\n", " ")[:500],
+                })
+    related.sort(key=lambda x: -len(x["matched"]))
+    related = related[:8]
+
+    pack = {
+        "center": {
+            "note_id": nid,
+            "title": c_title,
+            "course": c_course,
+            "book": c_book or "",
+            "type": center.get("type"),
+            "topics": center.get("topics") or [],
+            "tags": center.get("tags") or [],
+            "body": center_body,
+        },
+        "siblings": siblings,
+        "related": related,
+        "keywords": kws,
+        "stats": {"heads": len(heads), "siblings": len(siblings), "related": len(related)},
+    }
+    out = jdump(pack)
+    if args.out:
+        p = Path(args.out)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(out, encoding="utf-8")
+        print(f"[context-pack] 已写 {p}（同系列 {len(siblings)}，跨系列相关 {len(related)}）")
+    else:
+        print(out)
+    return 0
+
+
+def cmd_resolve(args):
+    """把一个层级路径解析成真实的 note_id 列表。
+
+    界面里勾选的是「讲」（形如 kb/course/book/lecture），但真正发写请求需要的是
+    note_id。ship 数据到浏览器再到回来一圈没必要，也很难保证一致（同名的书不少）。
+    所以让界面只传路径，由这里用同一份镜像数据解析——两边用同一个函数，不会错位。
+
+    路径用 \x1f 分隔（不用 /，因为专栏名里就可能带斜杠）。
+    --level 决定精确到哪一层：kb / course / book / lecture。
+    """
+    base = (DATA_DIR / args.into) if getattr(args, "into", "") else (DATA_DIR / "current")
+    if not base.is_dir():
+        print(f"❌ 镜像目录不存在：{base}", file=sys.stderr)
+        return 2
+
+    want = [p for p in args.paths if p]
+    hits = {p: [] for p in want}
+    SEP = "\x1f"
+
+    for f in sorted(base.glob("*.md")):
+        h = _parse_md_head(f)
+        nid = h.get("note_id")
+        if not nid:
+            continue
+        course = _course_of(h)
+        book = _book_of(h)
+        title = h.get("title") or "(无标题)"
+        kbs = h.get("topics") or ["(未归知识库)"]
+        # 路径必须和界面上的树**逐段对应**，否则勾选的层级解析不回笔记。
+        # 没有书名时树里不存在「书」那一层（已展平），所以路径也要少一段：
+        #   kb / course / lecture          ← 无书名
+        #   kb / course / book / lecture   ← 有书名
+        segs = [course] + ([book] if book else []) + [title]
+        for kb in kbs:
+            full = SEP.join([kb] + segs)
+            for p in want:
+                parts = p.split(SEP)
+                # 路径前缀匹配：给了几段就比几段（让「知识库」「目录」也能整批选中）
+                if len(parts) <= len(full.split(SEP)) and full.split(SEP)[:len(parts)] == parts:
+                    hits[p].append(nid)
+
+    out = []
+    for p in want:
+        ids = sorted(set(hits[p]))
+        out.append({"path": p, "count": len(ids), "note_ids": ids})
+
+    uniq = sorted({i for o in out for i in o["note_ids"]})
+    print(jdump({"resolved": out, "total_unique": len(uniq), "note_ids": uniq}))
+    return 0
+
+
+
 def _mutate_guard(args, c, extra_warning=None):
     banner_dry(c)
     if extra_warning:
@@ -1152,6 +1852,124 @@ def cmd_note_delete(args):
     return 0
 
 
+def cmd_auto_classify(args):
+    """把「还没归位的笔记」按规则成批归类，产出一份可直接 apply 的计划。
+
+    为什么要做成命令而不是让模型临时拼：2055 条 × 手工勾选 = 不可能。
+    但全自动跑又危险——所以这里只**生成计划**，一条都不写，等用户确认。
+
+    规则（按顺序命中，全部可解释）：
+      1) 作者系列：「万维钢·精英日课6」→ 归到【万维钢】。同名作者≥5 条才建库。
+      2) 训练营：名字带「训练营」的归到【训练营】（单个≥100 条就独立建库）。
+      3) 独立课程：单一目录≥30 条 → 自己一个库。
+      4) 其余不动——零碎目录（平均 1.7 条）归一起只会造出新垃圾。
+    """
+    base = DATA_DIR / args.into
+    if not base.is_dir():
+        print(f"❌ 镜像目录不存在：{base}", file=sys.stderr)
+        return 2
+
+    rows = []
+    for f in sorted(base.glob("*.md")):
+        h = _parse_md_head(f)
+        if not h.get("note_id"):
+            continue
+        # 默认只看「还没归库」的；--all 才把已归库的一起纳入（用于重算/微调）。
+        if h.get("topics") and not args.all:
+            continue
+        h["course"] = _course_of(h)
+        rows.append(h)
+    if not rows:
+        print("没有需要归位的笔记。", file=sys.stderr)
+        return 0
+
+    import collections
+    cc = collections.Counter(r["course"] for r in rows)
+    author_re = re.compile(r"^([^·的]{2,10})·([^·].+)$")
+
+    def propose(r):
+        course = r["course"]
+        if course == "(无来源)":
+            return None
+        m = author_re.match(course)
+        if m and cc[course] >= 3:
+            return m.group(1).strip()
+        if "训练营" in course:
+            return course if cc[course] >= 100 else "训练营"
+        if cc[course] >= 30:
+            return course
+        return None
+
+    groups, skipped = {}, []
+    for r in rows:
+        k = propose(r)
+        if k:
+            groups.setdefault(k, []).append(r)
+        else:
+            skipped.append(r)
+
+    # 太小的组降级为零散（如「《礼记」「哈特穆特」这种被正则误当作者的）
+    keep = {k: v for k, v in groups.items() if len(v) >= args.min_group}
+    for k, v in groups.items():
+        if k not in keep:
+            skipped.extend(v)
+
+    if args.limit_groups:
+        ordered = sorted(keep, key=lambda x: -len(keep[x]))[:args.limit_groups]
+        for k in list(keep):
+            if k not in ordered:
+                skipped.extend(keep.pop(k))
+
+    actions = []
+    for k in sorted(keep, key=lambda x: -len(keep[x])):
+        ids = [x["note_id"] for x in keep[k]]
+        actions.append({"op": "kb_ensure", "reason": f"确保知识库「{k}」存在（{len(ids)} 条）",
+                        "args": {"name": k,
+                                 "description": f"Mgetbrain 自动归类：{k}"}})
+        # 每 20 条一个动作：与官方单批上限对齐，失败时能看出是哪个块出问题。
+        for i in range(0, len(ids), 20):
+            chunk = ids[i:i + 20]
+            actions.append({"op": "kb_batch_add",
+                            "reason": f"归入「{k}」第 {i // 20 + 1} 批（{len(chunk)} 条）",
+                            "args": {"topic_name": k, "note_ids": chunk}})
+
+    plan = {"version": 1,
+            "generated_at": now_iso(),
+            "confirmed_by": "PENDING_USER_CONFIRM",
+            "source": {"mirror": str(base), "candidates": len(rows)},
+            "summary": {"groups": len(keep),
+                        "notes_to_move": sum(len(v) for v in keep.values()),
+                        "notes_untouched": len(skipped),
+                        "actions": len(actions), "dry_run": True},
+            "groups": [{"name": k, "count": len(keep[k]),
+                        "courses": dict(collections.Counter(
+                            x["course"] for x in keep[k]).most_common(8))}
+                       for k in sorted(keep, key=lambda x: -len(keep[x]))],
+            "skipped_sample": dict(collections.Counter(
+                x["course"] for x in skipped).most_common(20)),
+            "actions": actions,
+            "_notes": ["kb_ensure 是幂等的：同名知识库已存在就直接复用，重跑不会造重复库",
+                       "kb_batch_add 每动作 ≤ 20 条，apply 内部仍会切块",
+                       "本计划不含任何 note_delete / note_update"]}
+
+    out = Path(args.plan_out) if args.plan_out else (STATE / "plan.classify.json")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print(f"候选笔记：{len(rows)} 条（已归类为 {len(keep)} 组）")
+    for k in sorted(keep, key=lambda x: -len(keep[x])):
+        print(f"  {len(keep[k]):5d} 条  【{k}】")
+        for c, n in collections.Counter(x["course"] for x in keep[k]).most_common(4):
+            print(f"              {n:4d}  {c}")
+    print(f"\n不动：{len(skipped)} 条")
+    for c, n in collections.Counter(x["course"] for x in skipped).most_common(8):
+        print(f"  {n:5d}  {c}")
+    print(f"\n计划：{out}")
+    print(f"  动作 {len(actions)} 个｜预计 API 调用 ≈ {len(keep) * 2 + len(actions)} 次")
+    print(f"\n先预览：python gn.py apply --plan {out} --dry-run")
+    return 0
+
+
 ALLOWED_OPS = {
     "tag_add": lambda c, a: c.tag_add(a["note_id"], a["tags"]),
     "tag_delete": lambda c, a: c.tag_delete(a["note_id"], a["tag_id"]),
@@ -1167,6 +1985,241 @@ ALLOWED_OPS = {
 HIGH_RISK_OPS = {"note_delete", "note_update"}
 
 
+# apply 专用：需要「名字 → topic_id」这种跨动作状态的 op，不放进 ALLOWED_OPS。
+# 为什么不复用 kb_create：kb_create 每次都新建，计划重跑一次就多一个同名空库。
+# 自动归类方案会反复生成计划、也可能中途失败后重跑，幂等是敢跑的前提。
+APPLY_ONLY_OPS = {"kb_ensure"}
+
+
+def _ensure_topic(c, op_args, ctx):
+    """按名字确保知识库存在，返回 topic_id（已存在就复用，不重建）。"""
+    name = str(op_args.get("name") or "").strip()
+    if not name:
+        raise ApiError("kb_ensure 缺少 name")
+    if name in ctx["topic_ids"]:
+        return ctx["topic_ids"][name]
+    if c.dry_run:
+        # 干跑不发包，拿不到真实 id。用占位符让后续 kb_batch_add 的预览仍然可读，
+        # 而不是让整份计划在干跑阶段就报「topic_id 不存在」。
+        ctx["topic_ids"][name] = f"__DRY_TOPIC__{name}"
+        return ctx["topic_ids"][name]
+    r = c.kb_create(name, str(op_args.get("description") or ""))
+    tid = (r or {}).get("topic_id") or (r or {}).get("id")
+    if not tid:
+        raise ApiError(f"创建知识库「{name}」未返回 id：{jdump(r)[:300]}")
+    ctx["topic_ids"][name] = tid
+    return tid
+
+
+def _collect_note_ids(actions):
+    """从计划里抽出「会被改动归属」的 note_id 集合。
+
+    只收归属类动作（加库/移库/加标/删标），**不收 note_delete**：
+    删了就进回收站了，撤销不该假装能救回来（见 docs/UNDO-DESIGN.md §4）。
+    """
+    out = set()
+    for a in actions:
+        op = a.get("op")
+        args = a.get("args") or {}
+        if op in ("kb_batch_add", "kb_remove"):
+            for nid in (args.get("note_ids") or []):
+                if nid:
+                    out.add(str(nid))
+        elif op in ("tag_add", "tag_delete"):
+            nid = args.get("note_id")
+            if nid:
+                out.add(str(nid))
+    return sorted(out)
+
+
+def _snap_ownership(c, note_ids, limit=800):
+    """把每条笔记改动前的归属（知识库 + 标签）取下来。
+
+    为何要逐个拉 detail：列表接口不带完整 topics/tags，而撤销必须知道
+    「它本来在哪个库、有哪些标签」，否则 kb_remove 会把原本的归属也踢掉。
+
+    limit：撤销只针对本次改动的笔记，通常几十到几百条。超过 800 说明计划
+    本身异常（例如想把整库搬走），宁可报错也不要隐式拉几千次请求。
+    """
+    if len(note_ids) > limit:
+        raise ApiError(
+            f"本次计划要改动 {len(note_ids)} 条笔记的归属，超过单次撤销上限 {limit} 条。\n"
+            f"这不是错误，而是保护：撤销记录太大会占满内存且难以解释。\n"
+            f"请分批执行（apply --limit / 拆计划），或先跑 backup 再手动处理。")
+    pre = {}
+    for nid in note_ids:
+        try:
+            d = c.detail(nid)
+            note = d.get("note") or d
+            pre[str(nid)] = {
+                "topics": [{"id": t.get("id"), "name": t.get("name")}
+                            for t in (note.get("topics") or []) if t.get("id")],
+                "tags": [{"id": t.get("id"), "name": t.get("name")}
+                         for t in (note.get("tags") or []) if t.get("id")],
+            }
+        except ApiError as exc:
+            # 单条拿不到不能阻断整个快照：记下来，撤销时会跳过并告知用户
+            pre[str(nid)] = {"topics": [], "tags": [], "_error": redact(str(exc))}
+    return pre
+
+
+def cmd_undo_snapshot(args):
+    """在执行写计划**之前**把归属快照存盘，供 undo 使用。
+
+    这个命令本身是只读的（只发 GET detail），可以安全地随时跑。
+    """
+    plan_path = Path(args.plan)
+    if not plan_path.exists():
+        raise ApiError(f"计划文件不存在：{plan_path}")
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    actions = plan.get("actions") or []
+    note_ids = _collect_note_ids(actions)
+    print(f"[undo-snapshot] 计划含 {len(actions)} 个动作，需记录 {len(note_ids)} 条笔记的原归属")
+    if not note_ids:
+        print("[undo-snapshot] 本次不改动归属，无需快照")
+        return 0
+
+    c = make_client(args, dry_run=False)
+    pre = _snap_ownership(c, note_ids, limit=getattr(args, "max_notes", 800))
+    bad = [k for k, v in pre.items() if v.get("_error")]
+    rec = {
+        "version": 1,
+        "created_at": now_iso(),
+        "plan_file": str(plan_path),
+        "pre_state": pre,
+        "applied_ops": [],
+        "status": "open",
+    }
+    STATE.mkdir(parents=True, exist_ok=True)
+    out = STATE / f"undo-{stamp()}.json"
+    out.write_text(jdump(rec), encoding="utf-8")
+    print(f"[undo-snapshot] 已写 {out}（{len(pre)} 条，其中 {len(bad)} 条没拉到详情）")
+    if bad:
+        print(f"  拉不到的：{', '.join(bad[:5])}{' …' if len(bad) > 5 else ''}", file=sys.stderr)
+    return 0
+
+
+def _infer_delta(pre_entry, cur_entry):
+    """算出一条笔记「应该怎么改回去」。
+
+    用状态收敛而不是逆操作：只看「原本有没有 / 现在有没有」。
+    这样即使中间有人手动改过，也不会把他改的覆盖掉（只修正我们碰过的部分）。
+    """
+    out = {"kb_add": [], "kb_remove": [], "tag_add": [], "tag_del": []}
+    pre_t = {x["id"] for x in (pre_entry.get("topics") or []) if x.get("id")}
+    cur_t = {x["id"] for x in (cur_entry.get("topics") or []) if x.get("id")}
+    for tid in pre_t - cur_t:
+        out["kb_add"].append(tid)
+    for tid in cur_t - pre_t:
+        out["kb_remove"].append(tid)
+
+    pre_g = {x["id"] for x in (pre_entry.get("tags") or []) if x.get("id")}
+    cur_g = {x["id"] for x in (cur_entry.get("tags") or []) if x.get("id")}
+    for gid in pre_g - cur_g:
+        out["tag_add"].append(gid)
+    for gid in cur_g - pre_g:
+        out["tag_del"].append(gid)
+    return out
+
+
+def cmd_undo(args):
+    """把某次写入的归属改回原状。
+
+    安全边界（见 docs/UNDO-DESIGN.md §4）：
+      · 必须 --confirm UNDO
+      · 默认 dry-run，只打印要做什么
+      · 只改归属，**绝不删笔记**
+      · 超过 500 条需 --allow-large
+    """
+    rec_path = Path(args.plan)
+    if not rec_path.exists():
+        raise ApiError(f"撤销记录不存在：{rec_path}")
+    rec = json.loads(rec_path.read_text(encoding="utf-8"))
+    if rec.get("status") == "undone":
+        raise ApiError(f"这批已撤销过了（{rec.get('undone_at')}），无需重复撤销")
+    pre = rec.get("pre_state") or {}
+    if not pre:
+        raise ApiError("撤销记录里没有 pre_state，无法还原")
+    if args.confirm != "UNDO":
+        raise ApiError("需显式 --confirm UNDO 才会执行撤销（防止误回退）")
+    if len(pre) > 500 and not args.allow_large:
+        raise ApiError(f"这批涉及 {len(pre)} 条笔记，超过 500 条需额外 --allow-large")
+
+    c = make_client(args, dry_run=args.dry_run)
+    if args.dry_run:
+        print(f"[undo] --dry-run：仅预览，不发包。（{len(pre)} 条）")
+
+    # 名称映射：kb_remove / tag_delete 需要 id，而 pre_state 里存了 name 便于人读
+    name_of_topic = {}
+    for v in pre.values():
+        for t in (v.get("topics") or []):
+            if t.get("id"):
+                name_of_topic[t["id"]] = t.get("name") or t["id"]
+
+    stats = {"kb_add": 0, "kb_remove": 0, "tag_add": 0, "tag_del": 0,
+             "skipped": 0, "errors": []}
+    for nid, before in pre.items():
+        if before.get("_error"):
+            stats["skipped"] += 1
+            stats["errors"].append(f"{nid}: 快照时就丰不到详情，跳过")
+            continue
+        try:
+            d = c.detail(nid)
+            note = d.get("note") or d
+            cur = {"topics": [{"id": t.get("id")} for t in (note.get("topics") or []) if t.get("id")],
+                   "tags": [{"id": t.get("id")} for t in (note.get("tags") or []) if t.get("id")]}
+        except ApiError as exc:
+            stats["skipped"] += 1
+            stats["errors"].append(f"{nid}: {redact(str(exc))}")
+            continue
+
+        delta = _infer_delta(before, cur)
+        for tid in delta["kb_add"]:
+            try:
+                c.kb_batch_add(tid, [nid])
+                stats["kb_add"] += 1
+                print(f"  {nid} 补回知识库 {name_of_topic.get(tid, tid)}")
+            except ApiError as exc:
+                stats["errors"].append(f"{nid} kb_add {tid}: {redact(str(exc))}")
+        for tid in delta["kb_remove"]:
+            try:
+                c.kb_remove(tid, [nid])
+                stats["kb_remove"] += 1
+                print(f"  {nid} 移出知识库 {name_of_topic.get(tid, tid)}")
+            except ApiError as exc:
+                stats["errors"].append(f"{nid} kb_remove {tid}: {redact(str(exc))}")
+        for gid in delta["tag_add"]:
+            try:
+                c.tag_add(nid, [gid])
+                stats["tag_add"] += 1
+            except ApiError as exc:
+                stats["errors"].append(f"{nid} tag_add {gid}: {redact(str(exc))}")
+        for gid in delta["tag_del"]:
+            try:
+                c.tag_delete(nid, gid)
+                stats["tag_del"] += 1
+            except ApiError as exc:
+                stats["errors"].append(f"{nid} tag_del {gid}: {redact(str(exc))}")
+
+    print(f"\n[undo] 完成：补回库 {stats['kb_add']} / 移出库 {stats['kb_remove']} / "
+          f"补标签 {stats['tag_add']} / 删标签 {stats['tag_del']}；跳过 {stats['skipped']}")
+    if stats["errors"]:
+        print(f"  有 {len(stats['errors'])} 条问题：", file=sys.stderr)
+        for e in stats["errors"][:10]:
+            print(f"    {e}", file=sys.stderr)
+
+    if args.dry_run:
+        print("[undo] dry-run 不修改撤销记录状态。")
+        return 0
+
+    rec["status"] = "undone" if not stats["errors"] else "partial"
+    rec["undone_at"] = now_iso()
+    rec["undo_stats"] = stats
+    rec_path.write_text(jdump(rec), encoding="utf-8")
+    print(f"[undo] 已标记 {rec_path.name} 为 {rec['status']}")
+    return 0
+
+
 def cmd_apply(args):
     """执行经过人工确认的 JSON 计划（Phase 2/3）。串行、限速、出错即停。"""
     plan_path = Path(args.plan)
@@ -1179,7 +2232,7 @@ def cmd_apply(args):
     if not isinstance(actions, list) or not actions:
         raise ApiError("计划文件 actions 为空或格式错误")
     for i, a in enumerate(actions):
-        if a.get("op") not in ALLOWED_OPS:
+        if a.get("op") not in ALLOWED_OPS and a.get("op") not in APPLY_ONLY_OPS:
             raise ApiError(f"actions[{i}] 的 op 非法：{a.get('op')}；允许 {sorted(ALLOWED_OPS)}")
     risky = [a["op"] for a in actions if a["op"] in HIGH_RISK_OPS]
     if risky and not args.allow_high_risk:
@@ -1197,12 +2250,41 @@ def cmd_apply(args):
     if args.dry_run:
         print("[apply] --dry-run：仅预览，不发包。")
     c = make_client(args, dry_run=args.dry_run)
+
+    # 计划里的知识库可以只写名字（topic_name / kb_ensure），由这里换成真实 id。
+    # 必须先把已有知识库读进来：不读就无法「已存在就复用」，重跑会造出一堆同名空库。
+    ctx = {"topic_ids": {}}
+    need_topic = any(a["op"] == "kb_ensure"
+                     or (a.get("args") or {}).get("topic_name") for a in actions)
+    if need_topic:
+        try:
+            for t in (c.topics().get("topics") or []):
+                nm = t.get("name")
+                tid = t.get("topic_id") or t.get("id")
+                if nm and tid:
+                    ctx["topic_ids"].setdefault(nm, tid)
+        except ApiError as exc:
+            print(f"[apply] 读取知识库列表失败：{redact(str(exc))}", file=sys.stderr)
+            return 1
     results = []
     for i, a in enumerate(actions, 1):
         op = a["op"]
         print(f"  [{i}/{len(actions)}] {op}  {a.get('reason', '')}")
         try:
-            r = ALLOWED_OPS[op](c, a.get("args", {}))
+            if op == "kb_ensure":
+                r = {"topic_id": _ensure_topic(c, a.get("args") or {}, ctx),
+                     "name": (a.get("args") or {}).get("name")}
+                print(f"      -> topic_id={r['topic_id']}")
+            else:
+                aargs = dict(a.get("args") or {})
+                tname = aargs.pop("topic_name", None)
+                if tname:
+                    if tname not in ctx["topic_ids"]:
+                        raise ApiError(
+                            f"kb_batch_add 用了 topic_name「{tname}」，但计划里没有位于它之前的"
+                            f" kb_ensure 动作，或那个 kb_ensure 没成功。")
+                    aargs["topic_id"] = ctx["topic_ids"][tname]
+                r = ALLOWED_OPS[op](c, aargs)
             if isinstance(r, list):
                 results.extend([{"op": op, "result": x} for x in r])
             else:
@@ -1250,6 +2332,7 @@ def cmd_plan_template(args):
         ],
         "_notes": [
             "op 白名单：tag_add / tag_delete / kb_batch_add / kb_remove / kb_create / note_save / note_update / note_delete",
+            "apply 另有 kb_ensure：按名字确保知识库存在（幂等），供 kb_batch_add 用 topic_name 引用",
             "note_update 与 note_delete 为高危，apply 时需 --allow-high-risk",
             "所有 ID 用字符串；删除前务必先跑 backup 并校验快照",
         ],
@@ -1421,6 +2504,55 @@ def build_parser():
     t.add_argument("--include-subscribed", action="store_true")
     t.set_defaults(func=cmd_topics)
 
+    # 层级清单：纯读本地镜像，给侧边栏的「分类调整」页提供真实结构。
+    iv = sub.add_parser("inventory", help="本地重建「知识库→目录→书→讲」层级清单（不调 API、不耗配额）")
+    iv.add_argument("--into", default="current", help="镜像子目录（相对数据目录），默认 current")
+    # 全量清单 577KB，侧边栏不需要每条笔记的 id。--summary 只到「讲」这一层，
+    # 体积降到几十 KB；要具体笔记时再单个展开拉。
+    iv.add_argument("--summary", action="store_true", help="不输出每条笔记的 id/文件名（体积小，给界面用）")
+    iv.set_defaults(func=cmd_inventory)
+
+    # 把界面选的层级路径解析成真实 note_id（不调 API）
+    # —— 发芽：官方只有只读查询端点（/resource/note/sprout），实测 POST 为 404 ——
+    # 所以生成本身不在本脚本里，而是由 DSH 的 AI 侧做（见 SKILL.md · 发芽）。
+    sp = sub.add_parser("sprout", help="查一条笔记的「发芽」状态（只读；生成需在 App 内或由 AI 侧做）")
+    sp.add_argument("--note-id", required=True, help="笔记 id")
+    sp.add_argument("--json", action="store_true", help="输出原始 JSON")
+    sp.set_defaults(func=cmd_sprout)
+
+    # —— 审问/发芽的「取材」：把一条笔记及其相关上下文拼成给 AI 的素材包 ——
+    ctx_p = sub.add_parser("context-pack",
+                           help="把一条笔记 + 同课程其他讲 + 本地全文中相关段落拼成 AI 素材包（只读）")
+    ctx_p.add_argument("--note-id", required=True, help="中心笔记 id")
+    ctx_p.add_argument("--limit", type=int, default=6, help="同课程取几条相邻的讲（默认 6）")
+    ctx_p.add_argument("--keywords", type=int, default=8, help="从正文抽多少个关键词用于找相关段落")
+    ctx_p.add_argument("--out", default="", help="写到文件（留空则只打印）")
+    ctx_p.set_defaults(func=cmd_context_pack)
+    # —— 提示词管理：发芽/审问/连线 的提示词存数据目录，用户可改 ——
+    pr = sub.add_parser("prompts", help="列出/初始化 AI 动作的提示词（存 <dataDir>/prompts）")
+    pr.add_argument("--ensure", action="store_true", help="缺文件时用默认值创建（幂等）")
+    pr.add_argument("--name", default="", help="只看某一份（sprout/interrogate/link）")
+    pr.set_defaults(func=cmd_prompts)
+    rv = sub.add_parser("resolve", help="把层级路径解析成 note_id 列表（不调 API、不耗配额）")
+    rv.add_argument("--paths", nargs="+", required=True,
+                    help="层级路径，用 \\x1f 分隔：知识库\\x1f目录\\x1f书\\x1f讲；给几段就匹配几层")
+    rv.add_argument("--into", default="current", help="镜像子目录（相对数据目录），默认 current")
+    rv.set_defaults(func=cmd_resolve)
+
+    # 把「哪些是真知识库、哪些是电子书书架」拉下来缓存（只读，几次请求）。
+    # 没有这一步，inventory 出来的 123 个顶层节点会把书架当成知识库展示。
+    ks = sub.add_parser("kb-scopes", help="缓存每个知识库的真实 scope（区分自建库与电子书书架，只读）")
+    ks.set_defaults(func=cmd_kb_scopes)
+
+    # 自动归类：按规则把「还没归位的」成批归类，只生成计划、不写。
+    ac = sub.add_parser("auto-classify",
+                        help="按规则生成批量归类计划（作者系列/训练营/大课程），只写计划不动线上")
+    ac.add_argument("--into", default="current", help="镜像子目录，默认 current")
+    ac.add_argument("--plan-out", default="", help="计划输出路径，默认 <dataDir>/state/plan.classify.json")
+    ac.add_argument("--min-group", type=int, default=5, help="少于这么多条的组降级为不动（防误建库）")
+    ac.add_argument("--limit-groups", type=int, default=0, help="只处理最大的前 N 组（0=全部）")
+    ac.add_argument("--all", action="store_true", help="连已经归库的也算（默认只看未归库）")
+    ac.set_defaults(func=cmd_auto_classify)
     ta = sub.add_parser("tag-add", help="追加标签（分类首选，不会覆盖旧标签）")
     ta.add_argument("--note-id", required=True)
     ta.add_argument("--tags", nargs="+", required=True)
@@ -1486,6 +2618,22 @@ def build_parser():
     ap.add_argument("--limit", type=int, default=0, help="最多执行前 N 个动作")
     ap.add_argument("--continue-on-error", action="store_true", help="出错继续（默认出错即停）")
     ap.set_defaults(func=cmd_apply)
+
+    # —— 撤销：写前快照 + 状态收敛回滚（见 docs/UNDO-DESIGN.md）——
+    us = sub.add_parser("undo-snapshot",
+                        help="执行写计划前把笔记原归属（库/标签）快照存盘（只读）")
+    us.add_argument("--plan", required=True, help="即将执行的计划文件")
+    us.add_argument("--max-notes", type=int, default=800,
+                    help="单次快照最多多少条（超过则报错，防止隐式拉几千次）")
+    us.set_defaults(func=cmd_undo_snapshot)
+
+    ud = sub.add_parser("undo", help="把某次写入的归属改回原状（不删笔记）")
+    ud.add_argument("--plan", required=True, help="undo-<时间戳>.json 撤销记录")
+    ud.add_argument("--confirm", default="", help="必须填 UNDO 才执行")
+    ud.add_argument("--dry-run", action="store_true", help="只预览不写")
+    ud.add_argument("--allow-large", action="store_true",
+                    help="超过 500 条时需显式允许")
+    ud.set_defaults(func=cmd_undo)
 
     pt = sub.add_parser("plan-template", help="打印计划文件 JSON 模板")
     pt.set_defaults(func=cmd_plan_template)

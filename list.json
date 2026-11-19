@@ -6,12 +6,13 @@
     {
       "name": "dsh-synchub",
       "dir": "dsh-synchub",
-      "version": "0.4.1",
+      "version": "0.6.0",
       "description": "同步中心：会话/工作区/附件/技能/配置层 → 各自私有 Git 仓库；同步面分级 + 危险目录守卫 + 环境切换检测 + 一键同步",
       "installedOn": [
         "FRANCIS-HOME-I7"
       ],
-      "status": "active"
+      "status": "active",
+      "note": "0.6.0（2026-11-18）：双机工作流完善（ADR-029/030）。① 主按钮改「立即同步」＝/sync（拉取ff-only→应用→暂存→提交→推送一口气），旧的提交并推送/拉取并应用降为次按钮；用户要的「等20分钟再同步」不需要做——手动同步本来就不走空闲闸门。② 分叉（两台各自推过，ahead>0&&behind>0）产品化：channelState/divergeInfo 计算 diverged，面板出现「分叉处理（二选一）」卡——以本机为准（覆盖云：stage+commit+push --force-with-lease）或以远端为准（覆盖本机：reset --hard origin + applyPayload）；覆盖前把被覆盖一侧提交哈希（前50条）备份到 backups/diverge-<ts>/；可先「看两边的提交」预览再决定；mode 无默认值，不传 400。刻意不做三方合并：会话是 append-heavy JSONL/zstd，文本合并产出不可读（ADR-014 同源证据）。新增路由 /diverge /diverge/resolve（共20条）；新增 test/diverge-smoke.cjs（路由注册/非法mode 400/初始态无仓库安全跳过/无remote降级/源码护栏）；render-smoke +4 条（主按钮/二选一卡/分叉结论/拉取禁用提示）。BOOTSTRAP 0.4 表改为「自己每台机器都推荐 B 路径（git pull 即升级）」+ Q5 新增 git clone + install.ps1 三步推荐。上一版 0.5.9：侧边栏重做成仪表盘 + 修致命性能缺陷（/status?fast=1 不访网 10562ms→593ms、fetch 8s 缓存存 Promise、own=null 不再误报「还缺两个仓库地址」）。上一版 0.5.8：假绿修复（dirty 语义 + branchOf 硬写 main），删旧 snapshots/，两仓库分支统一 main。"
     },
     {
       "name": "dsh-pixel",
@@ -19,18 +20,20 @@
       "version": "0.1.0",
       "description": "像素 IP 工作台：左侧任务栏小应用 + 右侧快捷入口。作品库、调色板、逐像素编辑、对话框指令，按原生网格整数倍导出整套资产（48…1008 px）。",
       "installedOn": [],
-      "status": "active"
+      "status": "archived",
+      "archivedTo": "archive/dsh-pixel",
+      "note": "2026-11-18 已归档到 archive/dsh-pixel（四件套齐全：README / DEVELOPMENT-LOG / source / packages）。原目录已删除，install.ps1 不应再处理它。恢复时把 source\\ 放回 dshplug\\dsh-pixel\\ 并把 status 改回 active。"
     },
     {
       "name": "dsh-getbrain",
       "dir": "dsh-getbrain",
-      "version": "2.5.0",
+      "version": "2.6.0",
       "description": "得到大脑（原 Get 笔记）整理插件：官方 OpenAPI 全量下载到统一数据目录（默认 = 仓库同级 data-getbrain，自动创建、不进 Git），默认只读、写操作需确认、删除双重闸门；侧边栏 Mgetbrain 工作台有真实可展开的「知识库→目录→书→讲」层级树（本地重建，不依赖服务器）、分类调整（勾选→计划→干跑→双点真写）与真实审计日志；附 SKILL.md 整理纪律",
       "installedOn": [
         "FRANCIS-HOME-I7"
       ],
       "status": "active",
-      "note": "2.5.0（2026-11-16）：写操作接通——新增 gn.py resolve（层级路径→note_id，不调 API）+ POST /plugins/getnote/plan（只写计划文件、白名单四 op）+ POST /plugins/getnote/apply（默认干跑、真写需 confirm:APPLY + dryRun:false，>200 动作要 allowHighRisk）+ GET /plugins/getnote/log（读 logs/<日期>.jsonl 尾部）。侧边栏四页全部接真数据：分类调整树带目标选择器（知识库/标签）、确认执行带干跑与双点真写、执行日志显示 OK/FAIL/DRY-RUN。19 个离线渲染场景全绿。实测：resolve 三层（12 讲 / 140 书 / 905 目录）与树显示数量逐一吻合；apply --dry-run 发 0 个请求。删除仍未接进面板（必须走 gn.py note-delete + --confirm DELETE 独立流程）。2.4.0：新增 gn.py inventory（本地重建层级）+ 侧边栏重写成真操作界面；显示名统一 Mgetbrain。"
+      "note": "2.6.0（2026-11-18）：知识管理能力三大块。① **拖拽 + 撤销**：树里目录/书行可拖到自建知识库（书架不可作目标，避免造出无法收拾的双重归属）；新增 gn.py undo-snapshot（只读拍「归属」快照）+ gn.py undo（状态收敛回滚，非逆操作）+ POST /undo、GET /undos；/apply 真写前自动拍快照，**拍不到就中止写入**。实测闭环：[] → icosa → []，三个原有标签一条无损；重复撤销/缺 confirm/dry-run 三道闸门全部生效。② **发芽/审问/连线**：实测官方只有 GET /resource/note/sprout（POST 404、13 个其他 AI 端点全 404），所以平台侧只能查不能生成；新增 gn.py sprout / context-pack（本地素材包，纯本地不联网）/ prompts（提示词存 dataDir/prompts，改文件即生效）。新增侧边栏「AI 动作」页：取素材包 → 选按钮（每按钮绑一份可编辑提示词）→ 拼好发给 AI，结果**不自动写回**。③ **理论沉淀**：docs/PKM-THEORY.md（实测 94% 是课程划线 4053 条、仅 6% 是自有记录 269 条，故两堆分开处理）、docs/UNDO-DESIGN.md、docs/AI-ACTIONS.md。同时修：全部颜色变量从编造的 --dsh-* 改为真存在的 --dsw-alias-*（浅色主题白底白字隐患）；去掉「非书本／单篇」伪层级（63 个目录 61 个只有它）；每一层都能勾选（父层级不再只能逐篇点）。2.5.0（2026-11-16）：写操作接通——gn.py resolve + /plan + /apply + /log，侧边栏四页接真数据。"
     },
     {
       "name": "dsh-gitok",

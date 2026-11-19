@@ -1,0 +1,34 @@
+# dsh-larkcli bundle patch
+# 安装：& C:\dsh\dshplug\install.ps1 -Only dsh-larkcli
+#
+# 一行插件行：宿主半运行 lib/index.js，注册
+#   lark_status / lark_call / lark_schema / lark_doctor
+#   lark_account_search / lark_account_upsert / lark_account_set_secret
+#   lark_login_start / lark_login_finish
+# 浏览器半（设置 → 飞书）由 package.json 的 dsh.client 打进 Web GUI。
+#
+# id 必须等于 lib/index.js 里 `export const name`（= dsh-larkcli）。
+#
+# 【多机可移植性】下面的 config 会随 profileConfig 同步到别的机器，所以本机专属值一律留空：
+#   dataDir / binaryPath 留空 = 按插件位置推导（C:\dsh\data-larkcli / 插件内 lark-cli-win），
+#   否则 A 机的绝对路径同步到 B 机会指到不存在的位置。
+# 配置里的任何字段都不含密钥：App Secret 只存在于数据目录 accounts/<id>/appsecret.txt。
+- insert:
+    - id: dsh-larkcli
+      name: 'dsh-larkcli'
+      config:
+        # 账户与凭据目录。留空 = 仓库同级 data-larkcli（本机 C:\dsh\data-larkcli）。
+        # 该目录在 Git 仓库之外：不进版本库、不进插件包、不进同步。
+        dataDir: ''
+        # lark-cli.exe 路径。留空 = <插件目录>\lark-cli-win\lark-cli.exe。
+        # 二进制不入 git（50 MB），clone 后跑 scripts\fetch-lark-cli.ps1 补齐。
+        binaryPath: ''
+        # 单次调用超时（毫秒）。schem 下限 1000、上限 600000。
+        timeoutMs: 120000
+        # auth status 缓存时长（毫秒），0 = 不缓存。默认 60s：
+        # 一次会话里模型常连续调好几次 lark_status，缓存能把重复探测省掉。
+        statusTtlMs: 60000
+        # 单次结果最大字符数。超出截断并提示用 --page-limit 分页。
+        maxChars: 24000
+        # 首次启动时把 lark-cli-win\_native-config 的旧凭据自动导入为 default 账户。
+        autoMigrate: true

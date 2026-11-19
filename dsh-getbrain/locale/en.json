@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "Get Notes Organizer",
-    "description": "Installed Cordis bundle: organize 得到大脑/Get笔记 via official OpenAPI. Full-text download into a unified data directory (default: data-getbrain next to the repo, auto-created, never in Git), read-only by default, confirmation-gated writes, double-gated deletion. Configure API Key/Client ID in the Settings → Getnote sidebar; changes apply immediately, no restart needed."
+    "title": "Mgetbrain · Notes Organizer",
+    "description": "Installed Cordis bundle: organize 得到大脑/Get笔记 via official OpenAPI. Full-text download into a unified data directory (default: data-getbrain next to the repo, auto-created, never in Git), read-only by default, confirmation-gated writes, double-gated deletion. The Mgetbrain sidebar workbench shows the real knowledge-base → series → book → lecture → highlight hierarchy (rebuilt locally, since official topics are flat) and lets you adjust categories; configure API Key/Client ID/dataDir in Settings → Mgetbrain, applied immediately without restart."
   }
 }

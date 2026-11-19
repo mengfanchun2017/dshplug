@@ -212,9 +212,15 @@ git log -3 --oneline
 ---
 ## 5. 目录名 / 包名 / 清单 name：三者已统一
 
-**2026-11-12 起，四个自研插件的「目录名 = 包名 = `list.json` 的 `name`」全部一致**：
-`dsh-synchub` / `dsh-getbrain` / `dsh-pixel` / `dsh-larkcli`（`dsh-gitok` 同理）。
+**2026-11-12 起，自研插件的「目录名 = 包名 = `list.json` 的 `name`」全部一致**：
+`dsh-synchub` / `dsh-getbrain` / `dsh-larkcli`（`dsh-gitok` 同理）。
 所以 `plugpush.ps1 <名字>`、`install.ps1 -Only <名字>` 直接用目录名即可，不再有 `@local` 前缀、
+也不再有「`=` 也就是」的注释。
+
+> **`dsh-pixel` 已于 2026-11-16 退役**（改用市场插件 `@muxiuesd/dsh-pixel-studio`），
+> 源码、产物、决策记录全部收进 [`archive/dsh-pixel/`](<archive/dsh-pixel/README.md>)，
+> 已从本清单与 desktop profile 摘除。它当时同样遵守「三者一致」。
+> 下文的 npm 占名说明保留，因为「市场里有同名包 ≠ 那是你的包」这条坑对任何自研插件都成立。
 也不再有「`=` 也就是」的注释。
 
 | 名字 | 层次 | 谁在用 |
@@ -234,9 +240,12 @@ git log -3 --oneline
 > 技能文件 `dsh-getbrain/SKILL.md` 的 `name:` 也已同步改为 `dsh-getbrain`；
 > 工具名 `getnote_*`、路由 `/plugins/getnote/*`、配置命名空间 `getnote`、数据目录 `getnote/`
 > 是**产品功能名**，不属于包名，保持不变（改了会破坏已保存的配置与凭据）。
-> 补充坑：npm 上 `dsh-pixel@0.0.1` 是**别人**（dushaobindoudou）占名的包，与你本地
-> `dsh-pixel@0.1.0` 无关。判断「装的是不是我的版本」只看 profile 里的 `link:` / 版本号，
+> 补充坑：npm 上 **`dsh-pixel@0.0.1` 是别人（dushaobindoudou）占名的包**，
+> 与本地曾经的自研 `dsh-pixel@0.1.0`（已退役）**毫无关系**。
+> 判断「装的是不是我的版本」只看 profile 里的 `link:` / 版本号，
 > 不要看市场里有没有同名包。详见 [ADR-008](<dsh-synchub/ADR.md>)。
+> ⚠️ 反面教材：`@muxiuesd/dsh-pixel-studio` 确实是**另一个作者**的市场包（**不是**自研版），
+> 现在装的就是它，用 `0.6.1` 版本号区分，别和归档里的 `dsh-pixel@0.1.0` 混为一谈。
 
 ### 5.1 界面显示名：`M` + 技能名，全部小写（2026-11-16 确定）
 
@@ -270,9 +279,56 @@ git log -3 --oneline
 > `"./locale/*.json"`、`"./icon"` 三项，而 `dsh-gitok` 三项全缺。
 > 所以新增插件时，先拿这三个导出与能正常显示的插件逐一对比，比查日志快得多。
 
-**已按此规范改名（2026-11-16）：** `dsh-gitok` 显示名 `Git 认证` → **`Mgitok`**。
-其余插件（`dsh-larkcli` = 飞书、`dsh-getbrain`、`dsh-synchub`）尚未改名，
-后续按同一规则逐个处理；改名只动显示名，不碰目录与包名。
+**改名进度（2026-11-16）：**
+
+| 插件 | 显示名 | 状态 |
+|---|---|---|
+| `dsh-gitok` | `Mgitok` | ✅ 已改（`locale` 目录 + `client.js` 全一致） |
+| `dsh-larkcli` | `Mlarkcli` | ✅ 已改（2026-11-16，含 `meta.title`） |
+| `dsh-getbrain` | `Mgetbrain` | ⬜ 待改 |
+| `dsh-synchub` | `Msynchub` | ⬜ 待改 |
+
+改名只动**显示名**（`client.js` 的 `locale.register` + `locale/*.json` 的 `nav`/`meta.title`），
+**不碰目录与包名**。改完浏览器半刷页面即可，不用重启。
+---
+
+### 5.2 「装了、也启用了，但界面和工具都没有」——先查进程启动时间
+
+2026-11-16 实测一次：`dsh-larkcli` 已装，`list_bundles` 也报
+`enabled:true, installed:true, rows:[include:dsh-larkcli]`，
+但 `list_plugins` 的 218 条里**根本没有** `include:dsh-larkcli`，
+`GET /plugins/larkcli/status` 也 404 —— 插件行存在，但没挂进 fiber。
+
+原因：**跑着的 DSH 进程装载的是启动时那份 `package.json` 的 `dsh.profile.bundles`**。
+
+同一次实测的证据：
+
+| 事实 | 值 |
+|---|---|
+| 监听 GUI 端口的主进程 PID / 启动时间 | 12672 / **09:48:06** |
+| `profiles/desktop/package.json` 被写入的时间 | **10:15:23** |
+| 结论 | 进程启动早于配置写入 27 分钟，它手里的 bundles 列表不含新插件 |
+
+**判断命令（不用猜）**：先拿到当前端口，然后
+
+```powershell
+$pid0 = (Get-NetTCPConnection -LocalPort <当前端口> -State Listen).OwningProcess
+Get-Process -Id $pid0 | Select-Object Id, StartTime
+(Get-Item "$env:USERPROFILE\.dsh\profiles\desktop\package.json").LastWriteTime
+```
+
+启动时间 **早于** 配置时间 → 必须**完全退出 DSH 再打开**（刷新页面、重开窗口都不算）。
+
+> 三种「看不到」的固定排查顺序：
+> 1. **工具能用、面板不出现** → `package.json` 的 `exports` 缺 `"./client"`（§5.1 的坑）。
+> 2. **两者都没有、路由 404** → 进程装载的是旧 bundles 列表 → 重启（本节）。
+> 3. **重启后仍没有** → 看 `list_plugins` 里有没有 `include:<插件名>`；没有就是 bundle 行没生效，
+>    查 `dsh.profile.bundles` 与 `cordis.patch.yml` 的 `id` 是否等于 `export const name`。
+
+另一个同类陷阱：`apply()` 里调用**未验证的 ctx API**（例如 `ctx.set?.()`）会抛异常，
+而这类异常会把**整个插件静默废掉** —— 工具不注册、路由不存在、界面不出现，日志还未必有。
+`dsh-larkcli/test/activate.mjs` 因此用多种上下文（有无 `webServer`、`config` 缺失/垃圾）
+直接跑 `apply()` 并断言不抛异常，把这类问题挡在测试阶段。
 
 ---
 
@@ -321,7 +377,7 @@ git log -3 --oneline
 | 项 | 值 |
 |---|---|
 | 分支 / 远端 | `master` → `https://github.com/mengfanchun2017/dshplug.git` |
-| 本地 HEAD | `3221bdf`（`origin/master` = `5438e0ad`，**ahead 1**：「新增 dsh-pixel」未推） |
+| 本地 HEAD | `3221bdf`（`origin/master` = `5438e0ad`，**ahead 1**：「新增 dsh-pixel」未推——该插件已于 2026-11-16 退役并归档，见 [`archive/dsh-pixel/`](<archive/dsh-pixel/README.md>)；这份历史快照留着不追改） |
 | 未提交 | 根 `.gitignore`、`plugpush.ps1`、`README`、`ADR.md`、`docs/`、4 份插件内文档/代码、`dsh-getbrain/{cordis.patch.yml,index.js}`（后两项是你之前的 dataDir 绝对路径修正，非本次改动） |
 | `dsh-synchub` 状态目录 | `C:\Users\franc\.dsh\dsh-synchub\` **不存在** → 同步引擎尚未配置，面板会显示「尚未配置」；本文不依赖它 |
 | 本次脚本修复 | `plugpush.ps1` 去掉 `status -eq 'active'` 过滤（含 `dev` 插件 + 根级文件）；`install.ps1 -Check` 汇总改用 `packageName`（否则 `dsh-getbrain` 误报 missing） |

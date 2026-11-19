@@ -21,7 +21,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
+import { readFile, mkdir as fspMkdir, writeFile as fspWriteFile, readdir as fspReaddir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -679,6 +679,47 @@ export function apply(ctx, config) {
       },
     }), 'getnote: summary route')
 
+    // 3.5) 层级清单：GET /plugins/getnote/inventory
+    //
+    // 侧边栏「分类调整」页的数据来源。真正干活的是 gn.py inventory（纯本地扫描），
+    // 这里只负责转发。为什么要经过 Host：浏览器半边拿不到 Node 的 fs，也无法
+    // 启动 Python；而面板需要的是“知识库 → 目录 → 书 → 讲”这棵真实的树。
+    //
+    // 缓存 60s：扫 4000+ 个 Markdown 头部大约 1–3s，面板多次渲染不应反复扫。
+    const invCache = { at: 0, data: null }
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/getnote/inventory',
+      handler: async (req, res) => {
+        const url = new URL(req.url || '/', 'http://127.0.0.1')
+        const force = url.searchParams.get('refresh') === '1'
+        const now = Date.now()
+        try {
+          if (force || !invCache.data || now - invCache.at > 60000) {
+            const out = await runGn(config, resolveCreds(), ['inventory', '--summary'], undefined, 60000)
+            const txt = String(out.output || '')
+            // 注意：jdump 输出的是**缩进美化**的 JSON（indent=2），不是单行。
+            // 第一版的写法是「找第一个以 { 开头的行再 JSON.parse 它」，
+            // 结果只拿得到 "{" 这一个字符，路由直接 500（已实测踩到）。
+            // 正确做法：从第一个 { 开始截到最后一个 }，整体解析。
+            const start = txt.indexOf('{')
+            const end = txt.lastIndexOf('}')
+            if (start < 0 || end <= start) {
+              throw new Error(out.error || ('inventory 没有返回 JSON：' + txt.slice(0, 200)))
+            }
+            invCache.data = JSON.parse(txt.slice(start, end + 1))
+            invCache.at = now
+          }
+          res.writeHead(200, { 'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store' })
+          res.end(JSON.stringify({ ok: true, ...invCache.data }))
+        } catch (error) {
+          res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({ ok: false, error: String(error && error.message || error) }))
+        }
+      },
+    }), 'getnote: inventory route')
+
     // 4) 客户端自报：POST /plugins/getnote/report
     //
     // 为什么需要：我（Agent）看不到浏览器 DOM，无法自己确认侧边栏图标真的渲染了。
@@ -712,6 +753,529 @@ export function apply(ctx, config) {
         }
       },
     }), 'getnote: report route')
+
+    // 5) 分类调整：POST /plugins/getnote/plan
+    //
+    // 侧边栏勾选「讲」后，把选中的 note_id 提交到这里，Host 把它们转成
+    // plan.json 里的动作，**先干跑**（不发写请求）返回给界面预览。
+    //
+    // 为什么不在浏览器里直接拼 plan：浏览器拿不到数据目录路径，也没法写文件；
+    // 而 gn.py apply 需要读一个真实文件。所以统一走 Host。
+    //
+    // 安全：这个路由**只写计划文件、不执行**。真正执行必须另调 /apply 并带 confirm。
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/getnote/plan',
+      handler: async (req, res) => {
+        const send = (code, obj) => {
+          res.writeHead(code, { 'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store' })
+          res.end(JSON.stringify(obj))
+        }
+        if (req.method !== 'POST') return send(405, { ok: false, error: 'POST only' })
+        let raw = ''
+        try {
+          for await (const chunk of req) {
+            raw += chunk
+            if (raw.length > 4 * 1024 * 1024) throw new Error('请求体太大')
+          }
+          const body = JSON.parse(raw || '{}')
+          const paths = Array.isArray(body.paths) ? body.paths.filter(Boolean) : []
+          const target = body.target || {}
+          if (!paths.length) return send(400, { ok: false, error: '没有收到任何选中项' })
+          if (paths.length > 2000) return send(400, { ok: false, error: '单次超过 2000 个选中项，请分批' })
+
+          // 把界面传的层级路径解析成真实 note_id（同一份镜像数据，不会错位）
+          const rs = await runGn(config, resolveCreds(),
+            ['resolve', '--paths', ...paths], undefined, 60000)
+          const rsTxt = String(rs.output || '')
+          const rsA = rsTxt.indexOf('{')
+          const rsB = rsTxt.lastIndexOf('}')
+          if (rsA < 0 || rsB <= rsA) {
+            return send(400, { ok: false, error: rs.error || ('resolve 失败：' + rsTxt.slice(0, 200)) })
+          }
+          const resolved = JSON.parse(rsTxt.slice(rsA, rsB + 1))
+          const noteIds = resolved.note_ids || []
+          if (!noteIds.length) return send(400, { ok: false, error: '选中的层级下没有任何笔记' })
+
+          // 根据目标类型生成动作：加标签 或 加入知识库
+          const ops = []
+          if (target.kind === 'kb' && target.topicId) {
+            ops.push({ op: 'kb_batch_add', reason: '侧边栏分类调整',
+              args: { topic_id: String(target.topicId), note_ids: noteIds } })
+          } else if (target.kind === 'kb' && target.topicName) {
+            // 按名字归库：不用先去翻 topic_id。kb_ensure 会复用同名库（幂等），
+            // 侧栏里选「未归知识库 → 归到这个名字」时走这条。
+            ops.push({ op: 'kb_ensure', reason: '按名字确保知识库存在',
+              args: { name: String(target.topicName) } })
+            ops.push({ op: 'kb_batch_add', reason: '侧边栏分类调整',
+              args: { topic_name: String(target.topicName), note_ids: noteIds } })
+          } else if (target.kind === 'tag' && target.tag) {
+            // 标签是逐条加的（官方无批量接口），超过 200 条会很多请求，提醒一下
+            for (const id of noteIds) {
+              ops.push({ op: 'tag_add', reason: '侧边栏分类调整',
+                args: { note_id: String(id), tags: [String(target.tag)] } })
+            }
+          } else {
+            return send(400, { ok: false, error: '缺少目标：需要 target.kind = kb|tag 以及 topicId|topicName|tag' })
+          }
+
+          // 白名单校验：只允许分类相关的动作。删除必须走单独的 /apply 流程，
+          // 不允许在这里混进删除动作（否则界面上勾选一下就可能删数据）。
+          const ALLOWED = new Set(['tag_add', 'tag_delete', 'kb_batch_add', 'kb_remove', 'kb_ensure'])
+          const bad = ops.find((o) => !ALLOWED.has(o && o.op))
+          if (bad) {
+            return send(400, { ok: false,
+              error: '不允许的动作：' + String(bad.op) + '（分类调整只允许 tag_add / tag_delete / kb_batch_add / kb_remove）' })
+          }
+
+
+          const plan = {
+            version: 1,
+            generated_at: new Date().toISOString(),
+            confirmed_by: 'PENDING_USER_CONFIRM',
+            source_snapshot: '',
+            actions: ops,
+            _notes: ['由侧边栏 Mgetbrain 工作台的「分类调整」生成',
+              'confirmed_by 在用户确认前保持 PENDING_USER_CONFIRM'],
+          }
+          invCache.plan = invCache.plan || {}
+          invCache.plan = plan
+          // 同时写一份到 state/plan.pending.json，便于终端里直接跑 gn.py apply
+          let planPath = ''
+          try {
+            const dir = path.join(cfg(config, 'dataDir', DEFAULT_DATA_DIR), 'state')
+            await fspMkdir(dir, { recursive: true })
+            planPath = path.join(dir, 'plan.pending.json')
+            await fspWriteFile(planPath, JSON.stringify(plan, null, 2), 'utf8')
+          } catch (error) {
+            // 写盘失败不影响返回：界面仍然可以预览，只是不能直接从终端 apply
+            planPath = ''
+          }
+          send(200, { ok: true, plan, planPath, dryRun: true })
+        } catch (error) {
+          send(400, { ok: false, error: String(error && error.message || error) })
+        }
+      },
+    }), 'getnote: plan route')
+
+    // 5b) 自动归类：POST /plugins/getnote/auto-plan
+    //
+    // 与 /plan 的区别：/plan 是用户在树里手勾「讲」，一次几十条；
+    // 这个是把 2055 条未归库的按规则成批分组，一次上千条。
+    //
+    // 但**仍然只生成计划**：跑 gn.py auto-classify 写一个 plan 文件，把分组摘要
+    // 返回给界面。一条写请求也不发——自动化的危险不在算得快，而在没人看过就去写。
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/getnote/auto-plan',
+      handler: async (req, res) => {
+        const send = (code, obj) => {
+          res.writeHead(code, { 'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store' })
+          res.end(JSON.stringify(obj))
+        }
+        if (req.method !== 'POST') return send(405, { ok: false, error: 'POST only' })
+        let raw = ''
+        try {
+          for await (const chunk of req) {
+            raw += chunk
+            if (raw.length > 64 * 1024) throw new Error('请求体太大')
+          }
+          const body = JSON.parse(raw || '{}')
+          const minGroup = Number.isFinite(body.minGroup) ? body.minGroup : 5
+          const limitGroups = Number.isFinite(body.limitGroups) ? body.limitGroups : 0
+
+          const dataDir = cfg(config, 'dataDir', DEFAULT_DATA_DIR)
+          const planPath = path.join(dataDir, 'state', 'plan.classify.json')
+          const args = ['auto-classify', '--min-group', String(minGroup),
+            '--plan-out', planPath]
+          if (limitGroups > 0) args.push('--limit-groups', String(limitGroups))
+
+          // 60s：扫 4300 个文件头 + 分组，本机实测 ~2s，留大余量给慢盘。
+          const r = await runGn(config, resolveCreds(), args, undefined, 60000)
+          const txt = String(r.output || '')
+          if (!r.ok) {
+            return send(400, { ok: false,
+              error: r.error || txt.slice(0, 400),
+              output: txt.slice(0, 2000) })
+          }
+
+          let plan = null
+          try {
+            plan = JSON.parse(await readFile(planPath, 'utf8'))
+          } catch (error) {
+            return send(500, { ok: false,
+              error: '计划文件写成功了但读不回来：' + String(error && error.message || error) })
+          }
+
+          send(200, {
+            ok: true,
+            planPath,
+            summary: plan.summary,
+            groups: plan.groups,
+            skipped_sample: plan.skipped_sample,
+            actions: (plan.actions || []).length,
+            // 不入 plan：动作清单可能上千条，界面只需摘要；
+            // 真要逐条看，去终端干跑（apply --dry-run 会把每批打出来）。
+            exceededHighRisk: (plan.actions || []).length > 200,
+            note: '本接口只生成计划，不发写请求。真写走 /apply（confirm=APPLY）。',
+          })
+        } catch (error) {
+          send(400, { ok: false, error: String(error && error.message || error) })
+        }
+      },
+    }), 'getnote: auto-plan route')
+
+    // 6) 执行计划：POST /plugins/getnote/apply
+    //
+    // 两道闸门，跟 CLI 保持一致：
+    //   a) 必须显式传 confirm: "APPLY"；
+    //   b) 体量超过 200 个动作时必须带 allowHighRisk: true（大批量写风险高）。
+    // 且**先干跑**一次把摘要返回，真写要再带 dryRun: false 调一次。
+    //
+    // 为什么这么麻烦：这个面板能被鼠标误触，而写错分类可以事后改，
+    // 但用户对“我点了一下就改了 900 条”零容忍。宁可多点一步。
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/getnote/apply',
+      handler: async (req, res) => {
+        const send = (code, obj) => {
+          res.writeHead(code, { 'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store' })
+          res.end(JSON.stringify(obj))
+        }
+        if (req.method !== 'POST') return send(405, { ok: false, error: 'POST only' })
+        let raw = ''
+        try {
+          for await (const chunk of req) {
+            raw += chunk
+            if (raw.length > 1024 * 1024) throw new Error('请求体太大')
+          }
+          const body = JSON.parse(raw || '{}')
+          if (body.confirm !== 'APPLY') {
+            return send(400, { ok: false, error: '缺少确认：需传 {"confirm":"APPLY"}' })
+          }
+          // 计划来源：默认用内存里那份（手工勾选生成的）。
+          // 但「自动归类」生成的是另一份文件，如果这里不区分，在自动归类页点干跑
+          // 会默默执行上一次的手工计划——那是最坏的一种错（看起来成功了，改的不是这个）。
+          let plan = invCache.plan
+          if (body.planPath) {
+            // 只允许读 dataDir/state 下的文件：路径来自浏览器，必须限制范围。
+            const stateDir = path.resolve(path.join(cfg(config, 'dataDir', DEFAULT_DATA_DIR), 'state'))
+            const want = path.resolve(String(body.planPath))
+            if (want !== stateDir && !want.startsWith(stateDir + path.sep)) {
+              return send(400, { ok: false, error: 'planPath 必须在数据目录的 state/ 下' })
+            }
+            try {
+              plan = JSON.parse(await readFile(want, 'utf8'))
+            } catch (error) {
+              return send(400, { ok: false,
+                error: '读计划文件失败：' + String(error && error.message || error) })
+            }
+          }
+          if (!plan || !Array.isArray(plan.actions) || !plan.actions.length) {
+            return send(400, { ok: false, error: '没有待执行的计划，请先在「分类调整」生成计划' })
+          }
+          const n = plan.actions.length
+          const dryRun = body.dryRun !== false
+          if (!dryRun && n > 200 && body.allowHighRisk !== true) {
+            return send(400, { ok: false,
+              error: `这个计划有 ${n} 个动作，批量写需额外传 allowHighRisk:true` })
+          }
+          // 写计划文件（带 confirmed_by）后交给 gn.py apply
+          const dir = path.join(cfg(config, 'dataDir', DEFAULT_DATA_DIR), 'state')
+          await fspMkdir(dir, { recursive: true })
+          const planPath = path.join(dir, 'plan.pending.json')
+          const stamped = { ...plan, confirmed_by: 'USER_CONFIRMED',
+            generated_at: plan.generated_at || new Date().toISOString() }
+          await fspWriteFile(planPath, JSON.stringify(stamped, null, 2), 'utf8')
+          // 真写前先拍「归属快照」，供撤销用。
+          // 为何必须真写才拍：dry-run 没改任何东西，拍快照只会攒出一堆无用的 undo 文件。
+          // 快照失败时的选择：**中止写入**。宁可这次不改，也不能改了之后无法回退。
+          let undoPath = ''
+          if (!dryRun) {
+            const snap = await runGn(config, resolveCreds(),
+              ['undo-snapshot', '--plan', planPath], undefined, 180000)
+            if (!snap.ok) {
+              return send(500, { ok: false,
+                error: '写前快照失败，已中止（不能改了之后无法回退）：'
+                  + (snap.error || String(snap.output || '').slice(0, 400)) })
+            }
+            const m = String(snap.output || '').match(/undo-(\d{8}-\d{6})\.json/)
+            undoPath = m ? path.join(dir, 'undo-' + m[1] + '.json') : ''
+          }
+
+          const args = ['apply', '--plan', planPath, '--confirm', 'CONFIRM']
+          if (dryRun) args.push('--dry-run')
+          const highRisk = plan.actions.some((a) => a.op === 'note_update' || a.op === 'note_delete')
+          if (highRisk) args.push('--allow-high-risk')
+          const out = await runGn(config, resolveCreds(), args, undefined, 180000)
+          send(out.ok ? 200 : 500, {
+            ok: out.ok, dryRun, actionCount: n, planPath,
+            // undoPath 只给界面用：真写成功后多出「可撤销」那一行。
+            undoPath: undoPath || undefined,
+            output: String(out.output || '').slice(0, 8000),
+            error: out.ok ? undefined : (out.error || 'apply 失败'),
+          })
+        } catch (error) {
+          send(400, { ok: false, error: String(error && error.message || error) })
+        }
+      },
+    }), 'getnote: apply route')
+
+    // 6b) 撤销：POST /plugins/getnote/undo
+    //
+    // 两道门与 apply 一致：confirm: 'UNDO' + 默认 dry-run。
+    // 且**不传路径就不猜**：撤销必须指名哪个 undo 文件，不提供「撤上一笔」的隐式行为（见 docs/UNDO-DESIGN.md §5）。
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/getnote/undo',
+      handler: async (req, res) => {
+        const send = (code, obj) => {
+          res.writeHead(code, { 'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store' })
+          res.end(JSON.stringify(obj))
+        }
+        if (req.method !== 'POST') return send(405, { ok: false, error: 'POST only' })
+        let raw = ''
+        try {
+          for await (const chunk of req) {
+            raw += chunk
+            if (raw.length > 64 * 1024) throw new Error('请求体太大')
+          }
+          const body = JSON.parse(raw || '{}')
+          if (body.confirm !== 'UNDO') {
+            return send(400, { ok: false, error: '缺少确认：需传 {"confirm":"UNDO"}' })
+          }
+          const stateDir = path.resolve(path.join(cfg(config, 'dataDir', DEFAULT_DATA_DIR), 'state'))
+          const want = path.resolve(String(body.undoPath || ''))
+          if (!body.undoPath || (want !== stateDir && !want.startsWith(stateDir + path.sep))) {
+            return send(400, { ok: false, error: 'undoPath 必须是数据目录 state/ 下的 undo-*.json' })
+          }
+          if (!/\.json$/.test(want)) {
+            return send(400, { ok: false, error: 'undoPath 必须是 .json 文件' })
+          }
+          const dryRun = body.dryRun !== false
+          const args = ['undo', '--plan', want, '--confirm', 'UNDO']
+          if (dryRun) args.push('--dry-run')
+          if (body.allowLarge === true) args.push('--allow-large')
+
+          const out = await runGn(config, resolveCreds(), args, undefined, 180000)
+          send(out.ok ? 200 : 500, {
+            ok: out.ok, dryRun, undoPath: want,
+            output: String(out.output || '').slice(0, 8000),
+            error: out.ok ? undefined : (out.error || 'undo 失败'),
+          })
+        } catch (error) {
+          send(400, { ok: false, error: String(error && error.message || error) })
+        }
+      },
+    }), 'getnote: undo route')
+
+    // 6c) 可撤销批次列表：GET /plugins/getnote/undos
+    //
+    // 为何要列出而不是只看最新：用户可能过了半小时才想回退，
+    // 期间又改过别的。必须能把「哪一批」摆出来让他选，而不是默默拿最后一个。
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/getnote/undos',
+      handler: async (req, res) => {
+        const send = (code, obj) => {
+          res.writeHead(code, { 'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store' })
+          res.end(JSON.stringify(obj))
+        }
+        try {
+          const dir = path.join(cfg(config, 'dataDir', DEFAULT_DATA_DIR), 'state')
+          const files = await fspReaddir(dir).catch(() => [])
+          const list = []
+          for (const f of files.filter((x) => /^undo-\d{8}-\d{6}\.json$/.test(x)).sort().reverse()) {
+            try {
+              const rec = JSON.parse(await readFile(path.join(dir, f), 'utf8'))
+              list.push({
+                file: f,
+                path: path.join(dir, f),
+                createdAt: rec.created_at,
+                noteCount: Object.keys(rec.pre_state || {}).length,
+                status: rec.status || 'open',
+                undoneAt: rec.undone_at || null,
+                stats: rec.undo_stats || null,
+              })
+            } catch { /* 单个文件坏了不影响其它 */ }
+          }
+          send(200, { ok: true, undos: list.slice(0, 50) })
+        } catch (error) {
+          send(400, { ok: false, error: String(error && error.message || error) })
+        }
+      },
+    }), 'getnote: undos list route')
+    // 8) AI 动作：GET /plugins/getnote/ai
+    //
+    // 返回三样：可用的按钮（来自 actions.json，用户可改）、
+    // 每份提示词的正文（界面里可直接看/改）、以及每份文件的路径。
+    // 为何把提示词正文也返回：用户要能看见「点这个按钮到底问了 AI 什么」。
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/getnote/ai',
+      handler: async (req, res) => {
+        const send = (code, obj) => {
+          res.writeHead(code, { 'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store' })
+          res.end(JSON.stringify(obj))
+        }
+        try {
+          const dir = cfg(config, 'dataDir', DEFAULT_DATA_DIR)
+          const pdir = path.join(dir, 'prompts')
+          await fspMkdir(pdir, { recursive: true })
+
+          const actionsPath = path.join(pdir, 'actions.json')
+          let actions = []
+          try {
+            actions = JSON.parse(await readFile(actionsPath, 'utf8'))
+          } catch {
+            actions = []
+          }
+
+          const prompts = {}
+          for (const name of ['sprout', 'interrogate', 'link']) {
+            const p = path.join(pdir, name + '.md')
+            try {
+              prompts[name] = await readFile(p, 'utf8')
+            } catch {
+              prompts[name] = ''
+            }
+          }
+
+          send(200, { ok: true, actions, prompts, dir: pdir })
+        } catch (error) {
+          send(400, { ok: false, error: String(error && error.message || error) })
+        }
+      },
+    }), 'getnote: ai prompts route')
+
+    // 9) AI 素材包：POST /plugins/getnote/context-pack
+    //
+    // 跑 gn.py context-pack，把「一条笔记 + 同系列别的讲 + 跨系列相关」交给界面。
+    // 界面拿去拼进提示词，再交给模型——但**不在这里调模型**：
+    // 本插件是数据层，模型调用属于 DSH 会话侧。
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/getnote/context-pack',
+      handler: async (req, res) => {
+        const send = (code, obj) => {
+          res.writeHead(code, { 'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store' })
+          res.end(JSON.stringify(obj))
+        }
+        if (req.method !== 'POST') return send(405, { ok: false, error: 'POST only' })
+        let raw = ''
+        try {
+          for await (const chunk of req) {
+            raw += chunk
+            if (raw.length > 64 * 1024) throw new Error('请求体太大')
+          }
+          const body = JSON.parse(raw || '{}')
+          const noteId = String(body.noteId || '').trim()
+          if (!/^\d{6,}$/.test(noteId)) {
+            return send(400, { ok: false, error: 'noteId 必须是数字 id' })
+          }
+          const limit = Number.isFinite(body.limit) ? body.limit : 6
+          const out = await runGn(config, resolveCreds(),
+            ['context-pack', '--note-id', noteId, '--limit', String(limit)], undefined, 120000)
+          const txt = String(out.output || '')
+          if (!out.ok) {
+            return send(400, { ok: false, error: out.error || txt.slice(0, 400) })
+          }
+          const a = txt.indexOf('{')
+          const b = txt.lastIndexOf('}')
+          if (a < 0 || b <= a) return send(500, { ok: false, error: '素材包解析失败' })
+          send(200, { ok: true, pack: JSON.parse(txt.slice(a, b + 1)) })
+        } catch (error) {
+          send(400, { ok: false, error: String(error && error.message || error) })
+        }
+      },
+    }), 'getnote: context-pack route')
+
+    // 10) 发芽查询：GET /plugins/getnote/sprout?noteId=
+    //
+    // 只读查平台侧是否已有发芽内容。注意：官方**没有**生成接口（POST 404），
+    // 所以这个路由永远不会「帮用户生成」，只报现状。
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/getnote/sprout',
+      handler: async (req, res) => {
+        const send = (code, obj) => {
+          res.writeHead(code, { 'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store' })
+          res.end(JSON.stringify(obj))
+        }
+        try {
+          const url = new URL(req.url || '/', 'http://127.0.0.1')
+          const noteId = String(url.searchParams.get('noteId') || '').trim()
+          if (!/^\d{6,}$/.test(noteId)) {
+            return send(400, { ok: false, error: 'noteId 必须是数字 id' })
+          }
+          const out = await runGn(config, resolveCreds(),
+            ['sprout', '--note-id', noteId, '--json'], undefined, 60000)
+          const txt = String(out.output || '')
+          if (!out.ok) return send(400, { ok: false, error: out.error || txt.slice(0, 400) })
+          const a = txt.indexOf('{')
+          const b = txt.lastIndexOf('}')
+          const data = (a >= 0 && b > a) ? JSON.parse(txt.slice(a, b + 1)) : null
+          send(200, { ok: true, sprout: data && data.sprout, hasSprout: !!(data && data.has_sprout) })
+        } catch (error) {
+          send(400, { ok: false, error: String(error && error.message || error) })
+        }
+      },
+    }), 'getnote: sprout route')
+    // 7) 执行日志：GET /plugins/getnote/log?lines=200
+    //
+    // 读 dataGetbrain/logs/<YYYYMMDD>.jsonl 的最后 N 条（审计日志，一行一个请求）。
+    // 为什么不在界面里直接拉文件：浏览器拿不到 fs；也不应该把整个目录暴露出去。
+    //
+    // 不缓存：日志随时在长，而读一个 jsonl 尾巴很快；缓存反而让用户以为没动。
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/getnote/log',
+      handler: async (req, res) => {
+        const send = (code, obj) => {
+          res.writeHead(code, { 'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store' })
+          res.end(JSON.stringify(obj))
+        }
+        try {
+          const url = new URL(req.url || '/', 'http://127.0.0.1')
+          const want = Math.min(Math.max(Number(url.searchParams.get('lines') || 200), 1), 2000)
+          const dir = path.join(cfg(config, 'dataDir', DEFAULT_DATA_DIR), 'logs')
+          if (!existsSync(dir)) return send(200, { ok: true, lines: [], file: '', note: '还没有日志目录' })
+          // 取最新的一天。日期取自文件名 YYYYMMDD.jsonl。
+          const files = await fspReaddir(dir).catch(() => [])
+          const days = files.filter((f) => /^\d{8}\.jsonl$/.test(f)).sort()
+          if (!days.length) return send(200, { ok: true, lines: [], file: '', note: '还没有日志文件' })
+          const latest = path.join(dir, days[days.length - 1])
+          const txt = await readFile(latest, 'utf8')
+          const all = txt.split(/\r?\n/).filter(Boolean)
+          const tail = all.slice(-want)
+          // 每条压成一行人能读的摘要，不把整个 JSON 堆到界面上
+          const lines = tail.map((raw) => {
+            try {
+              const o = JSON.parse(raw)
+              const status = o.dry_run ? 'DRY-RUN' : (o.success === false ? 'FAIL' : 'OK')
+              const code = o.code != null ? ` code=${o.code}` : ''
+              const reason = o.reason ? ` ${o.reason}` : ''
+              const dur = o.duration_ms != null ? ` ${o.duration_ms}ms` : ''
+              return `${o.ts || ''}  ${status}  ${o.method || ''} ${o.path || ''}${code}${reason}${dur}  ${o.note || ''}`.trim()
+            } catch {
+              return raw.slice(0, 200)
+            }
+          })
+          send(200, { ok: true, file: path.basename(latest), total: all.length, lines })
+        } catch (error) {
+          send(500, { ok: false, error: String(error && error.message || error) })
+        }
+      },
+    }), 'getnote: log route')
   })
 
   /**

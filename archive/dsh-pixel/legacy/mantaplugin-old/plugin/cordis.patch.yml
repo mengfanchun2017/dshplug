@@ -1,0 +1,9 @@
+# MANTA pixel panel bundle patch.
+#
+# One row carries both halves of this package: the Host half is inert (it only
+# keeps the Cordis row alive so the profile can hold the bundle), and the Client
+# half registers the MANTA tab on the right Sidebar through better-sidebar's
+# ctx.betterSidebar.registerTab extension point.
+- insert:
+    - id: manta-pixel
+      name: '@local/dsh-manta-pixel'

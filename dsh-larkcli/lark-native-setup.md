@@ -57,13 +57,14 @@ user token 约 2 小时过期，CLI 会自动用 refresh token 续（refresh 约
 ## 换飞书应用 / 换 App Secret
 
 1. 编辑 `lark-cli-win/_native-config/appsecret.txt`，只放 secret 本身，无换行。
-2. 编辑 `config.json` 里的 `appId`；`appSecret.id` 用**正斜杠绝对路径**指向该文件：
+2. 编辑 `config.json` 里的 `appId`；`appSecret.id` 用**正斜杠绝对路径**指向该文件
+   （下面是本机当前的实际值——注意它在 `C:/dsh/dshplug/...`，因为已并入 dshplug）：
 
 ```json
 {
   "apps": [{
     "appId": "cli_你的ID",
-    "appSecret": { "source": "file", "id": "C:/dsh/dsh-larkcli/lark-cli-win/_native-config/appsecret.txt" },
+    "appSecret": { "source": "file", "id": "C:/dsh/dshplug/dsh-larkcli/lark-cli-win/_native-config/appsecret.txt" },
     "brand": "feishu"
   }]
 }
@@ -83,18 +84,23 @@ curl.exe --ssl-revoke-best-effort -fL -o lark-cli-win\lark-cli.zip "https://regi
 ```
 GitHub 直连在国内常超时；上面用的是 npmmirror 官方二进制镜像（下载时已实测 15 MB / 秒级完成）。
 
-## 在 DSH 里做成原生工具（可选）
+## 在 DSH 里用（推荐，已经是原生插件）
 
-上面是「agent 用 pwsh 调 CLI」。想让模型直接看到 `mcp__feishu__*` 工具：
+上面是「agent 用 pwsh 调 CLI」—— 给人手用、插件坏了的兜底路径。
+**日常用插件**：装好后模型直接有 9 个 `lark_*` 工具（`lark_call` 直接 spawn exe，不走 pwsh，快 ~200–400ms）。
 
-本仓库的 `package.json` 已放好 `@local/dsh-larkcli` 骨架；正式做成 DSH 插件的路线见 [README.md](<README.md>) 的「插件化路线」。
+```powershell
+& C:\dsh\dshplug\install.ps1 -Only dsh-larkcli
+# 完全退出 DSH 再打开，然后会话里：lark_doctor
+```
 
-参考实现（都是第三方，安装前请自行审阅源码）：
+用法见 [README.md](README.md)，安装/排错见 [BOOTSTRAP.md](BOOTSTRAP.md)，决策见 [ADR.md](ADR.md)。
 
-- [dsh-feishu-mcp](https://dshmp.com/en/plugins/dsh-feishu-mcp)（v0.1.3）：驱动官方 `@larksuiteoapi/lark-mcp` stdio 服务器，把 IM / 多维表格 / 文档 / 日历 API 暴露成 `mcp__feishu__*`，带 Web 设置面板与 OAuth。工具面比 lark-cli 窄，且需要 `npx`（新机器要先装 Node.js）。
-- [dsh-plugin-lark](https://www.npmjs.com/package/dsh-plugin-lark)：飞书「通道」插件（扫码建机器人 + 监听器 + 审批卡片），不是读取线上内容的工具，且依赖 macOS/网关 Python 进程。
+> 注意：本插件**不走 MCP**。早期笔记里「让模型看到 `mcp__feishu__*`」的想法已放弃 ——
+> DSH 自带的 `@deepseek-ai/dsh-mcp-client` 在当前 desktop profile 里未挂载，裸装 MCP server 不会出现工具；
+> 而且 MCP 还要 `npx`（等于要求装系统 Node），与「不装 Node」的硬要求冲突。
+> 第三方同类实现（`dsh-feishu-mcp` / `dsh-plugin-lark`）仅作参考，不要与本插件混装。
 
-注意：DSH 自带的 `@deepseek-ai/dsh-mcp-client` 在当前 desktop profile 的 `cordis.patch.yml` 里**没有挂载**，所以裸装 MCP server 不会自动出现工具。
 ## 安全
 
 - `appsecret.txt` 是明文，目录权限仅当前用户可读；别提交进 git、别发聊天。

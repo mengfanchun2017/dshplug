@@ -1250,8 +1250,8 @@ window.__ModuleLoader__.load({
       );
 
       const t = ctx.locale.bind(NS)
-      // 顶层设置分区。order 取 65：getbrain 是 60，synchub 是 470，
-      // 放在 getbrain 之后、同步中心之前，符合「先配凭据，再配同步」的使用顺序。
+      // 顶层设置分区。order 200：M* 分区统一排在内置分区之后，
+      // Mgitok 起头（200），其余 M* 依次 201/202/203（按显示名字母序）。
       ctx.effect(
         () =>
           ctx.slots.inject('settings.section', () =>
@@ -1259,7 +1259,7 @@ window.__ModuleLoader__.load({
               {
                 name: 'settings.section',
                 id: 'gitok',
-                order: 65,
+                order: 200,
                 label: () => t('nav'),
                 locale: NS,
               },

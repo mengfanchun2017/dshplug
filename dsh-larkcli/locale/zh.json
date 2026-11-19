@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Mlarkcli",
+    "description": "飞书/Lark 原生驱动（Windows only）：多账户（每账户独立应用凭据与 user 授权，可写描述与标签），按任务本地搜索账户降低消耗，提供状态 / 调用 / 自省 / 自检 / 授权共 9 个工具。"
+  },
+  "nav": "Mlarkcli"
+}

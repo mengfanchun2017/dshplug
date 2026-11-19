@@ -53,7 +53,11 @@ C:\dsh\dshplug\
 ├─ dsh-synchub\       ← 插件 1：同步中心（同步引擎）
 │  ├─ package.json    # 必须有 dsh.bundle.patch + dsh.client
 │  ├─ cordis.patch.yml
-│  ├─ README.md       # 架构、同步面分级、状态机、API
+│  ├─ README.md       # 怎么用：架构、同步面分级、状态机、API
+│  ├─ BOOTSTRAP.md    # 怎么做：安装/验证/排错/迁移/命令行（含重启边界表）
+│  ├─ ADR.md          # 为什么：ADR-001~017 + 待办全部处理
+│  ├─ docs\           # chatsync 剖析 / 会话存储 FAQ / 迁移手册
+│  ├─ test\           # synchub + purge + sessionnote + state 四份离线 smoke
 │  └─ lib\ {index.js, client.js}
 ├─ dsh-getbrain\      ← 插件 2：得到大脑（原 Get 笔记）整理
 │  ├─ package.json    # name = dsh-getbrain（与目录名一致）

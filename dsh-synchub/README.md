@@ -1,11 +1,64 @@
-# dsh-synchub · 同步中心
+# dsh-synchub · Msynchub（同步中心）
 
 把 DSH 的**会话、工作区、附件、技能、配置层**同步到你自己的私有 Git 仓库，
 并用一个侧边栏面板把「现在能不能开工 / 该先拉还是先推 / 哪些目录动不得」讲清楚。
 
+> **三份文档分工**：本 [`README.md`](./README.md)=怎么用；[`BOOTSTRAP.md`](./BOOTSTRAP.md)=怎么做（安装/验证/排错/迁移/命令行）；[`ADR.md`](./ADR.md)=为什么（决策+反面代价+已否决方案）。详细调研在 [`docs/`](./docs/)。
+
+0.6.0 是**双机工作流完善版**（ADR-029/030）：
+① 主按钮改为「立即同步」：拉取（ff-only）→应用→暂存→提交→推送一口气，
+   下班点一下全上线；旧的「提交并推送」「拉取并应用」降为次按钮。
+② 分叉（两台各自推过）产品化：面板出现「分叉处理（二选一）」卡，
+   以本机为准（覆盖云，force-with-lease）或以远端为准（覆盖本机，reset+apply），
+   覆盖前双向备份提交哈希到 `backups/diverge-*`；可先「看两边的提交」再决定。
+   不做三方合并——会话是 append-heavy JSONL/zstd，文本合并产出不可读结果（ADR-014 同源证据）。
+新增 [`test/diverge-smoke.cjs`](./test/diverge-smoke.cjs)。
+
+
+0.5.9 是**侧边栏重做版**（兼修一个致命性能缺陷）：之前每次进侧边栏都是同一屏长篇说明，
+写着「还缺两个仓库地址」与「同步中心状态接口不可用」——但设置里地址明明已经填好。
+两个独立问题：
+① **四个接口全部超过前端 30 秒超时**：`/preflight` 37.6s、`/self-check` 42.7s（限 30s → 中止）。
+   耗时全在网络上：`ls-remote` 3.9s + `fetch` 2.8s，三个接口各跑一遍就是 20s+。
+   修法：`/status?fast=1` 完全不访网（实测 **10562ms → 593ms**）、`fetch` 结果 8 秒缓存且存 Promise
+   让并发请求共用一趟网络往返、慢接口不再阻塞首屏且超时提到 60s。
+② **内容职责错位**：九张说明卡摊开，真正关心的四个数字埋在最下面。
+   新增首屏仪表盘：一句话结论 + 四个数字（待同步 / 落后 / 待推送 / 自动同步开关）
+   + 「下次自动：约 N 分钟后」+ 按钮组（0.6.0 起主按钮是「立即同步」）。
+   其余说明全部收进「说明与其他」折叠区。
+关键原则：**`own=null`（没拿到数据）时不再显示「还缺两个仓库地址」**。
+没拿到数据 ≠ 没配 —— 那条误导会让用户去重填已经正确的配置。见 ADR-028。
+
+0.5.8 是**假绿修复版**（重要）：面板显示「两通道已建 · 0/0/0 · 可以开始工作」，
+但 GitHub 上 `dsh-session` 是空的、`dsh-config` 里只有旧的 `snapshots/`。
+根因：`channelState` 用 `git status --porcelain -uno` 当作「有东西没同步」——
+空仓库的 git 工作区恒为干净，`dirty` 恒为 0，于是 preflight 判「payload 已对齐本机」「可以开始工作」，
+而本机 265 个文件一个都没进 payload。修了三处：
+① 新增 `pending`（真实未暂存数，仅在显式 `scan` 时算，不挂轮询）与 `payloadMissing`（便宜的 existsSync）；
+② 面板/preflight 一律改用 `unsynced = dirty + pending`，「两通道仓库」不再把 `.git` 在就叫「已建」，
+  改为「未建 / 空仓库（无提交）/ 无 payload（未同步）/ 已同步」四态；
+③ `branchOf` 不再硬写 `main`，改为读本地 `.git/HEAD` 指向的分支——
+  `dsh-config` 实际在 `master` 上，写死 `main` 会让 `rev-list HEAD...origin/main` 失败、
+  `behind` 错误地停在 0，看起来像「与远端一致」。
+新增 [`test/unsynced-smoke.cjs`](./test/unsynced-smoke.cjs)（21 条断言，含源码护栏，已做变异测试）。见 ADR-026。
+
+同版本还做了一次仓库整理（ADR-027，用户拍板）：删掉 `dsh-config` 里 2026-11-12 遗留的
+`snapshots/`（29 文件，旧结构，已被 `payload/` 取代），并把两仓库默认分支**统一为 `main`**
+（`dsh-config` 原为 `master`：改本地分支 + 推 `main` + 改 GitHub 默认 + 删远端 `master`）。
+**注意**：另一台机器若还指向旧 `master`，需 `git fetch --prune && git branch -m master main && git branch -u origin/main`。
+代码仍能自适应 `master` 仓库，不依赖这次整理。
+
+0.5.7 是**设置页白屏修复版**：点设置里的 Msynchub 什么都不显示——原因是工作区卡片漏了一个逗号，
+`e(...)` 的返回值被当成函数调用，且**只在配置读回来后才炸**，所以首帧正常、数据一到整块空白。
+修好之余补了 [`test/render-smoke.cjs`](./test/render-smoke.cjs)：用 react 桩真跑 `client.js`，
+覆盖首帧 / 有数据 / 钩子序 / 源码护栏（已做变异测试，确认能拦住旧 bug）。见 ADR-025。
+
+0.5 是**功能完善版**：完成 ADR 待办五项（受控删除会话 / 会话蒸馏文档 / 状态目录真实状态 / 移动评估「不做」/ 发布决策维持本地分发），见 ADR-013~017；补齐 4 份离线 smoke。
+0.4 是**面板可用性修复版**：0.3 的引擎不变，侧边栏面板之前**不能滚动**（下面三张卡根本看不到），
+且「已有余力」与「还没配」的文案互相矛盾。0.4 重建了面板布局与引导。
+
 0.3 是一次**架构换代**：0.2 只是个「聚合别的插件状态」的转发层，
 0.3 自己就是同步引擎——不再依赖 `chatsync` 和 `dsh-config-manager`。
-
 > 源码由仓库 `C:\dsh\dshplug` 的 `list.json` 管理；安装用 `install.ps1`，
 > 上线给另一台用 `plugpush.ps1`。详见仓库根 README。
 
@@ -159,9 +212,9 @@ surfaceEnabled(surface, cfg) => Boolean(cfg.surfaces[surface.id]) && surface.tie
 改用**提交消息尾注**：
 
 ```
-synchub: FRANCIS-HOME-I7 @ 2026-11-12T04:35:20.468Z
+synchub: <你的机器名> @ 2026-11-12T04:35:20.468Z
 
-Synchub-Machine: FRANCIS-HOME-I7
+Synchub-Machine: <你的机器名>
 Synchub-At: 2026-11-12T04:35:20.468Z
 ```
 
@@ -224,7 +277,7 @@ statusPayload():
 危险目录默认**不统计大小**（`deep=1` 才算，且排除 `runtimes` / `caches` /
 `profileOther` / `logs` 这类畸大或无穷尽的目录）。
 界面在未统计时显示 `—` 而不是 `0`——避免把「没数」看成「是空的」。
-本机实测规模（`FRANCIS-HOME-I7`，2026-11-12）：
+本机实测规模（示例机器，2026-11-12）：
 
 ```
 sessions         71 文件    52.8 MB
@@ -281,7 +334,8 @@ profileManifest   2 文件     1.4 KB   ← 不同步
 | 路由 | 作用 | 写本机？ |
 |---|---|---|
 | `GET /config` | 当前配置 | 否 |
-| `GET /status` | 两通道 ahead/behind/dirty + 机器信标 | 否 |
+| `GET /status` | 两通道 ahead/behind/dirty + 机器信标 + `state`（状态目录真实磁盘状态） | 否 |
+| `GET /state` | 状态目录真实状态（初始化/仓库/回滚点；只读不创建） | 否 |
 | `GET /map?deep=1` | 目录一览 | 否 |
 | `GET /preflight` | 开工检查（一句话结论 + 逐项） | 否 |
 | `GET /check` | 全项体检 | 否 |
@@ -291,6 +345,19 @@ profileManifest   2 文件     1.4 KB   ← 不同步
 | `POST /push` | 提交 + 推送（落后则拒绝） | 是（仅 payload） |
 | `POST /sync` | pull → 拉取不一致则停；否则 stage → push | 视情况 |
 | `POST /auto` | 空闲自动上传的一次 tick | 视情况 |
+| `GET /purge-session?id=<id>` | 受控删除**预览**（只读；见 ADR-013） | 否 |
+| `POST /purge-session` `{id, confirm:<同一个id>}` | 受控删除**执行**（二次确认 + 备份 + 原子改多处；需重启验收） | 是（删除单个本机会话） |
+| `GET /purge-session?id=<id>&verify=1` | 重启后验收删除是否干净 | 否 |
+
+> **受控删除单个会话**（0.5.0）：GUI 不提供删除，物理删 `.zstd` 会留下悬空引用（ADR-004 §4.4）。
+> 面板「④ 受控删除单个会话」卡走「预览 → 再输入一次 id → 删除」，执行时先全量备份到
+> `$DSH_HOME\dsh-synchub\backups\purge-<ts>-<id>/`（含 `RESTORE.md`），再校验静止、原子改
+> `workspace.json` 四处引用 + 删正文目录 + 投影缓存；**搜索索引是 DSH 的派生库，会自愈，不直接写**。
+> 删除后必须**完全退出 DSH 再重启**才会生效。该操作只删本机正文，不动同步镜像；要清远端需显式 `prune`。
+| `GET /session-note?id=<id>[&filename=…]` | 蒸馏模板预览（只读；落点=会话所属工作区 docs/session-notes/） | 否 |
+| `POST /session-note` `{id, content, confirm:'WRITE'}` | 人工蒸馏文档写盘（confirm 闸门，原样模板拒绝） | 是（写工作区文件） |
+
+> **会话蒸馏成文档**（0.5.0，ADR-006/015）：面板「⑤」给一份五章模板（确定结论 / 决策与理由 / 待办 / 文件路径 / 过程性细节），**由人填写后确认写盘**，不自动解码 compact 摘要。文档落在会话所属工作区的 `docs/session-notes/`，由工作区 git 管、跨机可见，`dsh-synchub` 不搬运它。
 
 `/sync` 的顺序是刻意的：**先 pull，拉下来还有问题就停下等人看**，
 而不是闷头推上去把冲突藏起来。
@@ -316,7 +383,7 @@ payload 是镜像子树：`payload/sessions/...` 对应 `$DSH_HOME/sessions/...`
 
 ```json
 {
-  "machine": "FRANCIS-HOME-I7",
+  "machine": "<你的机器名>",
   "workspace": "C:\\dsh\\workspace1",
   "channels": {
     "config":   { "remote": "https://github.com/<you>/dsh-config.git",   "enabled": true },
@@ -336,12 +403,64 @@ payload 是镜像子树：`payload/sessions/...` 对应 `$DSH_HOME/sessions/...`
 
 ## 10. 面板
 
-| 入口 | 用途 |
-|---|---|
-| 侧边栏「同步中心」（带红/橙点）+ 主面板 | 日常：待办提醒、开工检查、①②③ 三步操作卡、操作记录 |
-| 设置 → 同步中心（设置与目录） | 配置：当前状态、通道地址、本机设置、同步面开关、目录清单（可展开统计）、检查结果 |
+> **两处的分工（0.5.4 起明确）**：侧边栏只管「看状态 + 点同步」，所有配置只在设置里改。
+> 之前两处都能改配置，导致“侧边栏保存不生效 / 设置保存后侧边栏信息没了”两个真 bug（ADR-022）。
+
+| 入口 | 只用做这些 | 不做什么 |
+|---|---|---|
+| **侧边栏 Msynchub** | ① **仪表盘**（一句话结论 + 四个数字 + 下次自动）；② **分叉二选一卡**（两台各自推过时）；③ 自检结论（就绪/待处理 + 逐步引导）；④ 通道快照（落后/领先/脏）；⑤ 空闲开关一行摘要；⑥ 目录地图；⑦ 按钮：立即同步（主）/ 提交并推送 / 拉取并应用 / 重新检查；⑧ 高级操作折叠区 | **不写任何配置**（不内嵌输入框，也没有保存按钮） |
+| **设置 → Msynchub** | **唯一配置入口**：① 必做：两个仓库地址；② 可选：本机设置与工作区映射、同步面开关；③ 诊断与维护：当前状态、检查结果、目录清单 | 不放日常同步按钮 |
+
+**自检怎么用**：打开侧边栏，第一张卡直接告诉你结论。
+- `✓ 同步已就绪` → 点「立即同步」（拉+推一口气；0.6.0 前是分两个按钮）。
+- 分叉（两台各自推过）→ 用「分叉处理（二选一）」卡，先「看两边的提交」再选边（ADR-030）。
+- `✗ 还不能同步（N 项待处理）` → 点开「怎么做（N 步）」，每条都写了**缺什么 / 去哪里 / 怎么验证**。
+  按顺序做完，回来点「重新检查」，直到变成 ✓。
+
+> 同一件事只在一处说：侧边栏不重复配置项，设置也不重复日常按钮。
 
 红点只由真实差异派生：落后、未推送、推送失败、环境已切换。
+尺寸 5×5、贴在图标左上角，`pointer-events:none` 不挡点击，颜色走主题变量。
+
+### 显示名：`Msynchub`
+
+侧边栏与设置里统一显示 **`Msynchub`**（`M` = Manta 品牌前缀 + 插件名），便于在多插件侧栏里一眼认出。
+仓库目录、包名、插槽 id、API 路径仍是 `dsh-synchub`，**两者不要混** —— 改名只动两个插槽的 `label`
+（`sidebar.panellist` 与 `settings.section`）与面板内的 `h2`，不碰任何标识符。
+
+### 新用户引导（设置页顶部）
+
+设置页最上方是一张「新用户从这里开始」卡，按 **第 0→4 步** 写完整流程：
+
+| 步 | 内容 |
+|---|---|
+| 第 0 步 | 说清到底同步什么（DSH 自己的数据），以及**不**同步什么（插件、代码仓库） |
+| 第 1 步 | 在 GitHub 建**两个空的私有**仓库，不勾 README / .gitignore / License |
+| 第 2 步 | 填 HTTPS 地址（不用 SSH），保存后点「检查」 |
+| 第 3 步 | 建 Fine-grained PAT，只给 Contents 读写；凭据进 Windows 凭据管理器 |
+| 第 4 步 | 第一台「提交并推送」建基线，第二台「拉取并应用」；工作区路径必须完全一致 |
+
+卡末还给出了 `install.ps1` 安装命令与**重启边界**（改 `client.js` 刷页面，改 `index.js` / `package.json` 必须完全重启）。
+新用户不需要再去翻 README 或问人。
+
+### 0.4 的面板重做（0.3 的实障）
+
+0.3 的面板有三个真问题，0.4 一次改完：
+
+| 问题 | 0.3 的表现 | 0.4 的做法 |
+|---|---|---|
+| **不能滚动** | 宿主 `.mainPanel` 是不滚动的 flex 列，插件根节点也没建滚动区，卡片一多就被裁在下面，② ③ 和操作记录根本看不到 | 根 `.dsc` 固定 `height:100%` + `min-height:0`，拆成固定头部 `.hd`（标题/状态/刷新）+ 滚动体 `.body`（`overflow-y:auto`）。头部不随内容滚走 |
+| **看不清楚** | 待办提醒、开工检查、通道卡片三处把同一件事说了三遍；最要紧的一条埋在清单中间 | 顶部新增「下一步」头卡（大字 + 为什么 + 拆好的动作按钮）；与开工检查重复的提醒不再重复列出 |
+| **要跑两处才能配** | 提醒里只说「设置 → Msynchub」，得自己去侧边栏翻设置 | 通道未配置时，面板里直接出现「先连上两个私有仓库」输入框，填完就地保存 |
+
+另修了两处**数据自相矛盾**：
+
+- `preflight.verdict` 之前取的是 `steps[0].title`，而 `remote` 步骤无论成功失败都叫「远端仓库已配置」——于是出现 `todo=2` 却显示「远端仓库已配置」。现在标题随状态变（`远端仓库还没配` / `远端仓库已配置`），`verdict` 变成「先处理：<第一个未完成步骤>」。
+- `audit` 步骤的详情之前直接拼内部 id（`configRemote、sessionsRemote`），现在用中文 label（`配置通道远端仓库、会话通道远端仓库`）；`checkAll` 的每一项也都带上了 `label`。
+
+颜色从写死的十六进制改成主题变量（`--dsw-alias-state-{error,warn,success}-primary`、`--dsw-alias-border-l2`、`--dsw-alias-bg-layer-1` 等，均带十六进制兜底），浅色/深色主题都不再出现对比度不足。
+
+> 改了哪部分要重启：`lib/client.js` 刷页面即可；`lib/index.js` 与 `package.json` **必须完全重启 DSH**。
 
 ---
 
@@ -355,7 +474,7 @@ payload 是镜像子树：`payload/sessions/...` 对应 `$DSH_HOME/sessions/...`
 # 2. 装插件
 & "C:\dsh\dshplug\install.ps1" -Only dsh-synchub
 
-# 3. 完全退出 DSH 再打开，进 设置 → 同步中心，填两个远端地址
+# 3. 完全退出 DSH 再打开，进 侧边栏「Msynchub」，在「先连上两个私有仓库」里直接填地址（也可在 设置 → Msynchub）
 
 # 4. 第一台：面板里「① 推送」建立基线
 # 5. 第二台：克隆到同一路径后装插件，面板里「① 拉取」接收基线
@@ -363,8 +482,20 @@ payload 是镜像子树：`payload/sessions/...` 对应 `$DSH_HOME/sessions/...`
 
 ### 认证
 
-GitHub 只接受 HTTPS + PAT（本机实测 SSH 全被墙）。
-凭据存进 Windows 凭据管理器，两台机各做一次。
+**Git 认证请你自己搞定，本插件不接收、不存储、不转发任何凭据。**
+
+本插件不预设你必须用哪种认证方式（HTTPS + PAT、GCM OAuth、SSH key 都行）；
+只要本机的 git 能读写你那两个私有仓库，Msynchub 就能用——它会按 **DSH 当前已经配通的方式**
+做一次真实连通性确认，不自己实现一套认证。
+
+> 推荐装 [`dsh-gitok`](../dsh-gitok/README.md)：它的「设置 → Mgitok」能一键初始化，
+> 并检查 Windows 凭据管理器、credential helper、明文凭据、代理、SSH 私钥口令等，给出修复命令。
+> 不装也可以，自己配好一样用。
+>
+> 纠正一个以前的错误说法：本 README 早前写过“SSH 实测全被墙”。
+> 查 gitok 的审计文档（`git-auth-audit-2026-11-12.md`）实际结论是：
+> 失败的是 **Windows 侧 `https://github.com:443` 直连没配代理**，而不是 SSH 不通——
+> 同一份文档还写了某台 WSL 上那把 SSH key 能用、说明 22 端口是通的。“SSH 全被墙”是过度概括，已改。
 
 > **本机注意**：MinGit 的 schannel 后端在这里会报
 > `SEC_E_NO_CREDENTIALS (0x8009030e)`，必须改用 OpenSSL：
@@ -378,13 +509,105 @@ GitHub 只接受 HTTPS + PAT（本机实测 SSH 全被墙）。
 
 ---
 
+## 11.5 常见问题（2026-11-17 补充）
+
+### Q1. 为什么配置和会话要两个仓库？能合并成一个吗？
+
+**能合并，但现在不做。** 两个仓库是为「体积 + 写入频率」分开的：
+- `config` 通道：技能文件 + `cordis*.yml` 配置层，几百 KB，改动少。
+- `sessions` 通道：会话日志 + `workspace.json` + 附件池，几十 MB 且每次对话都在长。
+
+合成一个会带来两个真问题：① 「我就改个设置」也会连带产生一条几十 MB 的提交，`git log` 不可读；
+② 回滚配置时得从一堆会话提交里挑。另外两通道**互相独立**——一个坏了另一个照样能救，这也是分开的价值。
+
+> 如果确实想合：把 `config.channels.config.remote` 与 `sessions.remote` 填成同一个地址即可（代码不禁止），
+> 但两个通道仍各自 `git init` 到 `repos/config` 与 `repos/sessions`，**不是真的共用一个工作副本**。
+> 真正合并需要改 `SURFACES[].channel` 与 `repos/` 布局，属于架构变更，见 ADR-019。
+
+### Q2. 「空闲」到底怎么算？
+
+**空闲 = 距上次对 Msynchub 面板/接口的手动操作超过 `idlePushMinutes`（默认 20 分钟）**，
+并且同时满足：确实有本机改动、没落后远端、不在上次自动推送后的 5 分钟冷却期。
+
+⚠️ **它不检测 DSH 会话里有没有正在跑的 agent/turn**——只按本插件收到的 HTTP 操作计时，
+所以 agent 在后台干活、你没碰面板时仍会被判为空闲。`autoPush` 默认关闭。
+
+### Q3. 插件是走「dshmanager」第三方吗？
+
+**不是第三方，是 DSH 官方入口。** 位置：**设置 → 插件 → 添加插件**（界面上叫 dsh-market / 插件管理器）。
+它支持三种来源：npm 包名、**Git 仓库地址**、本地目录路径。
+
+本插件（Msynchub）**不是市场插件**，是自研 `link:` 插件——两者分工不同：
+市场/插件管理器负责「装插件」，Msynchub 负责「同步 DSH 的数据」。
+
+### Q4. 工作区为什么要填？我有多个工作区（dshplug、base）怎么办？
+
+**该字段只用于体检提示，不影响同步。** 会话归属由 `$DSH_HOME/storages/workspace.json` 决定，不是这里填的路径。
+
+0.5.3 起改成**工作区映射表**，一行一个工作区，每行两列：
+
+| 列 | 含义 |
+|---|---|
+| **注册名** | DSH 里那个工作区的名字（`workspace.json` 的 `title`），**唯一、不区分大小写**。例：`dshplug`、`base` |
+| **本地位置** | 留空 = 自动用 `<工作区根目录>\<注册名>`（默认 `C:\dsh\dshplug`）；也可手填任意路径 |
+
+面板会实时对照三件事：你配的、DSH 真实登记的、本机路径存不存在，给出 `已对齐 / 路径不一致 / 未登记`。
+面板里点 **「检查并自动填写」** 即可把 DSH 当前登记的**所有**工作区一次性带进来（注册名 + 真实路径都读自 `workspace.json`）——**纯数据读取，不涉及 AI、不猜路径**。已手填的路径会保留，不会被覆盖；填完看对照列，确认无误再点「保存」。
+
+> 如果只想手动配几个，也可以「＋ 增加一行」逐行写。DSH 里登记了但你没填的仍会单独提示。
+
+> 跨机约束不变：所有机器上这些走同步的工作区必须落在**完全相同的绝对路径**（ADR-002），
+> 否则会话能搬过去但会归不到工作区（显示「未分组」）。
+
+### Q5. 新主机怎么装？能直接给 git 地址吗？
+
+**可以。** 但要注意：地址不是写死的，而是从本仓库实际 `git remote origin` 推导。
+面板里三个地址都能点按钮复制（复制失败会明说「只是选中了，没进剪贴板」）：
+
+```text
+仓库根：      <你的 remote>           例如 https://github.com/you/dshplug.git
+synchub 地址：<remote>#path:dsh-synchub
+等价命令：    dsh plugin add <remote>#path:dsh-synchub
+```
+
+本机实测（本仓库当前 remote）：`https://github.com/mengfanchun2017/dshplug#path:dsh-synchub`。
+如果仓库没配 remote，面板会**直接说“无法给出 git 安装地址，请用本机脚本”**，不会编一个。
+
+**为什么要带 `#path:dsh-synchub`**：dshplug 是多插件 monorepo，**仓库根不是 bundle**；
+必须指定子目录，DSH 才能在那里找到 `dsh.bundle.patch`。
+
+> ⚠️ 从 git 地址装前先确认远端已 `plugpush` 到你要的版本——否则装到的是远端旧版。
+> 本机开发仍推荐 `install.ps1 -Only dsh-synchub`（`link:`，改代码即时生效）。
+
+**推荐的新机安装路径（0.6.0 补充，对应「开发在 dshplug、其余机器走 git」的专业评估）**：
+
+```powershell
+# 1. 克隆整个插件仓到与单位机相同的位置（install.ps1 依赖这个布局）
+git clone https://github.com/mengfanchun2017/dshplug.git C:\dsh\dshplug
+# 2. 装本插件（junction + link，与单位机完全一致）
+& C:\dsh\dshplug\install.ps1 -Only dsh-synchub
+# 3. 完全重启 DSH，然后 Msynchub 面板里点「拉取并应用」把数据拉下来
+```
+
+为什么**开发机用 `install.ps1`、新机器也用 `install.ps1`**（而不是 `dsh plugin add git地址`）：
+1. `install.ps1` 是 link/junction 安装 —— dshplug 仓库本身就是插件的真身，
+   `git pull` 一次就是「升级」，不需要重装；`dsh plugin add` 装的是拷贝，升级要走重装。
+2. 新机器克隆 dshplug 后，还能拿到 `install.ps1` 本身、其余插件（gitok/larkcli…）、
+   以及文档三件套 —— 这些不在 `#path:dsh-synchub` 的 bundle 里。
+3. 双机「数据同步」（本插件管）与「插件代码分发」（dshplug 仓管）从此都是同一条 git 通道，
+   只有一套心智模型：**上班机改代码 → `plugpush` 推 dshplug；回家机 `git pull` + `install.ps1`**。
+
+> `dsh plugin add <remote>#path:dsh-synchub` 这条路仍然可用（DSH 官方入口，装的是子目录拷贝），
+> 适合「只想装这一个插件、不要 monorepo」的第三方；自己两台机器不建议。
+
+---
 ## 12. 已知限制
 
 - **只面向 Windows**（`Windows\MinGit`、`$USERPROFILE\.dsh`）。
 - 会话日志是 zstd 多帧，插件**不解压**——只按字节搬。解码仍由 DSH 自己做。
-- 两台机器**不能同时**往同一通道推。落后的那台会拒绝推送并提示先拉，
-  但「同时推」仍是真实的分叉，需要人工 `merge` 或 `reset`。
-- `--ff-only` 意味着**永不自动合并**。这是刻意的：自动合并会话 JSONL 只会产生坏数据。
+- 两台机器**不能同时**往同一通道推。落后的那台会拒绝推送并提示先拉；
+  真分叉（两台各自推过）时面板会出现「分叉处理（二选一）」卡（0.6.0，ADR-030）。
+- `--ff-only` 意味着**永不自动合并**（分叉时也是二选一而非三方合并，理由见 ADR-030）。
 - 大文件没有 LFS：`MAX_FILE_BYTES` 200 MB，超过跳过并记入 `skipped`。
   本机最大会话 52 MB，够用。
 - `dsh-market` 的插件同步与本插件**互相独立**，两者都在用不会有冲突（因为它们管的是不同目录）。

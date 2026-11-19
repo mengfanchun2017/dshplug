@@ -1,7 +1,7 @@
 /**
  * dsh-getbrain —— 浏览器半区（Client 插件）
  *
- * 在 DSH「设置」里注册一个**顶层侧边栏分区 Getnote**（settings.section），
+ * 在 DSH「设置」里注册一个**顶层侧边栏分区 Mgetbrain**（settings.section），
  * 分区内是一个表单，直接读写本插件行的 Config（命名空间 = patch row id "getnote"）。
  * 这样 API Key / Client ID / dataDir / media.images / minInterval 都能在设置里改，
  * 不用去翻文件、也不用找插件行的「配置」按钮。
@@ -48,24 +48,159 @@ function pickForm(configForms) {
 }
 
 const zh = {
-  nav: 'Getnote',
+  nav: 'Mgetbrain',
   // 左侧边栏图标的名字（sidebar.panellist 的 label）
-  panelName: 'Getnote 工作台',
+  panelName: 'Mgetbrain',
+  tabStructure: '分类调整',
   tabOverview: '笔记现状',
   tabSuggest: '处理建议',
   tabApply: '确认执行',
   tabLog: '执行日志',
   localFirst: '本地优先',
-  subtitle: '本地镜像是安全网：所有改动先在这里预演，确认后才写线上。',
+  subtitle: '先在这里看真实层级、改分类，确认后才写线上。',
+  // —— 分类调整页 ——
+  invTitle: '层级清单',
+  invLoading: '正在本地重建层级（不联网，扫 4000+ 个文件头，约 1–3 秒）…',
+  invFail: '读取失败：',
+  invFailHint: '多半是本地镜像还没下载。先在会话里说「用 getnote_download 全量下载」。',
+  invEmpty: '本地镜像还是空的，没有可分类的内容。',
+  loadFail: '读取失败：',
+  mirrorTitle: '本地镜像现状',
+  statTotal: '本地镜像',
+  statTotalHint: '篇 Markdown',
+  statNoTopic: '未归知识库',
+  statNoTag: '无标签',
+  statCourses: '可拆专题',
+  statCoursesHint: '按量排序',
+  biggestTitle: '最该先动手的地方',
+  typesTitle: '笔记类型分布',
+  dirLabel: '镜像目录：',
+  applyGuard: '先干跑预览，确认后才发写请求。',
+  invIntro: '这棵树是从本地镜像重建的真实结构：知识库 → 目录（专栏/课程）→ 书 → 讲 → 划线。官方 API 里知识库是平的、没有文件夹，所以层级只存在于这里。',
+  invStat: '共 {t} 条笔记，未归知识库 {u} 条，无来源 {s} 条。',
+  // —— 顶层分三类（自建库 / 待归类 / 电子书书架）——
+  secOwnKb: '我的知识库',
+  secOwnKbHint: '{n} 个',
+  secOwnKbEmpty: '还没有自建知识库。',
+  secUntopiced: '待归类',
+  secUntopicedHint: '{n} 条没归库',
+  untopicedName: '未归知识库',
+  secShelf: '电子书书架',
+  secShelfHint: '{n} 个 · 得到自动生成',
+  shelfShow: '展开书架（买过的书，共 {n} 个）',
+  shelfHide: '收起书架（买过的书）',
+  badgeShelf: '书',
+  secUnknown: '未区分',
+  secUnknownHint: '未拉取 scope 缓存，分不出是库还是书架',
+  secUnknownAction: '跑一次 gn.py kb-scopes 就能分清楚。',
+  // —— 自动归类页 ——
+  tabAuto: '自动归类',
+  autoTitle: '自动归类',
+  autoSub: '按作者 / 训练营 / 大课程成批归库，只生成计划',
+  autoWhy: '规则一共四条，每条都能解释：① 作者系列（如「万维钢·精英日课6」→ 万维钢）；② 训练营；③ 单目录 ≥ 30 条；④ 其余不动。',
+  autoWhy2: '为什么不全自动：零碎目录平均只有 1.7 条笔记，强行归一起只会造出新的垃圾库。',
+  autoBuild: '生成归类计划（只算，不写）',
+  autoBuilding: '正在生成计划…',
+  autoScope: '当前可归类：{n} 条未归库。',
+  autoIdle: '点上面的按钮生成计划。生成只是算一遍本地镜像，不联网、不改线上。',
+  autoLoading: '正在扫 4000+ 个文件头并按规则分组…',
+  autoFail: '生成失败：',
+  autoStatGroups: '拟建知识库',
+  autoStatGroupsHint: '成规模的组',
+  autoStatMove: '将归位',
+  autoStatMoveHint: '条笔记',
+  autoStatKeep: '不动',
+  autoStatKeepHint: '零碎目录，保留原样',
+  autoStatActions: '动作数',
+  autoStatActionsHint: '干跑后再真写',
+  autoGroupsTitle: '会建成这些知识库',
+  autoSkipTitle: '不动的（保持原样）',
+  autoSkipWhy: '这些目录太小（平均 1.7 条），单独建库只会得到一堆空库。想看完整清单点下面的干跑。',
+  autoNextTitle: '下一步',
+  autoNext: '先干跑：不发任何请求，只把每批 20 条的完整清单打出来。确认无误再回「确认执行」页真写。',
+  autoDry: '先干跑（不发包）',
+  autoRunning: '执行中…',
+  // —— AI 动作页 ——
+  tabAI: 'AI 动作',
+  aiTitle: 'AI 动作',
+  aiSub: '发芽 / 审问 / 连线：取素材 + 可改的提示词，结果不自动写回',
+  aiHow: '填一条笔记的 id（在「分类调整」里展开到「讲」能看到），先生成素材包，再点按钮。',
+  aiNoteIdPh: '笔记 id（数字）',
+  aiLoadPack: '取素材包',
+  aiPacking: '正在取素材…',
+  aiPacking2: '正在扫本地镜像找相关上下文…',
+  aiPackFail: '取出失败：',
+  aiCheckSprout: '查平台发芽',
+  aiSproutHas: '平台侧已有发芽内容，已取回。',
+  aiSproutNone: '平台侧还没有发芽。要生成，用下面的按钮由 AI 做；或在得到 App 里点发芽。',
+  aiPackTitle: '素材包（AI 会看到这些）',
+  aiPackCenter: '中心：',
+  aiPackSiblings: '同系列：',
+  aiPackRelated: '跨系列相关：',
+  aiSibTitle: '同系列的讲：',
+  aiRelTitle: '跨系列相关（命中词）：',
+  aiActsTitle: '动作（每个按钮绑一份提示词）',
+  aiPromptLabel: '它会这样问 AI（可在 dataDir/prompts 里改）：',
+  aiBuild: '拼好发给 AI 的内容',
+  aiBuildHint: '复制后粘到会话里，或直接说「用这个跑一次」',
+  aiPayloadTitle: '要发给 AI 的内容',
+  aiCopy: '复制',
+  aiIdle: '先填一个笔记 id 并点「取素材包」。只有素材包存在时，按钮才会出现。',
+  applyEmptyUndoHint: '若刚才已经写过，可直接在下面回退。',
+  // —— 撤销区 ——
+  undoTitle: '撤销',
+  undoSub: '只还原知识库/标签归属，不删笔记',
+  undoLoading: '正在读撤销记录…',
+  undoFail: '读撤销记录失败：',
+  undoNone: '没有可撤销的批次。每次真写前会自动拍一份归属快照，撤销就靠它。',
+  undoHint: '第一步是干跑，不会发包。确认清单对再点真撤销。',
+  undoNotes: '{n} 条',
+  undoDry: '干跑',
+  undoRealArm: '我要撤销 → 再点一次',
+  undoRealNow: '确认撤销',
+  undoRunning: '正在撤销…',
+  undoDone: '完成',
+  undoErr: '失败：',
+  undoDoneList: '已撤销的批次：',
+  undoStatusUndone: '已撤销',
+  unitLectures: ' 条',
+  unitNotes: ' 条',
+  selCount: '已选 {n} 讲',
+  selClear: '清空',
+  selToPlan: '生成调整计划 →',
+  selHint: '每一层都能勾：选知识库 = 整个库，选目录 = 整个系列，选讲 = 单篇。',
+  selHintKb: '选中整个知识库',
+  selHintCourse: '选中整个目录',
+  selHintBook: '选中整本书',
+  applyEmpty: '还没有计划。先去「分类调整」勾选要动的笔记，生成计划。',
+  applyBuilding: '正在把选中的层级解析成具体笔记，并生成计划（不联网）…',
+  applyFail: '生成计划失败：',
+  applySummary: '共 {n} 个动作。这一步只预览，不连网；点下面的按钮才真正写线上。',
+  applyDryRun: '先干跑（不发写请求）',
+  applyRunning: '执行中…',
+  applyRealArm: '我要真写 → 需再点一次',
+  applyRealNow: '确认写入线上（不可撤销）',
+  applyErr: '失败：',
+  colOp: '动作',
+  colTarget: '目标',
+  colCount: '条数',
+  targetKb: '知识库 ',
+  moreRows: '…还有 {n} 个动作未展开',
+  planFile: '计划文件：',
+  targetLabel: '归到：',
+  targetKbOpt: '知识库',
+  targetTagOpt: '标签',
+  topicIdPh: 'topic_id',
+  tagPh: '新标签名',
+  logLoading: '正在读日志…',
+  logFail: '读日志失败：',
+  logReload: '刷新',
+  logEmpty: '还没有执行记录。所有写操作都会落到 <数据目录>/logs/ 下的审计文件。',
   overviewTitle: '当前笔记现状',
-  overviewTitleEmpty: '原型阶段：这里将显示笔记总数、按知识库/标签的分布、重复项与最近变更。',
-  suggestTitle: '整理建议',
-  suggestTitleEmpty: '原型阶段：这里将列出 AI 生成的分类 / 合并 / 命名建议，逐条可接受或忽略。',
+  overviewTitleEmpty: '本地镜像还是空的。先跑一次下载，Markdown 就会出现在这里。',
   applyTitle: '确认与执行',
-  applyTitleEmpty: '原型阶段：这里将在执行前列出将要发生的每一步改动，需显式确认。',
   logTitle: '执行日志',
-  logTitleEmpty: '原型阶段：这里将显示每次操作的请求、结果与可回溯的审计记录。',
-  title: '得到大脑 · 笔记整理',
+  title: 'Mgetbrain · 得到大脑笔记整理',
   intro: '通过官方 OpenAPI 整理得到大脑（原 Get笔记）。这里填写账号凭据与统一数据目录，保存即生效、无需重启。',
   groupCredentials: '账号凭据',
   groupData: '下载与目录',
@@ -78,9 +213,11 @@ const zh = {
   apiKeyFileHint: '本地 json 路径，含 {"api_key","client_id"}。只在凭据库没有完整 Key+Client ID 时才生效；两个都存了就不看这个。路径写错会在自检里报错。',
   apiBase: 'OpenAPI 地址',
   dataDir: '统一数据目录',
-  dataDirHint: '下载 / 中间产物 / 快照 / 日志 / 审计 / 计划全归它。留空 = 默认值（仓库同级的 data-getbrain，首次运行自动创建）；相对路径相对工作区根，改绝对路径则直接用。',
-  dataDirDefault: '（默认：仓库同级的 data-getbrain，首次运行自动创建）',
-  dirDefaultDerived: '留空，由代码推导 = <仓库所在目录>/data-getbrain',
+  dataDirHint: '下载 / 中间产物 / 快照 / 日志 / 审计 / 计划全归它。留空 = 用下面那个默认值（首次运行自动创建）；相对路径相对工作区根，改绝对路径则直接用。',
+  dataDirDefault: '（留空 = 默认值，首次运行自动创建）',
+  dirDefaultDerived: '留空 → 由代码推导，规则是「仓库所在目录的上一级」+ data-<插件短名>',
+  dirExample: '例：仓库在 C:\\dsh\\dshplug，插件在 C:\\dsh\\dshplug\\dsh-getbrain → 数据落在 C:\\dsh\\data-getbrain，与 dshplug 平级，不在 Git 里。',
+  dirExampleLabel: '具体例子',
   dirHead: '数据存哪里、存了什么',
   dirWhere: '配置值',
   dirResolved: '实际位置',
@@ -126,8 +263,8 @@ const zh = {
 
   // —— 接入信息 ——
   statusTitle: '接入信息',
-  statusIntro: '下面是从本机实际读出来的状态；点「测试连接」会真的发一次请求。',
-  testConn: '测试连接',
+  statusIntro: '打开本页会自动跑一次 gn.py doctor：纯本地检查（解释器、目录、限速、凭据来源），不联网、不耗配额，跟会话里的 getnote_doctor 是同一条命令。下面那个「测试连接」不是同一件事——它是 doctor --live，会真发一次只读请求。',
+  testConn: '测试连接（doctor --live，耗 1 次配额）',
   testing: '测试中…',
   connOk: '✅ 认证通过，已可调用',
   connFail: '❌ 未通过，请看下方诊断',
@@ -138,11 +275,11 @@ const zh = {
   memberUnknown: '未测试',
   quotaLabel: '配额',
   quotaNone: '官方未在响应头下发（只能靠 429 判断）',
-  quotaNeedLive: '点「测试连接」后可查',
+  quotaNeedLive: '点「测试连接」后才有（doctor --live 会真发一次请求）',
   copyUsage: '复制说明',
   copied: '已复制 ✓',
   copiedManual: '浏览器不允许直接写剪贴板；已帮你选中下方文字，按 Ctrl+C 复制。',
-  noStatus: '暂无接入信息（点「测试连接」获取）。',
+  noStatus: '本地自检（doctor）还没回来——刷新页面重试。',
 
   // —— 怎么用 ——
   usageTitle: '怎么用',
@@ -158,23 +295,157 @@ const zh = {
 }
 
 const en = {
-  nav: 'Getnote',
-  panelName: 'Getnote Workbench',
+  nav: 'Mgetbrain',
+  panelName: 'Mgetbrain',
+  tabStructure: 'Organize',
   tabOverview: 'Current state',
   tabSuggest: 'Suggestions',
   tabApply: 'Review & apply',
   tabLog: 'Activity log',
   localFirst: 'Local first',
-  subtitle: 'The local mirror is your safety net: preview every change here, write to the server only after you confirm.',
+  subtitle: 'See the real hierarchy here, adjust categories, and only write to the server after you confirm.',
+  invTitle: 'Hierarchy',
+  invLoading: 'Rebuilding the hierarchy locally (offline; scanning 4000+ file headers, ~1–3s)…',
+  invFail: 'Failed to read: ',
+  invFailHint: 'Most likely the local mirror has not been downloaded yet. Ask "download all notes with getnote_download" in a session first.',
+  invEmpty: 'The local mirror is empty — nothing to classify yet.',
+  loadFail: 'Load failed: ',
+  mirrorTitle: 'Local mirror',
+  statTotal: 'Local mirror',
+  statTotalHint: 'Markdown files',
+  statNoTopic: 'No knowledge base',
+  statNoTag: 'No tags',
+  statCourses: 'Splittable series',
+  statCoursesHint: 'sorted by size',
+  biggestTitle: 'Where to start',
+  typesTitle: 'Note types',
+  dirLabel: 'Mirror dir: ',
+  applyGuard: 'Dry-run first; nothing is sent until you confirm.',
+  invIntro: 'This tree is rebuilt from the local mirror: knowledge base → series (course/column) → book → lecture → highlight. The official API has flat topics with no folders, so the hierarchy exists only here.',
+  invStat: '{t} notes total, {u} not in any knowledge base, {s} without a source.',
+  // —— top level is split into three kinds ——
+  secOwnKb: 'My knowledge bases',
+  secOwnKbHint: '{n}',
+  secOwnKbEmpty: 'No self-built knowledge base yet.',
+  secUntopiced: 'Unfiled',
+  secUntopicedHint: '{n} notes not in any KB',
+  untopicedName: 'No knowledge base',
+  secShelf: 'Ebook shelves',
+  secShelfHint: '{n} · generated by 得到',
+  shelfShow: 'Show shelves ({n} books you have bought)',
+  shelfHide: 'Hide shelves (bought books)',
+  badgeShelf: 'book',
+  secUnknown: 'Unclassified',
+  secUnknownHint: 'scope cache missing — cannot tell KBs from shelves',
+  secUnknownAction: 'Run gn.py kb-scopes once to tell them apart.',
+  // —— auto-classify tab ——
+  tabAuto: 'Auto-classify',
+  autoTitle: 'Auto-classify',
+  autoSub: 'Group by author / bootcamp / large series; builds a plan only',
+  autoWhy: 'Four rules, each explainable: (1) author series (e.g. Wan Weigang · Elite Daily 6 → 万维钢); (2) bootcamps; (3) a single series with 30+ notes; (4) everything else untouched.',
+  autoWhy2: 'Why not fully automatic: leftover series average 1.7 notes each; forcing them together only creates new junk KBs.',
+  autoBuild: 'Build classification plan (computes only, writes nothing)',
+  autoBuilding: 'Building the plan…',
+  autoScope: 'Currently classifiable: {n} unfiled notes.',
+  autoIdle: 'Click the button to build a plan. It only recomputes the local mirror — no network, no changes online.',
+  autoLoading: 'Scanning 4000+ file headers and grouping by rule…',
+  autoFail: 'Build failed: ',
+  autoStatGroups: 'KB to create',
+  autoStatGroupsHint: 'groups large enough',
+  autoStatMove: 'To be filed',
+  autoStatMoveHint: 'notes',
+  autoStatKeep: 'Untouched',
+  autoStatKeepHint: 'tiny series, left as is',
+  autoStatActions: 'Actions',
+  autoStatActionsHint: 'dry-run before writing',
+  autoGroupsTitle: 'These knowledge bases will be created',
+  autoSkipTitle: 'Left as is',
+  autoSkipWhy: 'These series are too small (1.7 notes on average); creating a KB for each yields a pile of empty shells. Hit dry-run below for the full list.',
+  autoNextTitle: 'Next step',
+  autoNext: 'Dry-run first: no requests sent, it just prints each 20-note batch. Once that looks right, go to "Apply" and write for real.',
+  autoDry: 'Dry-run (sends nothing)',
+  autoRunning: 'Running…',
+  // —— AI actions tab ——
+  tabAI: 'AI actions',
+  aiTitle: 'AI actions',
+  aiSub: 'Sprout / Interrogate / Link: fetch context + editable prompts; results are never written back',
+  aiHow: 'Enter a note id (expand to a lecture under Organize to see one), load the context pack, then pick an action.',
+  aiNoteIdPh: 'note id (digits)',
+  aiLoadPack: 'Load context pack',
+  aiPacking: 'Fetching context…',
+  aiPacking2: 'Scanning the local mirror for related context…',
+  aiPackFail: 'Failed: ',
+  aiCheckSprout: 'Check platform sprout',
+  aiSproutHas: 'The platform already has sprout content; fetched it.',
+  aiSproutNone: 'No sprout on the platform yet. Generate it below with AI, or tap sprout in the app.',
+  aiPackTitle: 'Context pack (what the AI sees)',
+  aiPackCenter: 'Center: ',
+  aiPackSiblings: 'Same series: ',
+  aiPackRelated: 'Cross-series related: ',
+  aiSibTitle: 'Other lectures in the same series:',
+  aiRelTitle: 'Cross-series related (matched terms):',
+  aiActsTitle: 'Actions (each button binds one prompt)',
+  aiPromptLabel: 'This is what it asks the AI (edit under dataDir/prompts):',
+  aiBuild: 'Compose the AI payload',
+  aiBuildHint: 'Copy it into the conversation, or just say “run this once”',
+  aiPayloadTitle: 'Payload to send to the AI',
+  aiCopy: 'Copy',
+  aiIdle: 'Enter a note id and load the context pack first. Actions appear only when a pack exists.',
+  applyEmptyUndoHint: 'If you just wrote, you can roll it back below.',
+  // —— undo section ——
+  undoTitle: 'Undo',
+  undoSub: 'Restores knowledge-base/tag membership only; never deletes notes',
+  undoLoading: 'Reading undo records…',
+  undoFail: 'Failed to read undo records: ',
+  undoNone: 'No undoable batch. Every real write snapshots ownership first; undo relies on it.',
+  undoHint: 'Step one is a dry-run; nothing is sent. Confirm the list, then click undo for real.',
+  undoNotes: '{n} notes',
+  undoDry: 'Dry-run',
+  undoRealArm: 'Undo → click again',
+  undoRealNow: 'Confirm undo',
+  undoRunning: 'Undoing…',
+  undoDone: 'Done',
+  undoErr: 'Failed: ',
+  undoDoneList: 'Undone batches:',
+  undoStatusUndone: 'undone',
+  unitLectures: ' notes',
+  unitNotes: ' notes',
+  selCount: '{n} lecture(s) selected',
+  selClear: 'Clear',
+  selToPlan: 'Build change plan →',
+  selHint: 'Every level is selectable: a knowledge base = the whole KB, a series = the whole course, a lecture = one note.',
+  selHintKb: 'Select the whole knowledge base',
+  selHintCourse: 'Select the whole series',
+  selHintBook: 'Select the whole book',
+  applyEmpty: 'No plan yet. Go to "Organize", tick what you want to change, and build a plan.',
+  applyBuilding: 'Resolving the selected levels into concrete notes and building the plan (offline)…',
+  applyFail: 'Failed to build the plan: ',
+  applySummary: '{n} action(s). This is a preview only — no network; nothing is written until you press the button below.',
+  applyDryRun: 'Dry run first (no writes)',
+  applyRunning: 'Running…',
+  applyRealArm: 'I really want to write → press again',
+  applyRealNow: 'Confirm writing to the server (irreversible)',
+  applyErr: 'Failed: ',
+  colOp: 'Action',
+  colTarget: 'Target',
+  colCount: 'Count',
+  targetKb: 'Knowledge base ',
+  moreRows: '…{n} more action(s) not shown',
+  planFile: 'Plan file: ',
+  targetLabel: 'Move to:',
+  targetKbOpt: 'Knowledge base',
+  targetTagOpt: 'Tag',
+  topicIdPh: 'topic_id',
+  tagPh: 'New tag name',
+  logLoading: 'Reading the log…',
+  logFail: 'Failed to read the log: ',
+  logReload: 'Refresh',
+  logEmpty: 'No activity yet. Every write lands in the audit files under <dataDir>/logs/.',
   overviewTitle: 'Current state',
-  overviewTitleEmpty: 'Prototype: note totals, topic/tag distribution, duplicates and recent changes will appear here.',
-  suggestTitle: 'Suggestions',
-  suggestTitleEmpty: 'Prototype: AI-generated classify / merge / rename suggestions will be listed here, each acceptable or ignorable.',
+  overviewTitleEmpty: 'The local mirror is empty. Run a download and Markdown will show up here.',
   applyTitle: 'Review & apply',
-  applyTitleEmpty: 'Prototype: every change will be listed step by step before execution; explicit confirmation required.',
   logTitle: 'Activity log',
-  logTitleEmpty: 'Prototype: requests, results and an auditable trail will appear here.',
-  title: '得到大脑 · Notes Organizer',
+  title: 'Mgetbrain · Notes Organizer',
   intro: 'Organize 得到大脑/Get笔记 via official OpenAPI. Set credentials and the unified data directory here — saving applies immediately, no restart needed.',
   groupCredentials: 'Credentials',
   groupData: 'Download & directories',
@@ -187,9 +458,11 @@ const en = {
   apiKeyFileHint: 'Local json path with {"api_key","client_id"}. Only used when the credential store does not supply both Key and Client ID; ignored once both are saved. A bad path is reported by the self-check.',
   apiBase: 'OpenAPI base URL',
   dataDir: 'Unified data directory',
-  dataDirHint: 'Downloads / intermediate / snapshots / logs / audit / plans all live here. Leave empty to use the default (data-getbrain next to the repo, created on first run); a relative path resolves under the workspace root, an absolute path is used as-is.',
-  dataDirDefault: '(default: data-getbrain next to the repo, created on first run)',
-  dirDefaultDerived: 'empty — derived in code as <repo parent>/data-getbrain',
+  dataDirHint: 'Downloads / intermediate / snapshots / logs / audit / plans all live here. Leave empty to use the default below (created on first run); a relative path resolves under the workspace root, an absolute path is used as-is.',
+  dataDirDefault: '(empty = default, created on first run)',
+  dirDefaultDerived: 'empty → derived in code as <parent of the repo> + data-<plugin short name>',
+  dirExample: 'Example: repo at C:\\dsh\\dshplug, plugin at C:\\dsh\\dshplug\\dsh-getbrain → data lands in C:\\dsh\\data-getbrain, a sibling of dshplug, outside Git.',
+  dirExampleLabel: 'Concrete example',
   dirHead: 'Where data lives & what it contains',
   dirWhere: 'Configured value',
   dirResolved: 'Resolved to',
@@ -232,8 +505,8 @@ const en = {
   credNoService: 'The DSH credential service is not mounted, so key input is disabled. Check that the credentials service is enabled.',
 
   statusTitle: 'Connection info',
-  statusIntro: 'Read from this machine. "Test connection" actually sends one request.',
-  testConn: 'Test connection',
+  statusIntro: 'Opening this page automatically runs gn.py doctor: a purely local check (interpreter, directories, rate limit, credential source) that makes no network call and burns no quota — it is the same command as getnote_doctor. "Test connection" below is a different thing: doctor --live, which really sends one read-only request.',
+  testConn: 'Test connection (doctor --live, 1 quota)',
   testing: 'Testing…',
   connOk: '✅ Authenticated — ready to use',
   connFail: '❌ Not authenticated — see diagnostics below',
@@ -244,11 +517,11 @@ const en = {
   memberUnknown: 'not tested',
   quotaLabel: 'Quota',
   quotaNone: 'not sent by the API (only 429 reveals it)',
-  quotaNeedLive: 'click "Test connection"',
+  quotaNeedLive: 'only after "Test connection" (doctor --live sends a real request)',
   copyUsage: 'Copy instructions',
   copied: 'Copied ✓',
   copiedManual: 'The browser blocked clipboard access; the text below is selected — press Ctrl+C to copy.',
-  noStatus: 'No connection info yet (click "Test connection").',
+  noStatus: 'Local self-check (doctor) has not returned yet — refresh the page.',
 
   usageTitle: 'How to use',
   usageIntro: 'Once authenticated, just ask me in any session and I will call the matching tool.',
@@ -306,7 +579,8 @@ function styles() {
     btn: { font: 'inherit', fontSize: 13, cursor: 'pointer', padding: '6px 16px',
       borderRadius: 'var(--dsw-radius-md)', border: `0.5px solid ${border}`,
       background: bg, color: c },
-    primary: { background: 'var(--dsw-alias-state-business-primary)', color: '#fff', border: 'none' },
+    primary: { background: 'var(--dsw-alias-state-business-primary)',
+      color: 'var(--dsw-alias-label-primary-foreground)', border: 'none' },
     status: { fontSize: 12, color: c3 },
     note: { fontSize: 12, color: c3, marginTop: 6 },
     // 接入信息面板
@@ -389,9 +663,29 @@ window.__ModuleLoader__.load({
       const T = (k, fb) => {
         try { const v = t(k); return (v && v !== k) ? v : fb } catch { return fb }
       }
-      const [view, setView] = React.useState('overview')
+      const [view, setView] = React.useState('structure')
       const [sum, setSum] = React.useState({ phase: 'loading' })
-
+      const [inv, setInv] = React.useState({ phase: 'loading' })
+      const [plan, setPlan] = React.useState({ data: null })
+      const [log, setLog] = React.useState({ lines: [] })
+      // 树的展开状态：用 Set 存 key，分三层（知识库 / 目录 / 书）
+      const [openKb, setOpenKb] = React.useState(new Set())
+      const [openCourse, setOpenCourse] = React.useState(new Set())
+      const [openBook, setOpenBook] = React.useState(new Set())
+      const [sel, setSel] = React.useState(new Set())
+      // 拖拽状态：drag = 正在拖的层级路径；dropOn = 当前悬停的知识库名。
+      // 为何用拖拽而不是只靠勾选：勾选要「展开→找→勾」三步，拖拽是一步；
+      // 而且拖拽能看见「放到哪」，勾选看不见目标。两种都留，不是取代关系。
+      const [drag, setDrag] = React.useState(null)
+      const [dropOn, setDropOn] = React.useState(null)
+      // 电子书书架默认收起：111 个自动生成的架子把真知识库（11 个）埋了
+      const [showShelf, setShowShelf] = React.useState(false)
+      const [showUnknown, setShowUnknown] = React.useState(false)
+      // 自动归类的计划预览（跟手工选的 plan 分开存，因为两套动作完全不同）
+      const [autoPlan, setAutoPlan] = React.useState({ phase: 'idle' })
+      // 进「确认执行」页时拉一次撤销列表。
+      // 不放在这里用 useEffect：loadUndos 定义在后面（TDZ），
+      // 所以另在 loadUndos 之后挂一个 effect。
       // 拉一次统计；失败也要能看见失败原因，不要默默空白
       React.useEffect(() => {
         let alive = true
@@ -408,23 +702,345 @@ window.__ModuleLoader__.load({
         return () => { alive = false }
       }, [])
 
+      // 层级清单：只在第一次进「分类调整」时拉（扫描 4000+ 文件，不便宜）
+      const loadInv = React.useCallback(async () => {
+        setInv({ phase: 'loading' })
+        try {
+          const r = await fetch('/plugins/getnote/inventory', { credentials: 'same-origin' })
+          const d = await r.json()
+          setInv(d && d.ok ? { phase: 'ready', data: d } : { phase: 'error', error: (d && d.error) || ('HTTP ' + r.status) })
+        } catch (e) {
+          setInv({ phase: 'error', error: String((e && e.message) || e) })
+        }
+      }, [])
+
+      // 日志：每次进「执行日志」都重新拉（日志随时在长，缓存没意义）
+      const loadLog = React.useCallback(async () => {
+        setLog({ phase: 'loading', lines: [] })
+        try {
+          const r = await fetch('/plugins/getnote/log?lines=200', { credentials: 'same-origin' })
+          const d = await r.json()
+          setLog(d && d.ok
+            ? { phase: 'ready', lines: d.lines || [], file: d.file, total: d.total }
+            : { phase: 'error', lines: [], error: (d && d.error) || ('HTTP ' + r.status) })
+        } catch (e) {
+          setLog({ phase: 'error', lines: [], error: String((e && e.message) || e) })
+        }
+      }, [])
+
+      React.useEffect(() => {
+        if (view === 'structure' && inv.phase === 'loading' && !inv.__tried) {
+          setInv((x) => ({ ...x, __tried: true }))
+          loadInv()
+        }
+        if (view === 'log' && log.phase === undefined) loadLog()
+      }, [view])
+
+      // 勾选「讲」→ 生成计划（纯本地，不发写请求）
+      // 勾选「讲」→ 交给 Host 解析成 note_id 并生成计划（只写计划文件，不执行）
+      const onPlan = React.useCallback(async (target) => {
+        if (!target) return
+        setPlan({ data: null, phase: 'building' })
+        setView('apply')
+        try {
+          const r = await fetch('/plugins/getnote/plan', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            credentials: 'same-origin',
+            // #untopiced 只是界面上的合成行，不是真实层级名。
+            // 直接传下去会解析不到任何笔记（服务端叫「(未归知识库)」）。
+            // 在这里翻译成真实前缀，界面就能用「选整行」代替「展开 2055 条再一个个勾」。
+            body: JSON.stringify({
+              // 拖拽落点时用 dropPaths（单个层级），否则用当前勾选。
+              // 不合并两者：拖拽后如果再叠加上老勾选，用户会莫名多归一批笔记。
+              paths: (target.dropPaths && target.dropPaths.length
+                ? target.dropPaths
+                : [...sel])
+                .map((p) => p === '#untopiced' ? '(未归知识库)' : p),
+              target: target.dropPaths
+                ? { kind: 'kb', topicName: target.topicName }
+                : target,
+            }),
+          })
+          const d = await r.json()
+          setPlan(d && d.ok
+            ? { data: d.plan, planPath: d.planPath, phase: 'ready' }
+            : { data: null, phase: 'error', error: (d && d.error) || ('HTTP ' + r.status) })
+        } catch (e) {
+          setPlan({ data: null, phase: 'error', error: String((e && e.message) || e) })
+        }
+      }, [sel])
+
+      // 执行：先干跑，再真写（双点确认）。
+      // planPath 必须能分开带：手工计划写 plan.pending.json，自动归类写
+      // plan.classify.json。不分开的话，在自动归类页点干跑会跑去执行上一份手工计划，
+      // 而界面显示的是新摘要 —— 这是最危险的一种错（看起来对，改的不是这批）。
+      const [armed, setArmed] = React.useState(false)
+      const [busy, setBusy] = React.useState(false)
+      const [result, setResult] = React.useState(null)
+      // 撤销列表必须定义在 runApply 之前：
+      // runApply 真写成功后会调 setUndos 刷新，若状态在它后面声明（const），
+      // 就是 TDZ —— 而函数的闭包要到点击时才求值，所以会变成“一点真写就报错”。
+      const [undos, setUndos] = React.useState({ phase: 'idle', list: [] })
+      const runApply = React.useCallback(async (dry, planPath) => {
+        if (busy) return
+        setBusy(true)
+        setResult(null)
+        try {
+          const r = await fetch('/plugins/getnote/apply', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ confirm: 'APPLY', dryRun: dry,
+              planPath: planPath || undefined }),
+          })
+          const d = await r.json()
+          setResult(d)
+          setResult(d)
+          if (!dry && d && d.ok) {
+            setArmed(false)
+            // 真写成功后必须立刻刷新撤销列表：
+            // 否则用户刚写完就去看，会以为“没有可回退的”，不敢真写。
+            setUndos({ phase: 'idle', list: [] })
+          }
+        } catch (e) {
+          setResult({ ok: false, error: String((e && e.message) || e) })
+        } finally {
+          setBusy(false)
+        }
+      }, [busy])
+
+      // 「生成调整计划」需要先选一个目标（哪个知识库 / 哪个标签）
+      const [targetKind, setTargetKind] = React.useState('kb')
+      const [topicId, setTopicId] = React.useState('')
+      const [tagName, setTagName] = React.useState('')
+      const onPlanMenu = React.useCallback(() => {
+        const target = targetKind === 'kb'
+          ? { kind: 'kb', topicId: topicId.trim() }
+          : { kind: 'tag', tag: tagName.trim() }
+        if (target.kind === 'kb' && !target.topicId) return
+        if (target.kind === 'tag' && !target.tag) return
+        onPlan(target)
+      }, [targetKind, topicId, tagName, onPlan])
+      // 拖拽落点：把一个层级拖到另一个知识库上 → 直接生成计划（不写）。
+      //
+      // 为何走 onPlan 而不直接调 /apply：拖拽只是一个「意图」，
+      // 用户可能拖错。必须先在「确认执行」页看到「把 N 条归到 X」才能决定。
+      const onDropToKb = React.useCallback((path, kbName) => {
+        if (!path || !kbName) return
+        // 拖到自己所在的库里 = 无意义，直接忽略（否则会生成一堆「已在目标库」的空动作）
+        if (path.split('\u001f')[0] === kbName) return
+        onPlan({ kind: 'kb', topicName: kbName, dropPaths: [path] })
+      }, [onPlan])
+
+      // 撤销批次列表
+      const [undoResult, setUndoResult] = React.useState(null)
+      const loadUndos = React.useCallback(async () => {
+        setUndos({ phase: 'loading', list: [] })
+        try {
+          const r = await fetch('/plugins/getnote/undos', { credentials: 'same-origin' })
+          const d = await r.json()
+          setUndos(d && d.ok
+            ? { phase: 'ready', list: d.undos || [] }
+            : { phase: 'error', list: [], error: (d && d.error) || ('HTTP ' + r.status) })
+        } catch (e) {
+          setUndos({ phase: 'error', list: [], error: String((e && e.message) || e) })
+        }
+      }, [])
+
+      const [undoBusy, setUndoBusy] = React.useState(false)
+      const [undoArmed, setUndoArmed] = React.useState(null)
+      const onUndo = React.useCallback(async (undoPath, dry) => {
+        setUndoResult(null)
+        setUndoBusy(true)
+        try {
+          const r = await fetch('/plugins/getnote/undo', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ confirm: 'UNDO', dryRun: dry, undoPath, allowLarge: true }),
+          })
+          const d = await r.json()
+          setUndoResult(d)
+          if (d && d.ok && !dry) loadUndos()
+        } catch (e) {
+          setUndoResult({ ok: false, error: String((e && e.message) || e) })
+        } finally {
+          setUndoBusy(false)
+        }
+      }, [loadUndos])
+
+      // 真写成功后、或每次进「确认执行」页，都要刷新可撤销列表：
+      // 刚写的批次必须马上出现，否则用户以为无法回退。
+      React.useEffect(() => {
+        if (view === 'apply' && undos.phase === 'idle') loadUndos()
+      }, [view, undos.phase, loadUndos])
+      // —— AI 动作（发芽/审问/连线）——
+      // 状态分三块：提示词与按钮（aiData）、素材包（pack）、当前选中动作。
+      // 为何分开：提示词可以改完不取素材；素材包也可以对多个动作复用。
+      const [aiData, setAiData] = React.useState(null)
+      const [aiNoteId, setAiNoteId] = React.useState('')
+      const [pack, setPack] = React.useState(null)
+      const [packBusy, setPackBusy] = React.useState(false)
+      const [packError, setPackError] = React.useState('')
+      const [sprout, setSprout] = React.useState(null)
+      const [sproutBusy, setSproutBusy] = React.useState(false)
+      const [activeAction, setActiveAction] = React.useState('')
+      const [payload, setPayload] = React.useState('')
+
+      const loadAI = React.useCallback(async () => {
+        try {
+          const r = await fetch('/plugins/getnote/ai', { credentials: 'same-origin' })
+          const d = await r.json()
+          if (d && d.ok) setAiData(d)
+        } catch { /* 取不到就留空，不阻断页面 */ }
+      }, [])
+
+      // 进 AI 页时拉一次提示词：用户在文件里改过，也要能立即看到最新版。
+      // 放在 loadAI 定义之后，否则会引用到尚未初始化的 const（TDZ）。
+      React.useEffect(() => {
+        if (view === 'ai' && !aiData) loadAI()
+      }, [view, aiData, loadAI])
+
+      const loadPack = React.useCallback(async () => {
+        if (!/^\d{6,}$/.test(aiNoteId)) return
+        setPackBusy(true); setPackError(''); setPack(null); setPayload('')
+        try {
+          const r = await fetch('/plugins/getnote/context-pack', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ noteId: aiNoteId }),
+          })
+          const d = await r.json()
+          if (d && d.ok) setPack(d)
+          else setPackError((d && d.error) || ('HTTP ' + r.status))
+        } catch (e) {
+          setPackError(String((e && e.message) || e))
+        } finally {
+          setPackBusy(false)
+        }
+      }, [aiNoteId])
+
+      const checkSprout = React.useCallback(async () => {
+        if (!/^\d{6,}$/.test(aiNoteId)) return
+        setSproutBusy(true)
+        try {
+          const r = await fetch('/plugins/getnote/sprout?noteId=' + encodeURIComponent(aiNoteId),
+            { credentials: 'same-origin' })
+          const d = await r.json()
+          setSprout(d && d.ok
+            ? { checked: true, hasSprout: !!d.hasSprout, data: d.sprout }
+            : { checked: true, hasSprout: false, error: (d && d.error) || ('HTTP ' + r.status) })
+        } catch (e) {
+          setSprout({ checked: true, hasSprout: false, error: String((e && e.message) || e) })
+        } finally {
+          setSproutBusy(false)
+        }
+      }, [aiNoteId])
+
+      // 拼「发给 AI 的内容」：提示词 + 素材包。
+      // 为何不直接调模型：本插件是数据层，模型调用属于会话侧；
+      // 而且把内容摊开给用户看，他才能判断这个提示词合不合适。
+      const buildPayload = React.useCallback(() => {
+        if (!pack || !pack.pack || !aiData) return
+        const act = (aiData.actions || []).find((x) => x.id === activeAction)
+        const promptText = act ? (aiData.prompts || {})[act.prompt] || '' : ''
+        const pk = pack.pack
+        const parts = [promptText, '', '---', ''
+          , '【中心笔记】' + (pk.center.title || '')
+          , '课程：' + (pk.center.course || '') + '　类型：' + (pk.center.type || '')
+          , ''
+          , pk.center.body || ''
+        ]
+        if ((pk.siblings || []).length) {
+          parts.push('', '【同系列的其他讲】')
+          pk.siblings.forEach((s, i) => {
+            parts.push('', '(' + (i + 1) + ') ' + (s.title || ''), s.excerpt || '')
+          })
+        }
+        if ((pk.related || []).length) {
+          parts.push('', '【跨系列可能相关的段落】')
+          pk.related.forEach((r, i) => {
+            parts.push('', '(' + (i + 1) + ') [' + (r.course || '') + '] ' + (r.title || '')
+              , '命中：' + (r.matched || []).join(' / '), r.excerpt || '')
+          })
+        }
+        setPayload(parts.join('\n'))
+      }, [pack, aiData, activeAction])
+
+      const copyPayload = React.useCallback(async () => {
+        try {
+          await navigator.clipboard.writeText(payload)
+        } catch {
+          // 回退：选中文本，但必须明说「只是选中了」
+          try {
+            const ta = document.createElement('textarea')
+            ta.value = payload
+            document.body.appendChild(ta)
+            ta.select()
+            alert('已选中全部文字，请按 Ctrl+C 复制（浏览器拒绝了直接写剪贴板）')
+            document.body.removeChild(ta)
+          } catch { /* 最后放弃 */ }
+        }
+      }, [payload])
+
+      // 一键生成自动归类计划：只写计划文件，不发写请求。
+      // 为何要这个：2055 条没归库，靠手勾「讲」是几百次点击，不可能完成。
+      // 但仍然不能在浏览器里自己算——必须先看计划，再确认，才 apply。
+      const onAutoPlan = React.useCallback(async () => {
+        setAutoPlan({ phase: 'building' })
+        setView('auto')
+        try {
+          const r = await fetch('/plugins/getnote/auto-plan', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ minGroup: 5 }),
+          })
+          const d = await r.json()
+          setAutoPlan(d && d.ok
+            ? { phase: 'ready', data: d }
+            : { phase: 'error', error: (d && d.error) || ('HTTP ' + r.status) })
+        } catch (e) {
+          setAutoPlan({ phase: 'error', error: String((e && e.message) || e) })
+        }
+      }, [])
+
       const tabs = [
+        { id: 'structure', label: T('tabStructure', '分类调整') },
         { id: 'overview', label: T('tabOverview', '笔记现状') },
-        { id: 'suggest', label: T('tabSuggest', '处理建议') },
         { id: 'apply', label: T('tabApply', '确认执行') },
+        { id: 'auto', label: T('tabAuto', '自动归类') },
+        { id: 'ai', label: T('tabAI', 'AI 动作') },
         { id: 'log', label: T('tabLog', '执行日志') },
       ]
+      const act = { openKb: [openKb, setOpenKb], openCourse: [openCourse, setOpenCourse],
+        openBook: [openBook, setOpenBook], sel: [sel, setSel], setSel, onPlanMenu,
+        showShelf: [showShelf, setShowShelf], showUnknown: [showUnknown, setShowUnknown],
+        onAutoPlan, autoPlan,
+        drag: [drag, setDrag], dropOn: [dropOn, setDropOn], onDropToKb,
+        undo: undos, onUndo, undoResult, undoBusy, undoArmed, setUndoArmed,
+        targetKind, setTargetKind, topicId, setTopicId, tagName, setTagName }
 
       let content
-      if (view === 'overview') content = renderOverview(sum, T, h, P)
-      else if (view === 'suggest') content = renderSuggest(sum, T, h, P)
-      else if (view === 'apply') content = renderApply(T, h, P)
-      else content = renderLog(T, h, P)
+      if (view === 'structure') content = renderStructure(T, h, P, inv, act)
+      else if (view === 'overview') content = renderOverview(sum, T, h, P)
+      else if (view === 'apply') content = renderApply(T, h, P, { ...plan, result },
+        { run: runApply, busy, armed, setArmed,
+          undo: undos, onUndo, undoResult, undoBusy, undoArmed, setUndoArmed })
+      else if (view === 'auto') content = renderAuto(T, h, P, autoPlan, { onAutoPlan, run: runApply, busy, inv })
+      else if (view === 'ai') content = renderAI(T, h, P,
+        { data: aiData, pack, packBusy, packError, sprout, sproutBusy },
+        { noteId: aiNoteId, setNoteId: setAiNoteId, loadPack, checkSprout,
+          activeAction, setActiveAction, buildPayload, payload, copyPayload })
+      else content = renderLog(T, h, P, log, loadLog)
+
 
       return h('div', { style: P.root },
         h('header', { style: P.header },
           h('div', { style: { flex: 1, minWidth: 0 } },
-            h('h1', { style: P.title }, T('title', 'Getnote 工作台')),
+            h('h1', { style: P.title }, T('title', 'Mgetbrain')),
             h('p', { style: P.subtitle },
               T('subtitle', '本地镜像是安全网：所有改动先在这里预演，确认后才写线上。'))),
           h('span', { style: P.pill }, T('localFirst', '本地优先'))),
@@ -465,7 +1081,7 @@ window.__ModuleLoader__.load({
       if (sum.phase === 'error') {
         return h('section', { style: P.card },
           h('h2', { style: P.cardTitle }, T('overviewTitle', '当前笔记现状')),
-          h('p', { style: { ...P.muted, color: 'var(--dsw-alias-status-danger, #e06c75)' } },
+          h('p', { style: { ...P.muted, color: 'var(--dsw-alias-state-error-primary)' } },
             T('loadFail', '读取失败：') + sum.error))
       }
       const d = sum.data
@@ -507,86 +1123,770 @@ window.__ModuleLoader__.load({
         h('p', { style: P.dirLine }, T('dirLabel', '镜像目录：') + d.dir))
     }
 
-    /** 「处理建议」页：基于真实数据推出可执行建议（规则引擎，非 AI）。 */
-    function renderSuggest(sum, T, h, P) {
-      if (sum.phase !== 'ready') {
-        return h('section', { style: P.card }, h('p', { style: P.muted }, T('loading', '正在读取本地镜像…')))
+    // ────────────────────────────────────────────────────────────────
+    //  「分类调整」页：真实层级浏览 + 可执行动作
+    //
+    //  为什么做成树而不是列表：官方 API 里 topics 是平的（只有 id/name/scope），
+    //  一个人的真实结构是「知识库 → 目录 → 书 → 讲 → 划线」。这棵树不在服务器上，
+    //  而是由 Host 侧的 gn.py inventory 从本地镜像重建。
+    //
+    //  交互约定：先选中（不写线上），再生成计划，最后显式确认才发写请求。
+    //  删除一律走双重闸门（勾选 + 输入词），与 gn.py 的 CLI 保持一致。
+    // ────────────────────────────────────────────────────────────────
+    function renderStructure(T, h, P, inv, act) {
+      const [openKb, setOpenKb] = act.openKb
+      const [openCourse, setOpenCourse] = act.openCourse
+      const [openBook, setOpenBook] = act.openBook
+      const sel = act.sel[0]
+      const drag = act.drag[0]
+      const dropOn = act.dropOn[0]
+      const setDrag = act.drag[1]
+      const setDropOn = act.dropOn[1]
+      if (inv.phase === 'loading') {
+        return h('section', { style: P.card }, h('p', { style: P.muted }, T('invLoading', '正在本地重建层级（不联网，扫 4000+ 个文件头，约 1–3 秒）…')))
       }
-      const d = sum.data
-      const items = []
-      // 规则 1：大专题拆分
-      d.courses.filter((x) => x.count >= 100).slice(0, 6).forEach((x) => {
-        items.push({
-          key: 'split-' + x.name,
-          title: T('sgSplit', '把「{n}」拆成独立知识库').replace('{n}', x.name),
-          detail: T('sgSplitDetail', '{c} 篇笔记挤在同一处，拆出去后其余分类才能看清。').replace('{c}', x.count),
-          count: x.count, kind: T('kindSplit', '拆分'),
-        })
-      })
-      // 规则 2：未归知识库
-      if (d.noTopic > 50) {
-        items.push({
-          key: 'untopiced',
-          title: T('sgTopic', '给 {n} 篇未归知识库的笔记补归属').replace('{n}', d.noTopic),
-          detail: T('sgTopicDetail', '占比 {p}%。先按已有标签批量归类，比逐条整理快得多。')
-            .replace('{p}', Math.round(d.noTopic * 100 / d.total) + '%'),
-          count: d.noTopic, kind: T('kindTopic', '归类'),
-        })
+      if (inv.phase === 'error') {
+        return h('section', { style: P.card },
+          h('h2', { style: P.cardTitle }, T('invTitle', '层级清单')),
+          h('p', { style: { ...P.muted, color: 'var(--dsw-alias-state-error-primary)' } },
+            T('invFail', '读取失败：') + inv.error),
+          h('p', { style: P.muted }, T('invFailHint', '多半是本地镜像还没下载。先在会话里说「用 getnote_download 全量下载」。')))
       }
-      // 规则 3：家庭/工作二分
-      items.push({
-        key: 'family-work',
-        title: T('sgSplit2', '建立「家庭」与「工作」两个顶层知识库'),
-        detail: T('sgSplit2Detail', '两个人共用一个账号，先把大方向分开，之后所有整理都以此为基准。'),
-        count: null, kind: T('kindStructure', '结构'),
+      const d = inv.data || {}
+      const kbs = d.knowledge_bases || []
+      if (!kbs.length) {
+        return h('section', { style: P.card },
+          h('h2', { style: P.cardTitle }, T('invTitle', '层级清单')),
+          h('p', { style: P.muted }, T('invEmpty', '本地镜像还是空的，没有可分类的内容。')),
+          h('p', { style: P.dirLine }, d.dir || ''))
+      }
+
+      // 顶层节点分三类，语义完全不同，不能平铺在一超展示：
+      //   kb         = 我自己建的知识库（真分类，我会去用）
+      //   book_shelf = 得到电子书自动生成的书架（一本书一个，是“买过什么”不是“我怎么归类”）
+      //   untopiced  = 还没归位的笔记（这是待处理入口，不是知识库）
+      // 之前三者混在一起，顶层 123 个节点看起来像“我有 123 个知识库”，
+      // 实际上真知识库只有 11 个，剩下 111 个全是买书自带的架子。
+      const ownKb = kbs.filter((x) => x.kind === 'kb')
+      const shelves = kbs.filter((x) => x.kind === 'book_shelf')
+      const untopicedNode = kbs.find((x) => x.kind === 'untopiced')
+      const unknownKb = kbs.filter((x) => x.kind === 'unknown')
+      const [showShelf, setShowShelf] = act.showShelf
+      const [showUnknown, setShowUnknown] = act.showUnknown
+
+      const toggle = (setter, cur, key) => () => {
+        const next = new Set(cur)
+        if (next.has(key)) next.delete(key); else next.add(key)
+        setter(next)
+      }
+      // 勾选/取消一个层级（任意层）。setSel 直接传值，不走 setter。
+      const pick = (key) => {
+        const next = new Set(sel)
+        if (next.has(key)) next.delete(key); else next.add(key)
+        act.setSel(next)
+      }
+      const chev = (on) => on ? '▾' : '▸'
+
+      const rowStyle = (depth, active) => ({
+        ...P.treeRow,
+        paddingLeft: 8 + depth * 14,
+        background: active ? 'var(--dsw-alias-interactive-bg-hover)' : 'transparent',
       })
 
-      if (!items.length) {
-        return h('section', { style: P.card }, h('p', { style: P.muted }, T('suggestNone', '暂时没有发现需要处理的问题。')))
-      }
+      // 把一组知识库节点渲染成树（三类主体逻辑一样，只是颜色/前缀不同）
+      const renderKbGroup = (list, opts) => list.map((kb) => {
+        const kbOpen = openKb.has(kb.name)
+        // 每一层都要能选：勾「知识库」= 整个库一次性归到别处。
+        // 之前只有最底的「讲」能勾，4321 条笔记等于要勾几百次——这不是「整理笔记」，
+        // 是体力活。cmd_resolve 本来就支持前缀匹配（len(parts) <= 4），
+        // 缺的只是界面上的勾框。
+        const kbPath = kb.name
+        const kbPicked = sel.has(kbPath)
+        // 拖拽放置目标：只有「真自建库」能作为目标。
+        // 为何排除电子书书架：书架是平台按书自动建的，往里拖笔记会造出双重归属，
+        // 而且用户无法删除书架，放错了很难收拾。
+        const canDrop = opts.canDrop === true
+        const isDropOver = dropOn === kb.name && canDrop
+        const kbHdr = h('div', {
+          key: 'kb-' + (opts.tag || '') + kb.name,
+          style: { ...rowStyle(0, kbPicked || isDropOver),
+            ...(isDropOver ? { outline: '2px dashed var(--dsw-alias-brand-primary)',
+              borderRadius: 6 } : null) },
+          onDragOver: canDrop ? ((e) => {
+            if (!drag) return
+            e.preventDefault()   // 不 preventDefault 浏览器不认这里是合法落点
+            if (dropOn !== kb.name) setDropOn(kb.name)
+          }) : undefined,
+          onDragLeave: canDrop ? (() => {
+            if (dropOn === kb.name) setDropOn(null)
+          }) : undefined,
+          onDrop: canDrop ? ((e) => {
+            e.preventDefault()
+            const path = drag || e.dataTransfer.getData('text/plain')
+            setDropOn(null)
+            setDrag(null)
+            if (path) act.onDropToKb(path, kb.name)
+          }) : undefined,
+        },
+          h('span', {
+            style: P.treeCheck,
+            title: T('selHintKb', '选中整个知识库'),
+            onClick: (e) => { e.stopPropagation(); pick(kbPath) },
+          }, kbPicked ? '☑' : '☐'),
+          h('span', {
+            style: { ...P.treeChev, cursor: 'pointer' },
+            onClick: toggle(setOpenKb, openKb, kb.name),
+          }, chev(kbOpen)),
+          h('span', {
+            style: { ...P.treeName, cursor: 'pointer' }, title: kb.name,
+            onClick: toggle(setOpenKb, openKb, kb.name),
+          }, kb.name),
+          opts.badge
+            ? h('span', { style: { ...P.chip, marginLeft: 6, fontSize: 10 } }, opts.badge)
+            : null,
+          h('span', { style: P.treeCount }, String(kb.count)))
 
+        if (!kbOpen) return kbHdr
+
+        const courseNodes = (kb.courses || []).slice(0, 40).map((co) => {
+          const ck = kb.name + '\u0000' + co.name
+          const coOpen = openCourse.has(ck)
+          const coPicked = sel.has(ck)
+          // 目录行可拖：拖着整个系列去另一个库，是最高频的批量操作。
+          // 拖拽时勾选框仍可用；两者不冲突（拖拽改的是「放到哪」，勾选改的是「选中哪」）。
+          const coHdr = h('div', {
+            key: 'co-' + ck,
+            draggable: true,
+            onDragStart: (e) => {
+              setDrag(ck)
+              try { e.dataTransfer.setData('text/plain', ck) } catch { /* 有些浏览器限制 */ }
+              e.dataTransfer.effectAllowed = 'move'
+            },
+            onDragEnd: () => { setDrag(null); setDropOn(null) },
+            style: { ...rowStyle(1, coPicked), cursor: 'grab' },
+          },
+            h('span', {
+              style: P.treeCheck,
+              title: T('selHintCourse', '选中整个目录'),
+              onClick: (e) => { e.stopPropagation(); pick(ck) },
+            }, coPicked ? '☑' : '☐'),
+            h('span', {
+              style: { ...P.treeChev, cursor: 'pointer' },
+              onClick: toggle(setOpenCourse, openCourse, ck),
+            }, chev(coOpen)),
+            h('span', {
+              style: { ...P.treeName, cursor: 'pointer' }, title: co.name,
+              onClick: toggle(setOpenCourse, openCourse, ck),
+            }, co.name),
+            h('span', { style: P.treeCount }, String(co.count)))
+
+          if (!coOpen) return coHdr
+
+          const bookNodes = (co.books || []).map((bk) => {
+            const bKey = ck + '\u0000' + (bk.name || '\u0001flat')
+            const bkOpen = openBook.has(bKey)
+            // 空书名 = 服务端已展平（没有书名的单篇）。不再画一层「书」行，
+            // 直接把这些讲接在目录下面，否则多一层拿掉正是为了去掉的空壳。
+            const isFlat = !bk.name
+            const bkPicked2 = sel.has(bKey)
+            const bkHdr = h('div', {
+              key: 'bk-' + bKey,
+              draggable: !isFlat,
+              onDragStart: isFlat ? undefined : ((e) => {
+                setDrag(bKey)
+                try { e.dataTransfer.setData('text/plain', bKey) } catch { /* 降级：靠 drag 状态 */ }
+                e.dataTransfer.effectAllowed = 'move'
+              }),
+              onDragEnd: isFlat ? undefined : (() => { setDrag(null); setDropOn(null) }),
+              style: { ...rowStyle(2, bkPicked2), cursor: isFlat ? 'default' : 'grab' },
+            },
+              h('span', {
+                style: P.treeCheck,
+                title: T('selHintBook', '选中整本书'),
+                onClick: (e) => { e.stopPropagation(); pick(bKey) },
+              }, bkPicked2 ? '☑' : '☐'),
+              h('span', {
+                style: { ...P.treeChev, cursor: 'pointer' },
+                onClick: toggle(setOpenBook, openBook, bKey),
+              }, chev(bkOpen)),
+              h('span', {
+                style: { ...P.treeName, cursor: 'pointer' }, title: bk.name,
+                onClick: toggle(setOpenBook, openBook, bKey),
+              }, bk.name),
+              h('span', { style: P.treeCount }, bk.count + T('unitLectures', ' 条')))
+
+            // 「讲」这一层：一本书拆成多讲，每讲的划线分散成多条笔记。
+            // 每讲单独一行（带勾框），这是最小粒度，也是唯一能精确选到单篇的粒度。
+            const lectureRows = (bk.lectures || []).map((lc) => {
+              const lk = bKey + '\u0000' + lc.name
+              const picked = sel.has(lk)
+              return h('div', {
+                key: 'lc-' + lk,
+                style: { ...rowStyle(isFlat ? 2 : 3, picked), cursor: 'pointer' },
+                onClick: () => pick(lk),
+                title: lc.name,
+              },
+                h('span', { style: P.treeCheck }, picked ? '☑' : '☐'),
+                h('span', { style: P.treeName }, lc.name || '(无标题)'),
+                h('span', { style: P.treeCount }, String(lc.count) + T('unitNotes', ' 条')))
+            })
+
+            // 展平：不画书行，讲直接接在目录下
+            if (isFlat) return lectureRows
+            if (!bkOpen) return bkHdr
+            return [bkHdr, ...lectureRows]
+          })
+          return [coHdr, ...bookNodes]
+        })
+        return [kbHdr, ...courseNodes]
+      })
+
+      const sectionLabel = (text, hint) => h('div', { style: P.groupLabel },
+        h('span', null, text),
+        hint ? h('span', { style: P.groupHint }, hint) : null)
+
+      const kbNodes = [].concat(
+        sectionLabel(T('secOwnKb', '我的知识库'),
+          T('secOwnKbHint', '{n} 个').replace('{n}', ownKb.length)),
+        ownKb.length
+          ? renderKbGroup(ownKb, { canDrop: true })
+          : [h('p', { key: 'noown', style: { ...P.muted, paddingLeft: 26 } },
+              T('secOwnKbEmpty', '还没有自建知识库。'))],
+
+        untopicedNode
+          ? [sectionLabel(T('secUntopiced', '待归类'),
+              T('secUntopicedHint', '{n} 条没归库').replace('{n}', untopicedNode.count)),
+            h('div', {
+              key: 'untoped-entry',
+              style: { ...rowStyle(0, sel.has('#untopiced')), cursor: 'pointer' },
+              onClick: () => {
+                const next = new Set(sel)
+                if (next.has('#untopiced')) next.delete('#untopiced')
+                else next.add('#untopiced')
+                act.setSel(next)
+              },
+            },
+              h('span', { style: P.treeCheck }, sel.has('#untopiced') ? '☑' : '☐'),
+              h('span', { style: P.treeName }, T('untopicedName', '未归知识库')),
+              h('span', { style: P.treeCount }, String(untopicedNode.count)))]
+          : [],
+
+        [sectionLabel(T('secShelf', '电子书书架'),
+          T('secShelfHint', '{n} 个 · 得到自动生成').replace('{n}', shelves.length)),
+          h('div', {
+            key: 'shelf-toggle',
+            style: { ...rowStyle(0, false), cursor: 'pointer' },
+            onClick: () => setShowShelf(!showShelf),
+          },
+            h('span', { style: P.treeChev }, chev(showShelf)),
+            h('span', { style: P.treeName },
+              showShelf
+                ? T('shelfHide', '收起书架（买过的书）')
+                : T('shelfShow', '展开书架（买过的书，共 {n} 个）').replace('{n}', shelves.length)))],
+        showShelf ? renderKbGroup(shelves, { tag: 'shelf', badge: T('badgeShelf', '书') }) : [],
+
+        unknownKb.length
+          ? [sectionLabel(T('secUnknown', '未区分'),
+              T('secUnknownHint', '未拉取 scope 缓存，分不出是库还是书架')),
+            h('p', { key: 'unkhint', style: { ...P.muted, paddingLeft: 26 } },
+              T('secUnknownAction', '跑一次 gn.py kb-scopes（或点上面的刷新）就能分清楚。'))]
+          : [],
+        showUnknown && unknownKb.length ? renderKbGroup(unknownKb, { tag: 'unk' }) : []
+      )
+
+      const totalSel = sel.size
       return h('div', null,
-        h('p', { style: { ...P.muted, marginBottom: 12 } },
-          T('suggestIntro', '以下是从本地镜像算出来的建议，按影响面排序。这一步只看不改，确认后才会动线上。')),
-        items.map((x, i) => h('section', { key: x.key, style: { ...P.card, marginTop: i ? 10 : 0 } },
-          h('div', { style: P.sgHead },
-            h('span', { style: P.badge }, x.kind),
-            x.count !== null ? h('span', { style: P.badgeNum }, String(x.count)) : null),
-          h('h3', { style: P.sgTitle }, x.title),
-          h('p', { style: P.muted }, x.detail))))
+        h('p', { style: { ...P.muted, marginBottom: 10 } },
+          T('invIntro', '层级分三类，语义不同：我的知识库（我自己建的）、待归类（还没归库的笔记）、电子书书架（得到买书自动生成，不是我的分类）。\n官方 API 里知识库是平的，目录/书/讲 只存在于本地重建。')),
+        h('div', { style: P.treeBox }, kbNodes),
+        h('p', { style: P.dirLine },
+          T('invStat', '共 {t} 条笔记，未归知识库 {u} 条，无来源 {s} 条。')
+            .replace('{t}', d.total).replace('{u}', d.untopiced).replace('{s}', d.no_source)),
+        totalSel
+          ? h('div', { style: P.selBar },
+              h('span', null, T('selCount', '已选 {n} 项').replace('{n}', totalSel)),
+              h('button', { style: P.btn, onClick: () => act.setSel(new Set()) },
+                T('selClear', '清空')),
+
+              // 目标选择器：归到哪个知识库 / 加哪个标签
+              h('span', { style: { marginLeft: 'auto', fontSize: 11.5 } }, T('targetLabel', '归到：')),
+              h('select', {
+                style: P.input,
+                value: act.targetKind,
+                onChange: (e) => act.setTargetKind(e.target.value),
+              },
+                h('option', { value: 'kb' }, T('targetKbOpt', '知识库')),
+                h('option', { value: 'tag' }, T('targetTagOpt', '标签'))),
+              act.targetKind === 'kb'
+                ? h('input', {
+                    style: { ...P.input, width: 130 },
+                    placeholder: T('topicIdPh', 'topic_id（11 位）'),
+                    value: act.topicId,
+                    onChange: (e) => act.setTopicId(e.target.value),
+                  })
+                : h('input', {
+                    style: { ...P.input, width: 130 },
+                    placeholder: T('tagPh', '新标签名'),
+                    value: act.tagName,
+                    onChange: (e) => act.setTagName(e.target.value),
+                  }),
+              h('button', { style: { ...P.btn, ...P.primary }, onClick: act.onPlanMenu },
+                T('selToPlan', '生成计划 →')))
+          : h('p', { style: P.muted }, T('selHint', '点开层级、勾选「讲」，就能把它整批归到别的知识库或加标签。')))
     }
 
-    /** 「确认执行」页。 */
-    function renderApply(T, h, P) {
+    /** 「确认执行」页：列出计划、干跑、双重闸门。 */
+    function renderApply(T, h, P, plan, apply) {
+      if (plan.phase === 'building') {
+        return h('section', { style: P.card },
+          h('h2', { style: P.cardTitle }, T('applyTitle', '确认与执行')),
+          h('p', { style: P.muted }, T('applyBuilding', '正在把选中的层级解析成具体笔记，并生成计划（不联网）…')))
+      }
+      if (plan.phase === 'error') {
+        return h('section', { style: P.card },
+          h('h2', { style: P.cardTitle }, T('applyTitle', '确认与执行')),
+          h('p', { style: { ...P.muted, color: 'var(--dsw-alias-state-error-primary)' } },
+            T('applyFail', '生成计划失败：') + plan.error))
+      }
+      const p = plan.data
+      if (!p) {
+        // 没有待执行计划时，也必须能看到撤销区：
+        // 用户可能刚写完（计划已被消费），或想去回退上次的操作。
+        // 早期版本这里直接 return，导致“撤销”永远不出现——与“可回退”的目标相违。
+        return h('div', null,
+          h('section', { style: P.card },
+            h('h2', { style: P.cardTitle }, T('applyTitle', '确认与执行')),
+            h('p', { style: P.muted }, T('applyEmpty',
+              '还没有待执行的计划。先去「分类调整」勾选要动的笔记，生成计划。')),
+            h('p', { style: { ...P.muted, fontSize: 11.5 } }, T('applyEmptyUndoHint',
+              '若刚才已经写过，可直接在下面回退。'))),
+          apply.undo ? renderUndo(T, h, P, apply.undo, apply) : null)
+      }
+      const actions = p.actions || []
+      // 计划可能很长（一整个目录就是一条 kb_batch_add，但标签是逐条），
+      // 只展示前 50 条，剩下的给数量。
+      const shown = actions.slice(0, 50)
+      const out = plan.result
+
       return h('section', { style: P.card },
         h('h2', { style: P.cardTitle }, T('applyTitle', '确认与执行')),
-        h('p', { style: P.muted }, T('applyTitleEmpty', '这里会在执行前列出将要发生的每一步改动，需显式确认。')),
-        h('p', { style: P.muted }, T('applyGuard', '护栏：每步都有 dry-run 预览；删除类操作默认禁止；执行后写日志可回溯。')))
+        h('p', { style: P.muted },
+          T('applySummary', '共 {n} 个动作。这一步只预览，不连网；点下面的按钮才真正写线上。')
+            .replace('{n}', actions.length)),
+        h('table', { style: P.planTable },
+          h('thead', null, h('tr', null,
+            h('th', { style: P.planTh }, '#'),
+            h('th', { style: P.planTh }, T('colOp', '动作')),
+            h('th', { style: P.planTh }, T('colTarget', '目标')),
+            h('th', { style: P.planTh }, T('colCount', '条数')))),
+          h('tbody', null, ...shown.map((s, i) => h('tr', { key: i },
+            h('td', { style: P.planTd }, String(i + 1)),
+            h('td', { style: P.planTd }, String(s.op || '')),
+            h('td', { style: P.planTd },
+              s.op === 'kb_batch_add'
+                ? T('targetKb', '知识库 ') + String((s.args && s.args.topic_id) || '')
+                : String((s.args && (s.args.note_id || (s.args.tags || []).join(','))) || '')),
+            h('td', { style: P.planTd },
+              s.op === 'kb_batch_add' ? String(((s.args && s.args.note_ids) || []).length) : '1'))))),
+        actions.length > shown.length
+          ? h('p', { style: { ...P.muted, marginTop: 6 } },
+              T('moreRows', '…还有 {n} 个动作未展开').replace('{n}', actions.length - shown.length))
+          : null,
+        h('p', { style: P.dirLine }, T('planFile', '计划文件：') + (plan.planPath || '（未写入磁盘）')),
+
+        // —— 执行区：先干跑，再真写 ——
+        h('div', { style: P.selBar },
+          h('span', null, T('applyGuard', '先干跑预览，确认后才发写请求。')),
+          h('button', {
+            style: { ...P.btn, ...P.primary },
+            disabled: apply.busy,
+            onClick: () => apply.run(true, plan.planPath),
+          }, apply.busy ? T('applyRunning', '执行中…') : T('applyDryRun', '先干跑（不发写请求）')),
+          h('button', {
+            style: { ...P.btn, ...(apply.armed ? P.danger : null) },
+            disabled: apply.busy,
+            onClick: () => (apply.armed ? apply.run(false, plan.planPath) : apply.setArmed(true)),
+          }, apply.armed
+            ? T('applyRealNow', '确认写入线上（不可撤销）')
+            : T('applyRealArm', '我要真写 → 需再点一次'))),
+
+        // —— 撤销区 ——
+        // 为何放在这一页而不是做成全局「撤销上一步」：
+        // 这个面板容易被误触，而「上一步」是隐式的——用户以为是刚才那次，
+        // 实际可能是别处改的。所以显式列出「哪一批、多少条、什么状态」，让他选。
+        apply.undo ? renderUndo(T, h, P, apply.undo, apply) : null,
+
+        out
+          ? h('pre', { style: P.logPre }, out.error
+              ? (T('applyErr', '失败：') + out.error + '\n' + (out.output || ''))
+              : (out.output || ''))
+          : null)
+    }
+    /**
+     * 撤销区：列出可回退的批次，双点确认才执行。
+     *
+     * 为何不是一颗“撤销”按钮：
+     *   · 面板会误触，而“上一步”是隐式的（可能是别处改的）；
+     *   · 一次可能改过好几批，必须让用户挑是哪一批；
+     *   · 撤销干跑和真写分开，避免“点一下就把几百条退回”。
+     */
+    function renderUndo(T, h, P, undo, apply) {
+      // undos 的形状是 { phase, list, error }，不是 { data: { list } }。
+      // 早期写成 undo.data.list，导致即使有批次也永远显示“没有可撤销”——
+      // 界面看着正常、功能完全失效，典型静默错误。
+      const list = undo.list || []
+      const open = list.filter((x) => x.status === 'open')
+      // 已撤销的批次也要露出（只读展示），否则用户会以为记录丢了；
+      // 但不能给按钮——已撤销的再点只会报错，是噪声。
+      const done = list.filter((x) => x.status !== 'open')
+
+      const head = h('div', { style: { ...P.sgHead, marginTop: 16 } },
+        h('h2', { style: { ...P.cardTitle, marginBottom: 0 } }, T('undoTitle', '撤销')),
+        h('span', { style: { ...P.muted, fontSize: 11 } },
+          T('undoSub', '只还原知识库/标签归属，不删笔记')))
+
+      if (undo.phase === 'loading') {
+        return h('section', { style: { ...P.card, marginTop: 12 } }, head,
+          h('p', { style: P.muted }, T('undoLoading', '正在读撤销记录…')))
+      }
+      if (undo.phase === 'error') {
+        return h('section', { style: { ...P.card, marginTop: 12 } }, head,
+          h('p', { style: { ...P.muted, color: 'var(--dsw-alias-state-error-primary)' } },
+            T('undoFail', '读撤销记录失败：') + (undo.error || '')))
+      }
+      // 把「已撤销」列表做成一个可复用片段：
+      // 没 open 批次时也要显示（否则用户以为记录全消失了）。
+      const doneBlock = done.length
+        ? h('div', { style: { marginTop: 8 } },
+            h('div', { style: { ...P.muted, fontSize: 11 } },
+              T('undoDoneList', '已撤销的批次：')),
+            done.slice(0, 6).map((u) => h('div', {
+              key: 'd-' + u.file,
+              style: { fontSize: 11, opacity: 0.6, padding: '2px 0' },
+            }, '· ' + (u.createdAt || '').replace('T', ' ').slice(0, 19)
+              + '　' + T('undoNotes', '{n} 条').replace('{n}', u.noteCount)
+              + '　' + T('undoStatusUndone', '已撤销'))))
+        : null
+
+      if (!open.length) {
+        return h('section', { style: { ...P.card, marginTop: 12 } }, head,
+          h('p', { style: P.muted }, T('undoNone',
+            '没有可撤销的批次。每次真写前会自动拍一份归属快照，撤销就靠它。')),
+          doneBlock)
+      }
+
+      return h('section', { style: { ...P.card, marginTop: 12 } }, head,
+        h('p', { style: { ...P.muted, fontSize: 11.5 } }, T('undoHint',
+          '下到将要执行的第一步是干跑，不会发包。确认清单对再点真撤销。')),
+        open.slice(0, 12).map((u) => h('div', {
+          key: u.file,
+          style: { display: 'flex', alignItems: 'center', gap: 8, padding: '5px 2px',
+            borderBottom: '1px solid var(--dsw-alias-border-l2)' },
+        },
+          h('span', { style: { ...P.muted, fontSize: 11.5, flex: '0 0 auto' } },
+            (u.createdAt || '').replace('T', ' ').slice(0, 19)),
+          h('span', { style: { ...P.chip, flex: '0 0 auto' } },
+            T('undoNotes', '{n} 条').replace('{n}', u.noteCount)),
+          h('span', { style: { flex: 1, fontSize: 11, opacity: 0.7,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, u.file),
+          h('button', {
+            style: P.btn,
+            disabled: apply.undoBusy,
+            onClick: () => apply.onUndo(u.path, true),
+          }, T('undoDry', '干跑')),
+          h('button', {
+            style: { ...P.btn, ...P.danger },
+            disabled: apply.undoBusy,
+            onClick: () => {
+              // 双点确认：第一下只要求确认，第二下才真执行（和真写一致）
+              if (!apply.undoArmed || apply.undoArmed !== u.file) {
+                apply.setUndoArmed(u.file)
+              } else {
+                apply.setUndoArmed(null)
+                apply.onUndo(u.path, false)
+              }
+            },
+          }, apply.undoArmed === u.file
+            ? T('undoRealNow', '确认撤销')
+            : T('undoRealArm', '我要撤销 → 再点一次')))),
+        apply.undoBusy
+          ? h('p', { style: P.muted }, T('undoRunning', '正在撤销…'))
+          : null,
+        apply.undoResult
+          ? h('pre', { style: { ...P.logPre, marginTop: 8 } },
+              apply.undoResult.ok
+                ? (apply.undoResult.output || T('undoDone', '完成'))
+                : (T('undoErr', '失败：') + (apply.undoResult.error || '')))
+          : null,
+        doneBlock)
+    }
+
+    /**
+     * 「AI 动作」页：发芽 / 审问 / 连线。
+     * 「AI 动作」页：发芽 / 审问 / 连线。
+     *
+     * 设计要点（为何长这样）：
+     *  · 平台只开了 GET /resource/note/sprout，**没有生成接口**（POST 404），
+     *    所以这里不是「一键生成」，而是：取素材 → 拼提示词 → 交给会话里的 AI。
+     *  · 每个按钮绑一份**可编辑的提示词**。点之前能看见它会怎么问 AI，
+     *    否则用户无法预期结果，也不会信任它。
+     *  · 结果只展示，不写回笔记。改正文不可撤销（见 docs/UNDO-DESIGN.md §7）。
+     */
+    function renderAI(T, h, P, ai, ctl) {
+      const head = h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 } },
+        h('h2', { style: { ...P.cardTitle, margin: 0 } }, T('aiTitle', 'AI 动作')),
+        h('span', { style: { ...P.muted, fontSize: 11.5 } },
+          T('aiSub', '发芽 / 审问 / 连线：取素材 + 可改的提示词，结果不自动写回')))
+
+      const noteId = ctl.noteId || ''
+      const input = h('section', { style: { ...P.card, marginBottom: 12 } },
+        h('p', { style: P.muted }, T('aiHow',
+          '填一条笔记的 id（在「分类调整」里展开到「讲」能看到），先生成素材包，再点按钮。')),
+        h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+          h('input', {
+            style: { ...P.input, width: 220 },
+            placeholder: T('aiNoteIdPh', '笔记 id（数字）'),
+            value: noteId,
+            onChange: (e) => ctl.setNoteId(e.target.value.trim()),
+          }),
+          h('button', {
+            style: { ...P.btn, ...P.primary },
+            disabled: !/^\d{6,}$/.test(noteId) || ctl.packBusy,
+            onClick: () => ctl.loadPack(),
+          }, ctl.packBusy ? T('aiPacking', '正在取素材…') : T('aiLoadPack', '取素材包')),
+          h('button', {
+            style: P.btn,
+            disabled: !/^\d{6,}$/.test(noteId) || ctl.sproutBusy,
+            onClick: () => ctl.checkSprout(),
+          }, T('aiCheckSprout', '查平台发芽'))),
+        ai.sprout && ai.sprout.checked
+          ? h('p', { style: P.dirLine },
+              ai.sprout.hasSprout
+                ? T('aiSproutHas', '平台侧已有发芽内容，已取回。')
+                : T('aiSproutNone', '平台侧还没有发芽。要生成，用下面的按钮由 AI 做；或在得到 App 里点发芽。'))
+          : null)
+
+      if (ai.pack && ai.pack.pack) {
+        const pk = ai.pack.pack
+        // 素材包摘要：让用户确认「AI 看到了什么」，而不是黑箱
+        const packView = h('section', { style: { ...P.card, marginBottom: 12 } },
+          h('h2', { style: P.cardTitle }, T('aiPackTitle', '素材包（AI 会看到这些）')),
+          h('div', { style: P.chipWrap },
+            h('span', { style: P.chip }, T('aiPackCenter', '中心：') + (pk.center.title || '').slice(0, 24)),
+            h('span', { style: P.chip }, T('aiPackSiblings', '同系列：') + pk.stats.siblings),
+            h('span', { style: P.chip }, T('aiPackRelated', '跨系列相关：') + pk.stats.related),
+            (pk.keywords || []).map((k) => h('span', { key: 'kw' + k, style: P.chip }, k))),
+          pk.siblings.length
+            ? h('div', { style: { marginTop: 8 } },
+                h('div', { style: { ...P.muted, fontSize: 11 } }, T('aiSibTitle', '同系列的讲：')),
+                pk.siblings.map((s) => h('div', { key: s.note_id, style: { ...P.dirLine, marginTop: 2 } },
+                  '· ' + (s.title || '').slice(0, 60))))
+            : null,
+          pk.related.length
+            ? h('div', { style: { marginTop: 8 } },
+                h('div', { style: { ...P.muted, fontSize: 11 } }, T('aiRelTitle', '跨系列相关（命中词）：')),
+                pk.related.map((r) => h('div', { key: r.note_id, style: { ...P.dirLine, marginTop: 2 } },
+                  '· [' + (r.course || '').slice(0, 12) + '] ' + (r.title || '').slice(0, 40)
+                  + ' — ' + (r.matched || []).join('/'))))
+            : null)
+
+        const acts = (ai.data && ai.data.actions) || []
+        const prompts = (ai.data && ai.data.prompts) || {}
+        const btnRow = h('section', { style: { ...P.card, marginBottom: 12 } },
+          h('h2', { style: P.cardTitle }, T('aiActsTitle', '动作（每个按钮绑一份提示词）')),
+          h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
+            acts.map((a) => h('button', {
+              key: a.id,
+              style: { ...P.btn, ...(a.id === ctl.activeAction ? P.primary : null) },
+              onClick: () => ctl.setActiveAction(a.id),
+              title: a.hint || '',
+            }, a.label || a.id))),
+          ctl.activeAction && prompts[((acts.find((x) => x.id === ctl.activeAction) || {}).prompt)]
+            ? h('div', { style: { marginTop: 10 } },
+                h('div', { style: { ...P.muted, fontSize: 11, marginBottom: 4 } },
+                  T('aiPromptLabel', '它会这样问 AI（可在 dataDir/prompts 里改）：')),
+                h('pre', { style: { ...P.logPre, maxHeight: 200 } },
+                  prompts[(acts.find((x) => x.id === ctl.activeAction) || {}).prompt] || ''))
+            : null,
+          ctl.activeAction
+            ? h('div', { style: { marginTop: 10, display: 'flex', gap: 8 } },
+                h('button', {
+                  style: { ...P.btn, ...P.primary },
+                  onClick: () => ctl.buildPayload(),
+                }, T('aiBuild', '拼好发给 AI 的内容')),
+                h('span', { style: { ...P.muted, fontSize: 11, alignSelf: 'center' } },
+                  T('aiBuildHint', '复制后粘到会话里，或直接说「用这个跑一次」')))
+            : null)
+
+        return h('div', null, head, input, ai.sprout && ai.sprout.checked ? null : null, packView, btnRow,
+          ctl.payload
+            ? h('section', { style: P.card },
+                h('h2', { style: P.cardTitle }, T('aiPayloadTitle', '要发给 AI 的内容')),
+                h('button', { style: { ...P.btn, marginBottom: 8 }, onClick: () => ctl.copyPayload() },
+                  T('aiCopy', '复制')),
+                h('pre', { style: P.logPre }, ctl.payload))
+            : null)
+      }
+
+      if (ai.packBusy) {
+        return h('div', null, head, input,
+          h('section', { style: P.card }, h('p', { style: P.muted }, T('aiPacking2', '正在扫本地镜像找相关上下文…'))))
+      }
+      if (ai.packError) {
+        return h('div', null, head, input,
+          h('section', { style: P.card },
+            h('p', { style: { ...P.muted, color: 'var(--dsw-alias-state-error-primary)' } },
+              T('aiPackFail', '取出失败：') + ai.packError)))
+      }
+      return h('div', null, head, input,
+        h('section', { style: P.card },
+          h('p', { style: P.muted }, T('aiIdle', '先填一个笔记 id 并点「取素材包」。只有素材包存在时，按钮才会出现。'))))
+    }
+
+    /**
+     * 「自动归类」页。
+     *
+     * 这一页存在的理由：2055 条没归库的笔记，靠「分类调整」里手勾「讲」需要
+     * 几百次点击，实际上不可能完成。自动化能做的事必须先被看见、再被确认。
+     * 所以这里是三步而非一键：生成计划（只算）→ 看清单（人看）→ 干跑/真写（闸门）。
+     */
+    function renderAuto(T, h, P, ap, ctl) {
+      const head = h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 } },
+        h('h2', { style: { ...P.cardTitle, margin: 0 } }, T('autoTitle', '自动归类')),
+        h('span', { style: { ...P.muted, fontSize: 11.5 } },
+          T('autoSub', '按作者 / 训练营 / 大课程成批归库，只生成计划')))
+
+      const explain = h('section', { style: { ...P.card, marginBottom: 12 } },
+        h('p', { style: P.muted }, T('autoWhy',
+          '规则一共四条，每条都能解释：① 作者系列（如「万维钢·精英日课6」→ 万维钢）；② 训练营；③ 单目录 ≥ 30 条；④ 其余不动。')),
+        h('p', { style: P.muted }, T('autoWhy2',
+          '为什么不全自动：零碎目录平均只有 1.7 条笔记，强行归一起只会造出新的垃圾库。')),
+        h('div', { style: { marginTop: 10 } },
+          h('button', {
+            style: { ...P.btn, ...P.primary },
+            disabled: ap.phase === 'building',
+            onClick: () => ctl.onAutoPlan(),
+          }, ap.phase === 'building'
+            ? T('autoBuilding', '正在生成计划…')
+            : T('autoBuild', '生成归类计划（只算，不写）'))),
+        ctl.inv && ctl.inv.data
+          ? h('p', { style: P.dirLine },
+              T('autoScope', '当前可归类：{n} 条未归库。')
+                .replace('{n}', ctl.inv.data.untopiced))
+          : null)
+
+      if (ap.phase === 'idle') {
+        return h('div', null, head, explain,
+          h('section', { style: P.card },
+            h('p', { style: P.muted }, T('autoIdle', '点上面的按钮生成计划。生成只是算一遍本地镜像，不联网、不改线上。'))))
+      }
+      if (ap.phase === 'building') {
+        return h('div', null, head, explain,
+          h('section', { style: P.card },
+            h('p', { style: P.muted }, T('autoLoading', '正在扫 4000+ 个文件头并按规则分组…'))))
+      }
+      if (ap.phase === 'error') {
+        return h('div', null, head, explain,
+          h('section', { style: P.card },
+            h('p', { style: { ...P.muted, color: 'var(--dsw-alias-state-error-primary)' } },
+              T('autoFail', '生成失败：') + ap.error)))
+      }
+
+      const d = ap.data || {}
+      const groups = d.groups || []
+      const sum = d.summary || {}
+      const max = groups.length ? groups[0].count : 1
+
+      return h('div', null, head, explain,
+        h('div', { style: P.statRow },
+          h(Stat, { label: T('autoStatGroups', '拟建知识库'), value: groups.length,
+            hint: T('autoStatGroupsHint', '成规模的组') }),
+          h(Stat, { label: T('autoStatMove', '将归位'), value: sum.notes_to_move || 0,
+            hint: T('autoStatMoveHint', '条笔记') }),
+          h(Stat, { label: T('autoStatKeep', '不动'), value: sum.notes_untouched || 0,
+            hint: T('autoStatKeepHint', '零碎目录，保留原样') }),
+          h(Stat, { label: T('autoStatActions', '动作数'), value: sum.actions || 0,
+            hint: T('autoStatActionsHint', '干跑后再真写') })),
+
+        h('section', { style: { ...P.card, marginTop: 14 } },
+          h('h2', { style: P.cardTitle }, T('autoGroupsTitle', '会建成这些知识库')),
+          groups.map((g, i) => h('div', { key: 'g' + i, style: { marginBottom: 9 } },
+            h(RankRow, { name: g.name, count: g.count, max }),
+            h('div', { style: { ...P.muted, fontSize: 11, paddingLeft: 2 } },
+              Object.entries(g.courses || {}).slice(0, 4)
+                .map(([k, v]) => k + ' ' + v).join('　·　'))))),
+
+        Object.keys(d.skipped_sample || {}).length
+          ? h('section', { style: { ...P.card, marginTop: 14 } },
+              h('h2', { style: P.cardTitle }, T('autoSkipTitle', '不动的（保持原样）')),
+              h('p', { style: P.muted }, T('autoSkipWhy',
+                '这些目录太小（平均 1.7 条），单独建库只会得到一堆空库。想看完整清单点下面的干跑。')),
+              h('div', { style: P.chipWrap },
+                Object.entries(d.skipped_sample || {}).slice(0, 12).map(([k, v]) =>
+                  h('span', { key: k, style: P.chip }, k + ' ' + v))))
+          : null,
+
+        h('section', { style: { ...P.card, marginTop: 14 } },
+          h('h2', { style: P.cardTitle }, T('autoNextTitle', '下一步')),
+          h('p', { style: P.muted }, T('autoNext',
+            '先干跑：不发任何请求，只把每批 20 条的完整清单打出来。确认无误再回「确认执行」页真写。')),
+          h('p', { style: P.dirLine }, d.planPath || ''),
+          h('div', { style: { display: 'flex', gap: 8, marginTop: 10 } },
+            h('button', {
+              style: { ...P.btn, ...P.primary },
+              disabled: ctl.busy,
+              onClick: () => ctl.run(true, d.planPath),
+            }, ctl.busy ? T('autoRunning', '执行中…') : T('autoDry', '先干跑（不发包）')))))
     }
 
     /** 「执行日志」页。 */
-    function renderLog(T, h, P) {
-      return h('section', { style: P.card },
-        h('h2', { style: P.cardTitle }, T('logTitle', '执行日志')),
-        h('p', { style: P.muted }, T('logTitleEmpty', '这里会显示每次操作的请求、结果与可回溯的审计记录。')))
+    function renderLog(T, h, P, log, reload) {
+      const head = h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 } },
+        h('h2', { style: { ...P.cardTitle, margin: 0 } }, T('logTitle', '执行日志')),
+        log.file
+          ? h('span', { style: { ...P.muted, fontSize: 11 } },
+              log.file + (log.total != null ? ` · ${log.total} 条` : ''))
+          : null,
+        reload
+          ? h('button', { style: { ...P.btn, marginLeft: 'auto' }, onClick: reload },
+              T('logReload', '刷新'))
+          : null)
+
+      if (log.phase === 'loading') {
+        return h('section', { style: P.card }, head,
+          h('p', { style: P.muted }, T('logLoading', '正在读日志…')))
+      }
+      if (log.phase === 'error') {
+        return h('section', { style: P.card }, head,
+          h('p', { style: { ...P.muted, color: 'var(--dsw-alias-state-error-primary)' } },
+            T('logFail', '读日志失败：') + log.error))
+      }
+      const lines = log.lines || []
+      if (!lines.length) {
+        return h('section', { style: P.card }, head,
+          h('p', { style: P.muted },
+            T('logEmpty', '还没有执行记录。所有写操作都会落到 <数据目录>/logs/ 下的审计文件。')))
+      }
+      return h('section', { style: P.card }, head,
+        h('pre', { style: P.logPre }, lines.join('\n')))
     }
 
     /** 工作台自己的样式（与设置面板的 S 分开，避免互相干扰）。 */
     function panelStyles() {
-      const bd = '1px solid var(--dsh-border, rgba(255,255,255,.12))'
-      const txt2 = 'var(--dsh-text-secondary, #9a9a9a)'
+      const bd = '1px solid var(--dsw-alias-border-l2)'
+      const txt2 = 'var(--dsw-alias-label-secondary)'
       return {
         root: {
           display: 'flex', flexDirection: 'column', height: '100%',
           minHeight: 0, padding: '18px 20px 0', boxSizing: 'border-box',
-          color: 'var(--dsh-text-primary, #e8e8e8)',
+          color: 'var(--dsw-alias-label-primary)',
         },
         header: { display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 14 },
         title: { margin: 0, fontSize: 17, fontWeight: 600, lineHeight: 1.3 },
         subtitle: { margin: '4px 0 0', fontSize: 12, lineHeight: 1.5, color: txt2 },
         pill: {
           flexShrink: 0, fontSize: 11, padding: '3px 9px', borderRadius: 999,
-          background: 'var(--dsh-bg-secondary, rgba(255,255,255,.06))',
+          background: 'var(--dsw-alias-bg-layer-2)',
           color: txt2, border: bd,
         },
         tabs: { display: 'flex', gap: 4, borderBottom: bd },
@@ -596,26 +1896,46 @@ window.__ModuleLoader__.load({
           borderBottom: '2px solid transparent', marginBottom: -1,
         },
         tabActive: {
-          color: 'var(--dsh-text-primary, #e8e8e8)',
-          borderBottom: '2px solid var(--dsh-accent, #4a9eff)', fontWeight: 600,
+          color: 'var(--dsw-alias-label-primary)',
+          borderBottom: '2px solid var(--dsw-alias-brand-primary)', fontWeight: 600,
         },
         body: { flex: 1, minHeight: 0, overflow: 'auto', paddingTop: 14, paddingBottom: 20 },
         card: {
           border: bd, borderRadius: 10, padding: 16,
-          background: 'var(--dsh-bg-secondary, rgba(255,255,255,.03))',
+          background: 'var(--dsw-alias-bg-layer-2)',
         },
         cardTitle: { margin: '0 0 8px', fontSize: 14, fontWeight: 600 },
+        // —— 按钮 / 表单控件 ——
+        btn: {
+          font: 'inherit', fontSize: 12, cursor: 'pointer',
+          padding: '5px 12px', borderRadius: 6,
+          border: bd, background: 'var(--dsw-alias-button-elevated-fill)',
+          color: 'inherit', whiteSpace: 'nowrap',
+        },
+        primary: {
+          background: 'var(--dsw-alias-brand-primary)',
+          color: 'var(--dsw-alias-label-primary-foreground)', border: 'none',
+        },
+        danger: {
+          background: 'var(--dsw-alias-state-error-primary)',
+          color: 'var(--dsw-alias-label-primary-foreground)', border: 'none',
+        },
+        input: {
+          font: 'inherit', fontSize: 12, padding: '4px 8px',
+          borderRadius: 6, border: bd, background: 'transparent',
+          color: 'inherit', outline: 'none',
+        },
         muted: { margin: 0, fontSize: 12.5, lineHeight: 1.6, color: txt2 },
 
         // ── 数据页样式 ─────────────────────────────────────
         statRow: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 10 },
         stat: {
           border: bd, borderRadius: 10, padding: '12px 14px',
-          background: 'var(--dsh-bg-secondary, rgba(255,255,255,.03))',
+          background: 'var(--dsw-alias-bg-layer-2)',
         },
         statTone: {
-          warn: { borderColor: 'var(--dsw-alias-status-warning, #d19a66)' },
-          ok: { borderColor: 'var(--dsw-alias-status-success, #98c379)' },
+          warn: { borderColor: 'var(--dsw-alias-state-warn-primary)' },
+          ok: { borderColor: 'var(--dsw-alias-state-success-primary)' },
         },
         statValue: { fontSize: 22, fontWeight: 600, lineHeight: 1.2, fontVariantNumeric: 'tabular-nums' },
         statLabel: { marginTop: 2, fontSize: 11.5, color: txt2 },
@@ -628,11 +1948,11 @@ window.__ModuleLoader__.load({
         },
         rankBarWrap: {
           flex: 1, height: 6, borderRadius: 3, overflow: 'hidden',
-          background: 'var(--dsh-bg-tertiary, rgba(255,255,255,.08))',
+          background: 'var(--dsw-alias-interactive-bg-hover)',
         },
         rankBar: {
           height: '100%', borderRadius: 3,
-          background: 'var(--dsh-accent, #4a9eff)',
+          background: 'var(--dsw-alias-brand-primary)',
         },
         rankCount: {
           flex: '0 0 auto', fontSize: 11.5, color: txt2,
@@ -642,7 +1962,7 @@ window.__ModuleLoader__.load({
         chipWrap: { display: 'flex', flexWrap: 'wrap', gap: 6 },
         chip: {
           fontSize: 11, padding: '3px 8px', borderRadius: 6,
-          background: 'var(--dsh-bg-tertiary, rgba(255,255,255,.07))',
+          background: 'var(--dsw-alias-interactive-bg-hover)',
           color: txt2, border: bd, fontVariantNumeric: 'tabular-nums',
         },
 
@@ -651,7 +1971,7 @@ window.__ModuleLoader__.load({
         sgHead: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 },
         badge: {
           fontSize: 10.5, padding: '2px 7px', borderRadius: 5,
-          background: 'var(--dsh-bg-tertiary, rgba(255,255,255,.08))',
+          background: 'var(--dsw-alias-interactive-bg-hover)',
           color: txt2, border: bd,
         },
         badgeNum: {
@@ -659,6 +1979,61 @@ window.__ModuleLoader__.load({
           fontVariantNumeric: 'tabular-nums',
         },
         sgTitle: { margin: '0 0 4px', fontSize: 13, fontWeight: 600, lineHeight: 1.45 },
+
+        // —— 层级树（分类调整页）——
+        // 行高 26px 是权衡结果：太小点不准，太大一屏只能看十几行，
+        // 而这个面板要能一屏扫完一个目录。
+        treeBox: {
+          border: bd, borderRadius: 8, overflow: 'auto',
+          maxHeight: 'calc(100vh - 300px)', minHeight: 200,
+          background: 'var(--dsw-alias-bg-layer-1)',
+        },
+        // 分组标题：把「我的知识库 / 待归类 / 电子书书架」三种语义隔开，
+        // 否则 122 个顶层节点平铺在一起，看不出哪些是自己建的。
+        groupLabel: {
+          display: 'flex', alignItems: 'baseline', gap: 8,
+          padding: '10px 8px 3px', fontSize: 11, fontWeight: 600,
+          color: txt2, letterSpacing: '0.02em',
+        },
+        groupHint: { fontSize: 10.5, fontWeight: 400, color: txt2, opacity: 0.7 },
+        treeRow: {
+          display: 'flex', alignItems: 'center', gap: 6,
+          minHeight: 26, paddingRight: 8, fontSize: 12.5,
+          borderBottom: '1px solid var(--dsw-alias-border-l2)',
+        },
+        treeChev: { flex: '0 0 12px', fontSize: 10, color: txt2, opacity: 0.8 },
+        treeCheck: { flex: '0 0 14px', fontSize: 12, color: txt2 },
+        treeName: {
+          flex: 1, minWidth: 0, overflow: 'hidden',
+          textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        },
+        treeCount: {
+          flex: '0 0 auto', fontSize: 11, color: txt2,
+          fontVariantNumeric: 'tabular-nums',
+        },
+        selBar: {
+          display: 'flex', alignItems: 'center', gap: 8,
+          marginTop: 10, padding: '8px 10px', borderRadius: 8,
+          background: 'var(--dsw-alias-bg-layer-2)',
+          fontSize: 12,
+        },
+
+        // —— 计划表 ——
+        planTable: { width: '100%', borderCollapse: 'collapse', fontSize: 12 },
+        planTh: {
+          padding: '5px 8px', borderBottom: bd, textAlign: 'left',
+          fontSize: 11, color: txt2, fontWeight: 600,
+        },
+        planTd: {
+          padding: '5px 8px', borderBottom: bd,
+          verticalAlign: 'top', wordBreak: 'break-word',
+        },
+        logPre: {
+          margin: 0, padding: 10, borderRadius: 8, border: bd,
+          fontSize: 11.5, lineHeight: 1.6, overflow: 'auto',
+          maxHeight: 'calc(100vh - 300px)', whiteSpace: 'pre-wrap',
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        },
       }
     }
     const P = panelStyles()
@@ -1062,6 +2437,10 @@ window.__ModuleLoader__.load({
           h('span', { style: S.dirV },
             dirBase.empty ? t('dirDefaultDerived')
               : (dirBase.abs ? t('dirAbsolute') : t('dirRelToWorkspace')))),
+        // 光说「由代码推导」等于没说：用户必须能对上自己机器上的真实路径。
+        h('p', { style: S.dirLine },
+          h('span', { style: S.dirK }, t('dirExampleLabel')),
+          h('span', { style: S.dirV }, t('dirExample'))),
         h('p', { style: S.dirLine },
           h('span', { style: S.dirK }, t('dirWhat')),
           h('span', { style: S.dirV }, t('dirWhatVal'))),
@@ -1152,7 +2531,7 @@ window.__ModuleLoader__.load({
         ctx.effect(() => ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section',
           id: 'getnote',
-          order: 60,
+          order: 201,
           label: () => t('nav'),
           locale: NS,
           inject: injected,

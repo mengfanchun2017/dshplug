@@ -1,0 +1,69 @@
+package      : dsh-pixel
+version      : 0.1.0
+description  : 像素 IP 工作台：把「像素标记」做成左侧任务栏里的独立小应用——作品库、调色板、逐像素编辑、对话框指令，以及按原生网格整数倍导出的整套资产（favicon 到印刷档）。
+source dir   : C:\dsh\dshplug\dsh-pixel (archived 2026-11-16 -> archive\dsh-pixel\source)
+patch        : ./cordis.patch.yml
+client       : web
+built        : 2026-11-16
+
+dsh-pixel-0.1.0.tgz  20991 bytes  sha256=0DBEEF444982563BFD7F400A55C2CBD1C9798BA272080F5C0A2E26009BFE04A2
+dsh-pixel-0.1.0.zip  369454 bytes  sha256=DC0EB4E2F2541DDFA4D41D1320BA7DB09CC6D03C961695A280C3FCEC93AC2706
+
+--- tarball contents (what an install actually receives) ---
+  package/lib/client.js
+  package/lib/index.js
+  package/package.json
+  package/assets/palette.json
+  package/README.md
+  package/cordis.patch.yml
+
+--- zip contents (full source) ---
+        425  dsh-pixel/cordis.patch.yml
+       1231  dsh-pixel/package.json
+       6072  dsh-pixel/README.md
+        453  dsh-pixel/assets/palette.json
+        236  dsh-pixel/assets/palette.pixel-studio.json
+      42511  dsh-pixel/assets/palette.png
+     137137  dsh-pixel/assets/presentation.png
+       5128  dsh-pixel/assets/avatar/manta-appicon-512.png
+       6029  dsh-pixel/assets/avatar/manta-avatar-512.png
+        829  dsh-pixel/assets/expression/manta-face-blink.png
+        520  dsh-pixel/assets/expression/manta-face-blink@48.png
+        835  dsh-pixel/assets/expression/manta-face-default.png
+        526  dsh-pixel/assets/expression/manta-face-default@48.png
+        792  dsh-pixel/assets/expression/manta-face-happy.png
+        504  dsh-pixel/assets/expression/manta-face-happy@48.png
+       2566  dsh-pixel/assets/lockup/manta-lockup-horizontal-light.png
+       2538  dsh-pixel/assets/lockup/manta-lockup-horizontal.png
+        339  dsh-pixel/assets/lockup/manta-wordmark-light.png
+        340  dsh-pixel/assets/lockup/manta-wordmark.png
+        240  dsh-pixel/assets/mark/favicon.ico
+       6714  dsh-pixel/assets/mark/manta-mark-1008.png
+        866  dsh-pixel/assets/mark/manta-mark-144.png
+        218  dsh-pixel/assets/mark/manta-mark-16.png
+       1026  dsh-pixel/assets/mark/manta-mark-192.png
+        275  dsh-pixel/assets/mark/manta-mark-24.png
+       1196  dsh-pixel/assets/mark/manta-mark-240.png
+       1379  dsh-pixel/assets/mark/manta-mark-288.png
+        375  dsh-pixel/assets/mark/manta-mark-32.png
+       1847  dsh-pixel/assets/mark/manta-mark-384.png
+        334  dsh-pixel/assets/mark/manta-mark-48.png
+       2333  dsh-pixel/assets/mark/manta-mark-480.png
+       2512  dsh-pixel/assets/mark/manta-mark-512.png
+        636  dsh-pixel/assets/mark/manta-mark-64.png
+       4585  dsh-pixel/assets/mark/manta-mark-768.png
+        706  dsh-pixel/assets/mark/manta-mark-96.png
+       5134  dsh-pixel/docs/ARCHITECTURE.md
+       1988  dsh-pixel/docs/CHANGELOG.md
+       3223  dsh-pixel/docs/CONTRACT.md
+       4863  dsh-pixel/docs/DEVELOPMENT.md
+      54074  dsh-pixel/docs/manta-chat-handoff.png
+      75449  dsh-pixel/docs/manta-studio.png
+      41776  dsh-pixel/lib/client.js
+      12847  dsh-pixel/lib/index.js
+       7518  dsh-pixel/test/client.test.mjs
+       7895  dsh-pixel/test/host.test.mjs
+        903  dsh-pixel/test/run.mjs
+       9534  dsh-pixel/tools/asset_build.py
+       5794  dsh-pixel/tools/bridge.py
+       1102  dsh-pixel/tools/exports.py

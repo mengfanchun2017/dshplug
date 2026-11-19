@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Mlarkcli",
+    "description": "Windows-native Feishu/Lark driver: multi-account (per-account app credentials and user authorization, with descriptions and tags), local task-to-account matching to cut token use, and 9 tools (status, call, schema, doctor, login)."
+  },
+  "nav": "Mlarkcli"
+}

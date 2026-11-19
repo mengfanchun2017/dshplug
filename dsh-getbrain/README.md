@@ -43,11 +43,11 @@ DEFAULT_DATA_DIR = WORKSPACE 的上一级 + data-getbrain = C:\dsh\data-getbrain
 
 **命名约定**：`C:\dsh\data-<技能短名>` 是本机技能的默认数据位（本插件 = `data-getbrain`），
 首次运行**自动创建**（幂等）。它不在任何 Git 仓库里 → 不进同步、不进插件包，
-**用户数据完全在本机自己掌控**。想换位置就在「设置 → Getnote」里把 `dataDir` 改成绝对路径。
+**用户数据完全在本机自己掌控**。想换位置就在「设置 → Mgetbrain」里把 `dataDir` 改成绝对路径。
 
 ⚠️ **改数据目录时改一处就够**（这是 2026-11-12 的简化）：
 
-1. 首选在「设置 → Getnote」→「下载与目录」→ `统一数据目录` 里改（即时生效，无需重启）。
+1. 首选在「设置 → Mgetbrain」→「下载与目录」→ `统一数据目录` 里改（即时生效，无需重启）。
 2. 若要改**默认值**本身：`index.js` 的 `DEFAULT_DATA_DIR` 与 `gn.py` 的 `DEFAULT_DATA_DIR`
    （两处推导规则必须一致）；`cordis.patch.yml` 的 `dataDir` 保持留空，让推导生效。
 
@@ -61,7 +61,7 @@ DEFAULT_DATA_DIR = WORKSPACE 的上一级 + data-getbrain = C:\dsh\data-getbrain
 在开放平台创建应用，拿到 `Client ID (cli_xxx)` 与 `API Key (gk_live_xxx)`（只显示一次）。
 
 `getnote/` 目录本身就是一个**正式 Cordis 插件（Bundle）**：代码 + 插件入口 + SKILL.md 说明都在里面。
-配置有五处，任选其一（优先级：**凭据库** > 环境变量 > 插件行 Config > settings.json > config.local.json）；**首选「设置 → Getnote」侧边栏，在哪里输入 Key/ID 见第 9 节**：
+配置有五处，任选其一（优先级：**凭据库** > 环境变量 > 插件行 Config > settings.json > config.local.json）；**首选「设置 → Mgetbrain」侧边栏，在哪里输入 Key/ID 见第 9 节**：
 
 **A. 正式插件（可在 DSH 配置界面里填 key 与设定）** → 见第 8 节。
 
@@ -195,6 +195,8 @@ list [--all] [--limit N] [--json]   只读列表
 detail <note_id>                    只读详情
 search <query> [--top-k N]          只读语义搜索（Top-K 非全量，判重别只靠它）
 topics [--include-subscribed]       只读知识库列表
+inventory [--into current] [--summary]  本地重建「知识库→目录→书→讲」层级（不调 API、不耗配额）
+resolve   --paths "KB\x1f目录\x1f书\x1f讲" [..]  把层级路径解析成 note_id（不调 API、不耗配额）
 
 tag-add    --note-id ID --tags A B [--apply]
 tag-remove --note-id ID --tag-id TID [--apply]
@@ -288,7 +290,7 @@ note_save / note_update / note_delete`。所有 ID 用字符串。
 
 | 位置 | 优先级 | 说明 |
 |---|---|---|
-| **DSH 凭据库**（面板输入）`$DSH_HOME/.credentials.yaml` | **1（最高）** | 「设置 → Getnote」两个安全输入框写这里；**不进组合树、不进配置导出、不进日志** |
+| **DSH 凭据库**（面板输入）`$DSH_HOME/.credentials.yaml` | **1（最高）** | 「设置 → Mgetbrain」两个安全输入框写这里；**不进组合树、不进配置导出、不进日志** |
 | 环境变量 `GETNOTE_API_KEY` / `GETNOTE_CLIENT_ID` | 2 | 插件 Config 也注入到这里；适合多机共用 |
 | 插件行 Config 的 `apiKey` / `clientId` | 3 | 已弃用明文槽（仍可用）；**明文落组合树** |
 | `dsh-getbrain/settings.json` 的 `apiKey` / `clientId` / `apiKeyFile` | 4 | 非敏感偏好文件；`apiKeyFile` 指向本地 json |
@@ -327,7 +329,7 @@ note_save / note_update / note_delete`。所有 ID 用字符串。
 
 - 该 **profile 的所有工作区 / 所有会话**都获得 `getnote_*` 模型工具；
 - agent 可通过 `getnote_guide` 随时读回整理纪律（SKILL.md）；
-- **`client.js` 在「设置」里注册一个顶层侧边栏分区「Getnote」**（`settings.section`），
+- **`client.js` 在「设置」里注册一个顶层侧边栏分区「Mgetbrain」**（`settings.section`），
   里面是配置表单，直接填 `apiKey` / `clientId` / `dataDir` / `media.images` / `minInterval` 等；
 - 同时也可在 **DSH 插件行配置**（Plugins 页）里改同一份 Config —— 两处写的是同一命名空间 `getnote`。
 
@@ -358,7 +360,7 @@ target: C:\dsh\dshplug\dsh-getbrain
 （把上面的绝对路径换成目标机 `dsh-getbrain/` 的实际路径。本机已在 profile 里以 `link:` 装好，不需要再装；
 重新装用 `& C:\dsh\dshplug\install.ps1 -Only dsh-getbrain`。）
 
-### 配置项（「设置 → Getnote」侧边栏 = `cordis.patch.yml` 的 `config`）
+### 配置项（「设置 → Mgetbrain」侧边栏 = `cordis.patch.yml` 的 `config`）
 
 所有字段都标了 `.volatile()`，所以会出现在设置表单里；`apiKey`/`clientId` 另标 `role('secret')` 会脱敏不回显。
 
@@ -389,7 +391,7 @@ target: C:\dsh\dshplug\dsh-getbrain
   `pkgMeta`）；② 新装/升级整个包（新增 loader 条目）。改 `index.js`（Host 半边）也需重启，
   因为它是 ESM 模块，已被 `import` 进内存。
 - 装进 profile 后**全局生效**：一个能删笔记的工具对所有会话可见，请按需启停。
-- 凭据**首选「设置 → Getnote」的两个安全输入框**（写入 DSH 凭据库，不进组合树）；`apiKeyFile` / 环境变量作为备用。把明文写进 patch 是最差选择（`mcp-bundle.md` 亦如此建议）。
+- 凭据**首选「设置 → Mgetbrain」的两个安全输入框**（写入 DSH 凭据库，不进组合树）；`apiKeyFile` / 环境变量作为备用。把明文写进 patch 是最差选择（`mcp-bundle.md` 亦如此建议）。
 - **面板渲染实测（2026-11-10，不需要浏览器）**：自己写了一个极简 React 运行时（`createElement` / `useState` / `useEffect` / `useCallback` / `useSyncExternalStore`），用真 `apply(ctx)` 拿到 `slots.register` 的组件引用，再用真 `inject()` 产生的 props 真执行 `GetnoteSettingsSection`，把元素树跑成了文本。结果：
 
   **未认证时**（目标 (1) 的直接证据）：
@@ -400,15 +402,16 @@ target: C:\dsh\dshplug\dsh-getbrain
   button "保存凭据"      [disabled=false]
   button "清除已存密钥"  [disabled=true]   ← 未存密钥时正确禁用
   h3   "接入信息"
-  button "测试连接"
-  p    "暂无接入信息（点「测试连接」获取）。"
+  p    "打开本页会自动跑一次 gn.py doctor：纯本地检查（解释器、目录、限速、凭据来源），不联网、不耗配额，跟会话里的 getnote_doctor 是同一条命令。下面那个「测试连接」不是同一件事——它是 doctor --live，会真发一次只读请求。"
+  button "测试连接（doctor --live，耗 1 次配额）"
+  p    "本地自检（doctor）还没回来——刷新页面重试。"
   ```
 
   **认证成功后**（目标 (3) 的直接证据，mock `/plugins/getnote/status` 返回成功 JSON）：
   ```
   h3   "接入信息"
   p    "下面是从本机实际读出来的状态；点「测试连接」会真的发一次请求。"
-  button "测试连接"
+  button "测试连接（doctor --live，耗 1 次配额）"
   span "✅ 认证通过，已可调用"
   span "凭据来源" / "file"
   span "API Key"  / "✅"
@@ -478,9 +481,9 @@ target: C:\dsh\dshplug\dsh-getbrain
 
 ### 四条输入路径（按「设置面板优先」排序）
 
-#### 路径 A：**设置 → Getnote 侧边栏（你要的入口，首选）**
+#### 路径 A：**设置 → Mgetbrain 侧边栏（你要的入口，首选）**
 
-`client.js` 在「设置」里注册了一个**顶层侧边栏分区「Getnote」**（与「通用」「插件」同级）。
+`client.js` 在「设置」里注册了一个**顶层侧边栏分区「Mgetbrain」**（与「通用」「插件」同级）。
 打开 **设置**（快捷键 Ctrl+, / Cmd+,）→ 左侧栏点 **Getnote** → 右侧出现配置表单：
 
 - **账号凭据（安全存储）**：`API Key`、`Client ID` —— 这两个写入 DSH 凭据库，**不进组合树**
@@ -529,7 +532,16 @@ target: C:\dsh\dshplug\dsh-getbrain
 
 ### 认证成功后：你会看到什么
 
-面板里的「**接入信息**」区块就是为这个做的。点 **「测试连接」** 会真发一次只读请求（消耗 1 次配额），
+面板里的「**接入信息**」区块就是为这个做的。
+
+先澄清两个容易混淆的东西（2026-11-16 修正）：
+
+| | 做什么 | 联网 | 耗配额 |
+|---|---|---|---|
+| 打开页面时自动跑的 `doctor` | 本地自检：解释器、五个子目录、限速、凭据来源 |  否 | 否 |
+| 按钮「测试连接」= `doctor --live` | 在自发基础上多发一次只读 `note/list` | 是 | 1 次读 |
+
+它俩**不是同一件事**，以前的文案写成“抽「测试连接」获取”是错的。点 **「测试连接」** 后给出：
 然后给出：
 
 | 项 | 含义 |
@@ -634,7 +646,7 @@ target: C:\dsh\dshplug\dsh-getbrain
 ⚠️ 提醒：
 - 组合树是**明文落盘**的，把 Key 填这里等于把凭据写进 profile 配置；按官方 `mcp-bundle.md`
   的建议，更稳妥是留空 `apiKey`/`clientId`，用 `apiKeyFile` 指向本地 json（路径 B）。
-- 若插件页没显示「配置」按钮，**用路径 A 的「设置 → Getnote」侧边栏或路径 B 即可**，
+- 若插件页没显示「配置」按钮，**用路径 A 的「设置 → Mgetbrain」侧边栏或路径 B 即可**，
   三者写的是同一命名空间，功能完全一样，不必耗在找入口上。
 
 #### 路径 D：环境变量（适合多机 / CI）
@@ -956,7 +968,12 @@ slots.register({ name: 'main', key: PANEL_ID, locale: NS, store,
 
 | 路由 | 用途 | 状态 |
 |---|---|---|
+| `GET /plugins/getnote/status` | 凭据 / 会员 / 配额 | ✅ 200，`?live=1` 时真调一次 `doctor --live` |
 | `GET /plugins/getnote/summary` | 本地镜像统计（纯文件扫描，**不耗配额**） | ✅ 200，返回真实数据 |
+| `GET /plugins/getnote/inventory` | 层级树（本地重建，60s 缓存，`?refresh=1` 强制） | ✅ 200，4321 条 / 123 个知识库节点 |
+| `GET /plugins/getnote/log` | 审计日志尾部（`?lines=200`） | ✅ 200，读最新 `logs/<日期>.jsonl` |
+| `POST /plugins/getnote/plan` | 选中层级 → 解析 note_id → 写 `state/plan.pending.json`（**不执行**） | ✅ 200，`confirmed_by` 留 `PENDING_USER_CONFIRM` |
+| `POST /plugins/getnote/apply` | 执行计划；默认干跑，真写需 `confirm:"APPLY"` + `dryRun:false` | ✅ 200，干跑实测发 0 个请求 |
 | `GET /plugins/getnote/report` | 浏览器端 slot 注册自报 | ✅ 200（待页面刷新后填充） |
 
 **不能**：我看不到浏览器 DOM。所以「图标是否真的出现」这类问题，
@@ -975,18 +992,48 @@ GET /plugins/getnote/report
 - `totalEntries` 里**没有** `getnote-workbench` → 我的注册没生效
 - `totalEntries` 里**有** `getnote-workbench` 但界面没图标 → 注册成功了，是渲染层的事
 
-### 数据层已接通（真实数字）
+### 工作台已经是一个真操作界面（2026-11-16 重写）
 
-工作台四个标签页：**笔记现状 / 处理建议 / 确认执行 / 执行日志**。
-现状页显示的都是从 `data/current/*.md` 头部算出来的真实值，例如（2973 篇时）：
+早先四个标签页里，「处理建议 / 确认执行 / 执行日志」三页都只是占位字（写的是“这里会…”），
+用户看到的只是一份设置页的镜像。这一版把它换成真能干活的四页：
+
+| 标签 | 内容 | 数据来源 |
+|---|---|---|
+| **分类调整**（默认页） | 可展开的层级树：知识库 → 目录 → 书 → 讲，逐层带条数，末尾可勾选批量操作；选好后选目标（知识库 / 标签）生成计划 | `GET /plugins/getnote/inventory` → `gn.py inventory --summary` |
+| **笔记现状** | 总数 / 未归知识库 / 无标签 / 可拆专题 Top8 + 类型分布 | `GET /plugins/getnote/summary`（纯本地扫） |
+| **确认执行** | 逐条列出待执行动作（动作 / 目标 / 条数），可「先干跑」再「真写」（双点确认） | `POST /plugins/getnote/plan` → `resolve`；`POST /plugins/getnote/apply` → `gn.py apply` |
+| **执行日志** | 写操作的审计流水（读 `<数据目录>/logs/<日期>.jsonl`） | `GET /plugins/getnote/log?lines=200` |
+
+**为什么层级树要放在工作台而不是设置页**：「设置」是填参数的地方，「工作台」是干活的地方。
+分类调整需要展开/勾选/多选，这在设置表单里做不了。
+
+**为什么层级不在服务器上**：官方 `/resource/knowledge/list` 只返 `id/topic_id/name/description/cover/scope/created_at/updated_at/stats`，
+`scope` 实测永远 `DEFAULT`，没有 `parent`/`folder`/`level` 任何字段；`/resource/knowledge/detail` 直接 404。
+所以「知识库→目录→书→讲」这棵树只能在本地重建，具体见 §11。
+
+**为什么加 60 秒缓存**：扫 4321 个 Markdown 头部约 1–3 秒，面板每次重渲染都扫一遍会把侧边栏拖卡。
+缓存存在 Host 内存里（`invCache`），重启即清；要强制刷新就在 URL 后加 `?refresh=1`。
+
+现状页的数字（4321 篇时）：
 
 ```
-本地镜像 2973 篇 │ 未归知识库 1655（56%）│ 无标签 25（0.8%）
-可拆专题 Top3：万维钢·精英日课6 926 / 优秀员工沟通训练营 370 / 云端革命 260
+本地镜像 4321 篇 │ 未归知识库 2055（48%）│ 无标签 15（0.3%）
+可拆专题 Top3：万维钢·精英日课6 905 / 优秀员工沟通训练营 370 / 录音笔记 149
 ```
 
-**降级入口**：同一份数据也放进了「设置 → Getnote」页（`MirrorSummary` 组件），
+**降级入口**：同一份 summary 也放进了「设置 → Mgetbrain」页（`MirrorSummary` 组件），
 万一侧边栏 slot 在某个版本上不生效，设置里照样看得到。
+
+### 重渲染验证方式（没浏览器也能测）
+
+侧边栏在浏览器里，但我不能操作 DOM。所以用了一个离线渲染作为代替：
+用最小 React 替身（只实现 `createElement/useState/useEffect/useCallback`）把 `renderStructure()`
+拉出源码直接执行，把元素树拍平成文本，覆盖六个场景：加载中、展开到「讲」、加载失败、镜像空、
+勾选后的动作条。六个都逐行对了输出（树层次、缩进、条数、☐/☑）。
+
+**这能证明的**：组件函数不抛异常、四个状态分支都有输出、层级与条数与真数据一致。
+**这不能证明的**：真实浏览器里的点击、滚动、样式渲染。那两项只能刷新页面人眼看。
+
 
 ### 一个统计陷阱：平台名会盖掉课程名
 
@@ -1004,4 +1051,249 @@ GET /plugins/getnote/report
 | (4) 可复制说明 | 真点“复制说明”→剪贴板拿到 335 字符 / 12 行 / 6 条用法 / 含安全约束 | 浏览器可能拦 `navigator.clipboard`（已有降级提示 + 自动选中文字） |
 
 **一句话**：代码层面的四条都跑通了，剩下的是**真实凭据下的端到端确认**——那个只能由你填 Key 来完成。
+
+---
+
+## 11. 层级结构：知识库 → 目录 → 书 → 讲 → 划线（2026-11-16 实测）
+
+### 11.1 你的描述 vs 平台真实能力
+
+你说的结构：
+
+```
+知识库（最大集合，如万维钢）
+  └─ 目录（精英日课1 / 2 / 3）
+       └─ 书（通常拆成 6 讲）
+            └─ 讲（每讲一篇笔记）
+                 └─ 划线（每划一下 = 1 条笔记）
+```
+
+**平台只提供最上面和最下面两层**，中间三层要自己重建。证据：
+
+| 你以为有 | 实际 |
+|---|---|
+| 知识库能套知识库 | ❌ `/resource/knowledge/list` 只返 `id/topic_id/name/description/cover/scope/created_at/updated_at/stats`，**无 parent/folder/level**；`scope` 恒为 `DEFAULT`；`/resource/knowledge/detail` → 404 |
+| 笔记能附加笔记（多级） | ⚠️ **只能一层**。给子笔记再加子笔记 → `{"code":10000,"message":"当前笔记不允许创建子笔记"}` |
+| 能改附加关系 | ❌ `parent_id` **不可变**：`note/update` 传 `parent_id` → `parent_id is not supported when updating an existing note; use save_note with parent_id to create a child note`（`constraint: immutable_parent_relation`）。既不能改挂、也不能摘下 |
+| 能列出一篇笔记的子笔记 | ❌ 试过 `/resource/note/children`、`/child/list`、`/attach/list`、`/relation`、`/list/child` —— 全部 404。只能在 `note/detail` 里看 `children_count` 和 `children_ids` |
+
+### 11.2 推荐结构（已在代码里实现）
+
+因为服务器不提供中间层，所以**层级全部从本地镜像推导**，不存到线上。
+推导规则（`gn.py` 的 `_course_of` / `_book_of`）：
+
+| 层级 | 从哪来 | 例子 |
+|---|---|---|
+| **知识库** | `topics` 字段（官方真实存在的） | `icosa`、`working`、`family` |
+| **目录（专栏/课程）** | 标签里除「得到」以外的那个 system 标签 | `万维钢·精英日课6（年度日更）`、`熊太行·关系攻略` |
+| **书** | 文章标题 `《》` 里的那段 | `《智能简史》5：模型思考者` → `智能简史` |
+| **讲** | 文章标题全文 | `《智能简史》5：模型思考者` |
+| **划线** | 每一条 `ref` 笔记（type=`ref`） | 同一讲平均 21 条 |
+
+真实验证结果（4321 篇，2055 篇未归任何知识库）：
+
+```
+(未归知识库)
+  └─ 万维钢·精英日课6（年度日更）  905 条 / 14 本书
+       ├─ 智能简史        140 条 / 10 讲   ← 一本拆 10 讲，每讲 6–19 条划线
+       ├─ 心智重构         96 条
+       ├─ 怎样激励10到25岁的人   81 条
+       ├─ 萎靡            72 条
+       └─ …
+```
+
+**为什么“讲”这一层必须存在**：如果不按文章题目聚合，905 条划线就是一堆看不出结构的碎片——
+用户根本不知道它们在说什么。按「讲」聚合后，一屏幕就能看出“这本书讲了什么、我划了哪些”。
+
+### 11.3 为什么不把一本书的 100+ 条划线做成子笔记
+
+技术上能做（已实测），但**强烈不推荐**，理由是四个硬约束：
+
+1. **只能一层**：书的子笔记不能再有子笔记。书 → 讲 → 划线这个三层结构压根表达不了。
+2. **父笔记不可变**：建错了不能改、不能摘下，只能删了重来。
+3. **删父会丢子**：实测删掉父笔记后，子笔记返回 `10500 note_not_found`（被连带删除或隐藏）。
+   一不小心删掉“书”，下面几十条划线全部消失。
+4. **没有反向接口**：无法“列出这本书的所有划线”，只能逐条 `note/detail` 看 `children_count`。
+5. 而且这个账号里 **4326 条笔记只有 10 条有子笔记**（共 12 个子）——说明这个功能官方自己也没当主结构用。
+
+**已否决的方案**：把「书」建成父笔记、把「讲」建成子笔记。
+否决理由：一本书 10 讲、每讲十几条划线，一共 140 条。1 层限制下你只能选“书→讲”或“讲→划线”，
+两层都想要就必须突破平台限制，而突破不了。且建完不可改，风险远大于收益。
+
+**实际采用的方案**：
+
+- 层级只存在于**本地**（`gn.py inventory` 重建，侧边栏展示）；
+- 线上用**标签 + 知识库**做扁平分组（官方支持、可反复调、不会丢数据）；
+- `parent_id` 只留给**将来真正小规模、提前规划好的**附加关系（比如把“我对这本书的总结”挂到“这本书”下面），
+  不用来搬运已有划线。
+
+### 11.4 给界面和调整的建议
+
+- 想把一个目录独立出去（比如「万维钢·精英日课6」单占一个知识库）：按**目录**批量加知识库，
+  不要按单条笔记一条条移。
+- 「得到」这个标签是平台自动加的（全库 2665 条），**不要拿它当分类维度**。
+- 2055 条未归知识库的笔记里，大部分是课程划线——它们靠「目录」标签就能认出来，
+  所以“未归知识库”不等于“没法分类”，不要因为这个数字焦虑。
+### 11.5 写操作已经接通（2026-11-16 实装）
+
+读完层级只是前半；真正要能改。现在的链路是四步，每一步都有证据：
+
+```
+勾选「讲」→ POST /plan（Host 用 resolve 把路径翻成 note_id，产出 plan.json）
+          → 界面预览动作表（不联网）
+          → 点「先干跑」→ POST /apply {dryRun:true}（gn.py apply --dry-run，发 0 个请求）
+          → 点「我要真写」再点一次 → POST /apply {dryRun:false}（真写）
+```
+
+**为什么不让浏览器直接拼 plan**：浏览器拿不到数据目录路径、写不了文件，而
+`gn.py apply` 必须读一个真实 `plan.json`。更关键的是 **note_id 必须由同一份镜像数据解析**——
+让浏览器带着 4000 个 id 来回传，既没必要也容易和命令行的结果错位。
+所以新增了 `gn.py resolve`：界面只传长得像 `知识库/目录/书/讲` 的路径，
+Host 把路径交给 `resolve` 换回 note_id。两边走同一个 `_parse_md_head`，数量不会对不上。
+
+**`resolve` 的三层实测**（同一份镜像，`\x1f` 分隔，给几段就匹配几层）：
+
+| 传入的路径 | 解析出的 note_id 数 | 与树里显示的是否一致 |
+|---|---|---|
+| `智能简史/《智能简史》10：文明之旅（完）` | 12 | ✅ 12 |
+| `智能简史`（整本书） | 140 | ✅ 140 |
+| `万维钢·精英日课6（年度日更）`（整个目录） | 905 | ✅ 905 |
+
+**动作怎么生成**：
+
+- 归到知识库 → **一条** `kb_batch_add`（官方有批量接口，一次最多 20 个 id 自动切块）。
+- 加标签 → **逐条** `tag_add`（官方没有批量标签接口）。140 条的整本书就是 140 个动作，
+  界面上只展开前 50 条，其余显示「…还有 90 个动作未展开」。
+
+**护栏（按你的要求做得比较啰嗦，因为面板能被鼠标误触）**：
+
+| 位置 | 护栏 |
+|---|---|
+| `/plan` 路由 | 只允许 `tag_add` / `tag_delete` / `kb_batch_add` / `kb_remove` 四个 op；带 `note_delete` 直接 400 |
+| `/plan` 路由 | 单次最多 2000 个选中路径（防止一次选爆） |
+| `/apply` 路由 | 必须显式传 `confirm: "APPLY"`，否则 400 |
+| `/apply` 路由 | 默认 `dryRun: true`；真写要再传 `dryRun: false` |
+| `/apply` 路由 | 超过 200 个动作的真写必须额外传 `allowHighRisk: true` |
+| 界面 | 「我要真写 → 需再点一次」→ 变成红色「确认写入线上（不可撤销）」才真发 |
+
+**没有做的事（故意的）**：
+
+- **没有把删除接进分类调整**。删除必须走 `gn.py note-delete` + `--confirm DELETE` 的独立流程，
+  不允许从「勾选一下」触发。你提到的「删除没用的」我还没接——它需要一个独立的入口和
+  输入确认词，不应该和分类调整混在一个按钮里。
+- **没有做「移动」，只做「叠加」**。`kb_batch_add` 是加入知识库，不会把笔记从原知识库移走；
+  `tag_add` 是追加标签，不会覆盖旧标签。要去掉旧的得显式 `kb_remove` / `tag_delete`。
+  这是官方语义，不是我们的懒惰——批量「移动」在 API 层就是不存在。
+
+**离线验证方式**（不启浏览器、不启宿主，直接跑）：把 `index.js` 里三个 render 函数
+用 React 替身抽出来跑 19 个场景，含：空数据、加载中、失败态、140 条截断、armed 态、
+执行成功/失败结果。全部通过。这类验证的价值是**首帧 undefined 这种致命 bug**
+（曾导致永久空白）会被抓住，而不是等用户看到白屏。
+
+### 11.6 「执行日志」页读的是真实审计文件
+
+之前这个页是空壳（`log.lines` 恒为 `[]`）。现在 `GET /plugins/getnote/log?lines=200`
+读 `<数据目录>/logs/<YYYYMMDD>.jsonl` 的最后 N 条，一行压成一句人话：
+
+```
+2026-11-16T10:15:04+08:00  OK       POST /resource/note/delete        366ms  note_delete(HIGH RISK)
+2026-11-16T10:15:13+08:00  FAIL     GET  /resource/note/detail code=10500 note_not_found 249ms
+2026-11-16T10:31:59+08:00  DRY-RUN  POST /resource/knowledge/note/batch-add      kb_batch_add
+```
+
+状态三档：`OK` / `FAIL`（`success:false`）/ `DRY-RUN`。不缓存——日志随时在长，
+缓存会让人以为没动静。页头显示文件名与总条数，右上角有「刷新」。
+
+### 11.7 拖拽归类 + 撤销（2026-11-18）
+
+**拖拽**：目录行与书行可拖到「我的知识库」里任意一个库上，松手即生成计划（**不直接写**）。
+- 为何不直接写：拖拽只是意图，可能拖错。必须先在「确认执行」页看到「把 N 条归到 X」才能决定。
+- 为何书架不可作目标：那 111 个是平台按书自动建的，往里拖会造出双重归属，且用户删不掉书架。
+- 勾选框仍逐层可用，两者不冲突：拖拽改「放到哪」，勾选改「选中哪」。
+
+**撤销**：每次**真写**前自动拍一份「归属快照」，失败就**中止写入**（宁可这次不改，不能改了无法回退）。
+
+```powershell
+python gn.py undo-snapshot --plan state/plan.pending.json   # 只读
+python gn.py undo --plan state/undo-20261118-165613.json --confirm UNDO --dry-run
+python gn.py undo --plan state/undo-20261118-165613.json --confirm UNDO
+```
+
+为何不能只靠反向操作：`kb_batch_add` 是「加入」不是「移动」，天真的 `kb_remove` 会把原本的归属也踢掉。
+必须知道「改之前是什么样」——所以存快照，按**状态收敛**回滚，而不是执行逆操作。
+
+**实测闭环**（真笔记 `1927331041815714728`）：
+
+| 阶段 | topics | 三个原有标签 |
+|---|---|---|
+| 写前 | `[]` | 完整 |
+| 写入后 | `[icosa]` | 完整 |
+| 撤销后 | `[]` | **完整（一条无损）** |
+
+三道闸门实测均生效：重复撤销被拒、缺 `--confirm UNDO` 被拒、`--dry-run` 不改状态且幂等（第二次算出 0 个动作）。
+详见 [docs/UNDO-DESIGN.md](docs/UNDO-DESIGN.md)。
+
+### 11.8 发芽 / 审问 / 连线（2026-11-18）
+
+**先说平台事实**（逐个探过，全部只读 GET）：
+
+| 端点 | 结果 |
+|---|---|
+| `GET /resource/note/sprout?id=` | **200**，返回 `{sprout, has_sprout}` |
+| `POST /resource/note/sprout` | 404（**不能通过 API 生成发芽**） |
+| `/resource/ai/sprout` 等 13 个候选 | 404 |
+
+所以本插件的做法：**平台只能查，生成由 DSH 的 AI 做**。
+
+```powershell
+python gn.py sprout --note-id 1918061344897183496          # 查平台已有发芽
+python gn.py context-pack --note-id 1918061344897183496   # 拼素材包（纯本地，不联网）
+python gn.py prompts                                     # 看/改提示词
+```
+
+`context-pack` 产物：中心笔记 + 同系列其他讲（`siblings`）+ 跨系列相关段落（`related`）+ 关键词。
+
+**关键词质量踩了三次坑**（真实记录，别再重蹈）：
+
+| 版本 | 做法 | 结果 |
+|---|---|---|
+| v1 | 滑窗取 2–4 字 | 抽出「整体来讲」「的东西」→ 相关全是噪声 |
+| v2 | 加黑名单 + 提高门槛 | 仍有「这一块」「整体来」→ 滑窗不认词边界 |
+| **v3** | 先按标点切短句 + 禁虚词/数词开头 + 禁填充词子串 + 用全库文档频次剔除泛词 | 「硬技能」「软技能」「数据壁垒」 |
+
+效果：同一条笔记的相关结果从「8 个全是误命中」变成「1 个真相关」。**宁可少，不要假。**
+
+**提示词可改**：存在 `<数据目录>/prompts/{sprout,interrogate,link}.md` + `actions.json`，
+首次自动创建，之后**改文件即生效，不用改代码**。内置三个按钮：发芽 / 审问 / 连线。
+
+三者**都不自动写入**——结果只展示，确认后你自己决定。详见 [docs/AI-ACTIONS.md](docs/AI-ACTIONS.md)。
+
+### 11.9 知识管理立场（为何功能长这样）
+
+完整推导见 [docs/PKM-THEORY.md](docs/PKM-THEORY.md)。三个决定性的实测事实：
+
+1. **94% 是课程划线（4053 条），只有 6% 是你自己的记录（269 条）** —— 两堆必须分开对待。
+2. **只有 1 条笔记同时在 2 个以上知识库** —— 现有库实质是单归属，不需要复杂多归类。
+3. **110/122 个「知识库」与同名标签重复** —— 进一步说明现有结构是「来源桶」而非「主题分类」。
+
+结论：
+- 4053 条划线按**来源形状**组织（机器做，已实现）；269 条自有记录才适用 PARA 的「可行动性」。
+- **不要**把 4053 条按主题重分类进 PARA：一门课能横跨经济学到育儿，重分类等于人工读 4053 条。
+- 树上做「浏览与批量搬运」，**不在树上做思考**（层级不适合发现跨域联系）。
+- 真正缺的不是更花的分类树，而是渐进式总结的 **Layer 2–4**（加粗/高亮/用自己的话）。
+
+### 11.10 界面修正（2026-11-18）
+
+- **颜色变量全部改正**：之前用了一批**根本不存在**的变量（`--dsh-bg-secondary`、
+  `--dsw-alias-status-danger` 等）。`var(--x, fallback)` 会静默取 fallback，
+  所以浅色主题下会变成**白底白字**。现在用的 16 个 token 已逐个从 `app.asar` 枚举验证存在。
+- **去掉「非书本／单篇」伪层级**：63 个目录里有 61 个，书层只有一个孩子叫这个占位符，
+  占一整层缩进却零信息量。现在直接展平到目录下。
+- **每一层都能勾选**：知识库 / 目录 / 书 / 讲 各自有勾框，父层级不再只能逐篇点。
+- **`#untopiced` 映射修复**：界面合成行 `#untopiced` → 服务端真实前缀 `(未归知识库)`，
+  否则选「整行 2055 条」会解析不到任何笔记。
+
+> **重启规则（实测修正）**：改 `client.js` → 刷页即可；改 `index.js` 新增的**路由** → **必须重启 App**
+> （进程内存里的注册表不会热更）；改 `gn.py` → 立即生效（每次请求重新拉起子进程）。
+
 
