@@ -1340,7 +1340,19 @@ function codeRepoList(cfg) {
   return list.filter(r => r && r.path);
 }
 
-/** 只读看一个代码仓库的本地事实：分支、是否有改动、领先/落后（全部不访网）。 */
+/** 只读看一个代码仓库的本地事实：分支、是否有改动、领先/落后（全部不访网）。
+ *
+ *  性能要点（2026-11-19 实测）：Windows 上每条 git 命令的进程启动开销 ~80-120ms，
+ *  与仓库大小无关。所以「少起进程」比「少读数据」重要得多。
+ *  最初实现用了 7 条命令（branch/status/log/verify/rev-list/remote），
+ *  两个仓库就是 14 次进程启动 ≈ 1.0s —— 侧边栏每 20s 轮询一次，代价太明显。
+ *
+ *  压到 2 条：
+ *    · `status --porcelain -uall --branch` 首行 `## main...origin/main [ahead 2, behind 1]`
+ *      已同时包含分支名、上游引用、领先/落后数和改动列表，一条顶四条；
+ *    · `log -1` 单独留（历史摘要不在 status 里）。
+ *  实测 1022ms → 约 250ms（两个仓库）。
+ */
 async function codeRepoState(repo) {
   const dir = repo.path;
   const out = {
@@ -1355,7 +1367,8 @@ async function codeRepoState(repo) {
     ahead: 0,
     behind: 0,
     diverged: false,
-    remote: '',
+    upstream: null,
+    remote: repo.remote || '',
     autoCommitMinutes: Number(repo.autoCommitMinutes) || 0,
     lastCommit: null,
     error: null,
@@ -1364,54 +1377,70 @@ async function codeRepoState(repo) {
   out.initialized = fs.existsSync(path.join(dir, '.git'));
   if (!out.initialized) { out.error = '不是 git 仓库'; return out; }
 
-  /* 取分支名。注意：**没有任何提交的新仓库**（刚 git init）上
-     `rev-parse --abbrev-ref HEAD` 会返回字面量 `HEAD` 而不是分支名，
-     直接拿它判「游离 HEAD」会把刚 init 的仓库误杀。
-     补一道 symbolic-ref：它不需要提交存在就能读当前分支。 */
-  const b = await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD'], 8000);
-  let br = b.ok ? b.out : '';
-  if (!br || br === 'HEAD') {
-    const sr = await git(dir, ['symbolic-ref', '--short', 'HEAD'], 8000);
-    if (sr.ok && sr.out) br = sr.out;
-  }
-  if (br && br !== 'HEAD') out.branch = br;
-
-  /* 用 -uall 展开未跟踪目录，否则新建一个目录只会报一行，看不出到底几个文件。 */
-  const st = await git(dir, ['status', '--porcelain', '-uall'], 15000);
+  /* 一条命令拿齐：分支 / 上游 / 领先落后 / 全部改动。
+     -uall 展开未跟踪目录，否则新建一个目录只报一行，看不出到底几个文件。
+     注意 --branch 会把分支信息放在首行（`## ...`），其余行才是文件。 */
+  const st = await git(dir, ['status', '--porcelain', '-uall', '--branch'], 15000);
   if (st.ok) {
-    const lines = st.out ? st.out.split('\n').filter(Boolean) : [];
-    out.dirty = lines.length;
-    out.unsynced = lines.length;
+    const all = st.out ? st.out.split('\n') : [];
+    const head = all.length && all[0].startsWith('##') ? all.shift() : '';
+    const files = all.filter(Boolean);
+    out.dirty = files.length;
+    out.unsynced = files.length;
+
+    if (head) {
+      /* 形态一：## main...origin/main [ahead 2, behind 1]
+         形态二：## main...origin/main            （已同步，无中括号）
+         形态三：## main                          （无上游）
+         形态四：## HEAD (no branch)              （游离）
+         形态五：## No commits yet on main        （空仓库，无提交）*/
+      if (/^## HEAD \(no branch\)/.test(head)) {
+        out.branch = null;
+      } else {
+        const m = /^## (?:No commits yet on )?([^\s.]+)/.exec(head);
+        if (m) out.branch = m[1];
+        const up = /\.\.\.(\S+)/.exec(head);
+        if (up) out.upstream = up[1];
+        const ab = /\[([^\]]+)\]/.exec(head);
+        if (ab) {
+          const a = /ahead (\d+)/.exec(ab[1]);
+          const b = /behind (\d+)/.exec(ab[1]);
+          if (a) out.ahead = Number(a[1]);
+          if (b) out.behind = Number(b[1]);
+        }
+        /* 有上游但无中括号 = 完全对齐；有上游但本地有提交而无中括号不会发生，
+           所以上面取到的 ahead/behind 就是准的。 */
+        if (out.upstream && !ab) { out.ahead = 0; out.behind = 0; }
+        if (!out.upstream) out.remoteMissing = true;
+      }
+      out.diverged = out.ahead > 0 && out.behind > 0;
+    }
+  } else {
+    out.error = (st.err || 'git status 失败').slice(0, 200);
+    return out;
   }
 
-  const lg = await git(dir, ['log', '-1', '--format=%h %cI %s'], 8000);
+  /* 远端 URL 与最近提交互不依赖，并行跑：两个进程开销叠在一个往返里。
+     URL 通常已缓存在配置里，那就只剩 log 一条。 */
+  const [r, lg] = await Promise.all([
+    out.remote ? Promise.resolve(null) : git(dir, ['remote', 'get-url', 'origin'], 8000),
+    git(dir, ['log', '-1', '--format=%h %cI %s'], 8000),
+  ]);
+  if (r && r.ok && r.out) out.remote = r.out;
   if (lg.ok && lg.out) out.lastCommit = lg.out;
 
-  /* 与远端比较：只读本地 origin/<br> 引用，不联网（联网那步在 fetch 里显式做）。 */
-  if (out.branch) {
-    const hasRef = await git(dir, ['rev-parse', '--verify', '--quiet', `origin/${out.branch}`], 8000);
-    if (hasRef.ok) {
-      const c = await git(dir, ['rev-list', '--left-right', '--count', `HEAD...origin/${out.branch}`], 8000);
-      const m = c.ok ? /^(\d+)\s+(\d+)/.exec(c.out) : null;
-      if (m) {
-        out.ahead = Number(m[1]);
-        out.behind = Number(m[2]);
-        out.diverged = out.ahead > 0 && out.behind > 0;
-      }
-    } else {
-      out.remoteMissing = true;   // 远端还没有这个分支（首次推送）
-    }
-  }
-  const r = await git(dir, ['remote', 'get-url', 'origin'], 8000);
-  if (r.ok && r.out) out.remote = r.out;
   return out;
 }
 
-/** 汇总所有代码仓库（只读、不访网，可安全挂在轮询上）。 */
+/** 汇总所有代码仓库（只读、不访网，可安全挂在轮询上）。
+ *  仓库之间用 Promise.all 并发，互不依赖。 */
 async function codeReposPayload(cfg) {
   const list = codeRepoList(cfg);
-  const repos = [];
-  for (const r of list) repos.push(await codeRepoState(r));
+  const repos = await Promise.all(list.map(r => codeRepoState(r).catch(e => ({
+    id: r.id || r.path, path: r.path, enabled: r.enabled !== false,
+    exists: true, initialized: false, error: String(e && e.message || e),
+    unsynced: 0, ahead: 0, behind: 0, diverged: false,
+  }))));
   const active = repos.filter(r => r.enabled);
   return {
     ok: true,

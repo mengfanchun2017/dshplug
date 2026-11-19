@@ -52,7 +52,7 @@ WORKSPACE = ROOT.parent
 #   3) 删了也不会丢数据（换机器/重建工作区不影响）。
 # 命名约定：C:\dsh\data-<插件短名> 是本机技能的默认数据位，首次运行自动创建（幂等）。
 DEFAULT_DATA_DIR = WORKSPACE.parent / "data-getbrain"
-SUBDIRS = ("downloads", "intermediate", "snapshots", "logs", "state")
+SUBDIRS = ("downloads", "intermediate", "snapshots", "logs", "state", "trash")
 
 def resolve_data_dir(cli_override=None):
     raw = cli_override
@@ -91,17 +91,19 @@ LAYOUT = _layout(DEFAULT_DATA_DIR)
 SNAPSHOTS = LAYOUT["snapshots"]
 AUDIT = LAYOUT["logs"]
 STATE = LAYOUT["state"]
+TRASH = LAYOUT["trash"]
 DATA_DIR = DEFAULT_DATA_DIR
 
 
 def reconfigure(data_dir):
     """按最终 dataDir 重设所有输出目录（--data-dir / settings.json 生效点）。"""
-    global LAYOUT, SNAPSHOTS, AUDIT, STATE, DATA_DIR
+    global LAYOUT, SNAPSHOTS, AUDIT, STATE, TRASH, DATA_DIR
     DATA_DIR = Path(data_dir).resolve()
     LAYOUT = init_layout(DATA_DIR)
     SNAPSHOTS = LAYOUT["snapshots"]
     AUDIT = LAYOUT["logs"]
     STATE = LAYOUT["state"]
+    TRASH = LAYOUT["trash"]
 
 DEFAULT_BASE = "https://openapi.biji.com"
 API_PREFIX = "/open/api/v1"
@@ -1765,6 +1767,45 @@ def _mutate_guard(args, c, extra_warning=None):
     if extra_warning:
         print(extra_warning)
 
+def _save_to_trash(client, note_id):
+    """删除前把笔记完整存一份到 <dataDir>/trash（只读 API 调用）。
+
+    为何不靠平台回收站：官方 FAQ 自列「删除后直接彻底删除、未进回收站」。
+    既然平台不保证，删除就得自带副本。格式选 Markdown 而不是原始 JSON：
+    真出事的时候，人需要的是能直接读和救回来的文本，不是要解析的 payload。
+
+    局限（不遮掩）：note_id 由服务端分配，重建成新笔记后 ID 会变，
+    所以这只是「内容救得回来」，不是「可逆操作」。界面上必须这么说。
+    """
+    detail = client.detail(sid(note_id))
+    data = detail.get("data") if isinstance(detail, dict) else None
+    # detail 返回 {data: {...}}；部分版本直接返回笔记体，两种都兼容。
+    if not isinstance(data, dict) or not data:
+        data = detail if isinstance(detail, dict) else {}
+    if not data or not data.get("content"):
+        raise RuntimeError("note/detail 没返回正文，不敢删")
+    TRASH.mkdir(parents=True, exist_ok=True)
+    title = (data.get("title") or "(无标题)").strip()
+    safe = re.sub(r'[\\/:*?"<>|\r\n\t]', "_", title)[:60].strip() or "note"
+    out = TRASH / f"{sid(note_id)}_{safe}.md"
+    body = [
+        f"# {title}",
+        "",
+        f"- note_id: `{sid(note_id)}`",
+        f"- 已删除于: {now_iso()}",
+        f"- 类型: {data.get('note_type') or data.get('type') or ''}",
+        f"- 原始链接: https://www.biji.com/note/{sid(note_id)}",
+        "",
+        "## 原文（删除前备份）",
+        "",
+        str(data.get("content") or ""),
+    ]
+    out.write_text("\n".join(body), encoding="utf-8")
+    # 同时留一份原始 JSON：Markdown 丢了格式，救的时候可能需要字段。
+    (TRASH / f"{sid(note_id)}.json").write_text(jdump(data), encoding="utf-8")
+    return out
+
+
 
 def cmd_tag_add(args):
     c = make_client(args)
@@ -1845,10 +1886,27 @@ def cmd_note_delete(args):
               file=sys.stderr)
         return 3
     _mutate_guard(args, c, "🔴 高危：note/delete 按不可逆对待。请确认 Phase 0 快照已生成并校验。")
+
+    # 本地先存一份再删：平台侧删除可能不进回收站（官方 FAQ 自列），
+    # 那就只能靠自己。没有这份本地副本，删除就是真单程票。
+    # 注意：这是**兜底**，不是承诺可恢复——已删笔记无法用 API 写回原 note_id。
+    trash_note = None
+    if not args.skip_trash:
+        try:
+            trash_note = _save_to_trash(c, args.note_id)
+            print(f"[trash] 已存本地副本：{trash_note}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"❌ 本地副本保存失败：{exc}", file=sys.stderr)
+            print("   拒绝删除：本地拿不到副本时，删了就真的没了。", file=sys.stderr)
+            print("   （确实不想备份请显式加 --skip-trash）", file=sys.stderr)
+            return 4
+
     r = c.note_delete(args.note_id)
     if not print_dry(r, "note/delete"):
         print(jdump(r))
         print("   请立刻到 App 回收站核验该笔记是否可恢复。")
+        if trash_note:
+            print(f"   不可恢复时，本地副本在：{trash_note}")
     return 0
 
 
@@ -2605,6 +2663,8 @@ def build_parser():
     nd.add_argument("--note-id", required=True)
     nd.add_argument("--i-understand-deletion-may-be-permanent", action="store_true",
                     help="确认已知官方删除 bug 与误删风险")
+    nd.add_argument("--skip-trash", action="store_true",
+                    help="不存本地副本（不推荐；平台侧删除可能不进回收站）")
     add_write(nd)
     nd.set_defaults(func=cmd_note_delete)
 

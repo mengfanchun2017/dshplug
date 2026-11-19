@@ -250,6 +250,39 @@ ok('接口未回时不误报「未配置远端」',
   !pNull.threw && pNull.text.indexOf('还缺两个仓库地址') < 0,
   'own=null 时不应出现仓库地址引导卡');
 
+/* 首帧文案（2026-11-19 用户反馈）：「刚进侧边栏显示错误（未配置），过一会儿才刷新出来」。
+   根因是 noRemote 直接看 conf.remote，而 own 未回来时 conf 退化成 {}，
+   于是首帧把「还不知道」画成了红色「还没连仓库」。
+   断言要求：首帧既不能说「没连仓库」，也不能说「已同步」，必须是中性的读取中。 */
+ok('首帧不报红「没连仓库」', !pNull.threw && pNull.text.indexOf('还没连仓库') < 0,
+  'text=' + (pNull.text || '').slice(0, 150));
+ok('首帧显示中性的「正在读取」而不是错误', !pNull.threw && pNull.text.indexOf('正在读取') >= 0,
+  '首帧应说明正在读取，实际：' + (pNull.text || '').slice(0, 120));
+ok('首帧不谎称「已同步，不用管」', !pNull.threw && pNull.text.indexOf('已同步，不用管') < 0);
+
+/* 读不到（有错误、无数据）必须与「没配置」区分：这是「不知道」，不是「你错了」。
+   用户什么都不用做，或者只点一次重试 —— 不该被引导去改设置。 */
+const pUnknown = renderTree(slots.main, [null, null, null, '', '接口读不到', '', [], null, null, '', '', null, '', '', null, null]);
+ok('读不到时提示可重试，而不是让用户去填地址',
+  !pUnknown.threw && pUnknown.text.indexOf('没读到') >= 0 && pUnknown.text.indexOf('还没连仓库') < 0,
+  (pUnknown.text || '').slice(0, 150));
+
+/* 另外：代码仓库卡只在登记了仓库时出现，没配就不该占首屏位置。 */
+const repoStatus = JSON.parse(JSON.stringify(STATUS));
+const pRepoNone = renderTree(slots.main, [repoStatus, { ok: true, checks: [] }, MAP, '', '', '', [], null,
+  { ok: true, ready: true, headline: '可以同步' }, '', '', null, '', '', null, null, { ok: true, repos: [], total: 0, auto: { enabled: false, minutes: 0 } }]);
+ok('没登记代码仓库时不显示代码仓库卡',
+  !pRepoNone.threw && pRepoNone.text.indexOf('代码仓库') < 0,
+  '空清单不该占位置');
+const pRepoOne = renderTree(slots.main, [repoStatus, { ok: true, checks: [] }, MAP, '', '', '', [], null,
+  { ok: true, ready: true, headline: '可以同步' }, '', '', null, '', '', null, null,
+  { ok: true, total: 1, auto: { enabled: true, minutes: 60 }, repos: [{ id: 'dsh-base', path: 'C:\\dsh\\base', enabled: true, branch: 'main', unsynced: 3, ahead: 1, behind: 0, diverged: false, lastCommit: 'abc1234 x' }] }]);
+ok('登记了代码仓库时显示卡片与同步按钮',
+  !pRepoOne.threw && pRepoOne.text.indexOf('代码仓库') >= 0 && pRepoOne.text.indexOf('全部同步') >= 0,
+  pRepoOne.threw && pRepoOne.threw.message);
+ok('代码仓库卡显示未提交数与分支',
+  !pRepoOne.threw && pRepoOne.text.indexOf('3 未提交') >= 0 && pRepoOne.text.indexOf('dsh-base') >= 0);
+
 /* 版本错配：刷页面会加载新版 client，但宿主半要重启才生效。
    旧宿主半不返回 summary，此时绝不能把四个 0 当成「已同步」，更不能静默。 */
 const legacyStatus = JSON.parse(JSON.stringify(STATUS));

@@ -76,6 +76,17 @@ function write(d, rel, content) {
   ok('冲突时执行 rebase --abort（不静默覆盖）', src.includes("['rebase', '--abort']"));
   ok('代码仓库同步与 idle 自动推送是两套独立闸门', src.includes('codeRepoAutoEnabled') && src.includes('autoPush'));
   ok('默认不开启自动提交（不默默改别人仓库）', /codeRepoAutoEnabled:\s*false/.test(src));
+  /* 性能护栏：Windows 上每条 git 命令 ~80-120ms 进程开销，少起进程比少读数据重要。
+     codeRepoState 曾用 7 条命令（两个仓库 = 1.0s，每 20s 轮询一次）。
+     现在必须靠 status --branch 一条拿齐，改回多条会让侧边栏变卡。 */
+  const stateSrc = /async function codeRepoState[\s\S]*?\n}/.exec(src)[0];
+  ok('codeRepoState 用 status --branch 一条拿齐领先/落后',
+    stateSrc.includes("'--branch'"), '改回 rev-list/rev-parse 会显著变慢');
+  ok('codeRepoState 里 git 调用不超过 3 处（含并发）',
+    (stateSrc.match(/await git\(/g) || []).length <= 3,
+    '实际 ' + (stateSrc.match(/await git\(/g) || []).length + ' 处');
+  ok('多个仓库并发取状态，不串行',
+    /Promise\.all\(list\.map/.test(src), '仓库间应并发');
 
   /* ── B. 边界与错误态 ───────────────────────────────────────────── */
   console.log('\nB. 边界与错误态（先测失败态，避免只测成功态）');

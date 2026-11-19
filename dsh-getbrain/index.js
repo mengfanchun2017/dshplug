@@ -1229,6 +1229,102 @@ export function apply(ctx, config) {
         }
       },
     }), 'getnote: sprout route')
+    // 7b) 删除笔记：POST /plugins/getnote/delete
+    //
+    // 与其它写路由的区别：删除是**单程票**，所以门楷比 apply 更高：
+    //   1) 必须显式 confirm: 'DELETE'（不是 APPLY）
+    //   2) 必须二次确认 acknowledged:true —— 对应 gn.py 的 --i-understand-...
+    //   3) 默认就要存本地副本（trash/），存不下就拒绝删，不给「反正有回收站」的幻觉
+    // 为何不归到 /apply 的统一计划里：删除不该能混在批量分类里一键执行，
+    // 一次只删一条，才能让人真的逐条想一下。
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/getnote/delete',
+      handler: async (req, res) => {
+        const send = (code, obj) => {
+          res.writeHead(code, { 'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store' })
+          res.end(JSON.stringify(obj))
+        }
+        if (req.method !== 'POST') return send(405, { ok: false, error: 'POST only' })
+        let raw = ''
+        try {
+          for await (const chunk of req) {
+            raw += chunk
+            if (raw.length > 64 * 1024) throw new Error('请求体太大')
+          }
+          const body = JSON.parse(raw || '{}')
+          const noteId = String(body.noteId || '').trim()
+          if (!/^\d{10,25}$/.test(noteId)) {
+            return send(400, { ok: false, error: 'noteId 不合法（需纯数字）' })
+          }
+          if (body.confirm !== 'DELETE') {
+            return send(400, { ok: false, error: '缺少确认：需传 {"confirm":"DELETE"}' })
+          }
+          if (body.acknowledged !== true) {
+            return send(400, { ok: false,
+              error: '需要先在界面上勾选「我知道删除可能不可恢复」' })
+          }
+          const dryRun = body.dryRun !== false
+          const args = ['note-delete', '--note-id', noteId,
+            '--i-understand-deletion-may-be-permanent']
+          if (!dryRun) args.push('--apply')
+          if (body.skipTrash === true) args.push('--skip-trash')
+          const out = await runGn(config, resolveCreds(), args, undefined, 120000)
+          const txt = String(out.output || '')
+          // trash 路径从 stdout 里取，给界面显示「备份在哪」
+          const tm = txt.match(/\[trash\] 已存本地副本：(.+)/)
+          send(out.ok ? 200 : 500, {
+            ok: out.ok, dryRun, noteId,
+            trashPath: tm ? tm[1].trim() : '',
+            output: txt.slice(0, 4000),
+            error: out.ok ? undefined : (out.error || txt.slice(0, 400)),
+          })
+        } catch (error) {
+          send(400, { ok: false, error: String(error && error.message || error) })
+        }
+      },
+    }), 'getnote: delete route')
+    // 7c) 把层级路径解析成 note_id：POST /plugins/getnote/resolve
+    //
+    // 为何需要：删除要的是 note_id，而人在树上勾的是「知识库/目录/书/讲」
+    // 这种路径。没有这层，用户就只能自己去翻 19 位数字 —— 这正是
+    // 「让填 id 根本做不到」的根因。只读、不联网（扫本地镜像）。
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/getnote/resolve',
+      handler: async (req, res) => {
+        const send = (code, obj) => {
+          res.writeHead(code, { 'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store' })
+          res.end(JSON.stringify(obj))
+        }
+        if (req.method !== 'POST') return send(405, { ok: false, error: 'POST only' })
+        let raw = ''
+        try {
+          for await (const chunk of req) {
+            raw += chunk
+            if (raw.length > 256 * 1024) throw new Error('请求体太大')
+          }
+          const body = JSON.parse(raw || '{}')
+          const paths = Array.isArray(body.paths) ? body.paths.filter(Boolean) : []
+          if (!paths.length) return send(400, { ok: false, error: '没有收到任何选中项' })
+          if (paths.length > 2000) return send(400, { ok: false, error: '单次超过 2000 项，请分批' })
+          const out = await runGn(config, resolveCreds(),
+            ['resolve', '--paths', ...paths], undefined, 60000)
+          const txt = String(out.output || '')
+          const a = txt.indexOf('{')
+          const b = txt.lastIndexOf('}')
+          if (a < 0 || b <= a) {
+            return send(400, { ok: false, error: out.error || ('resolve 失败：' + txt.slice(0, 200)) })
+          }
+          const data = JSON.parse(txt.slice(a, b + 1))
+          send(200, { ok: true, noteIds: data.note_ids || [], count: (data.note_ids || []).length })
+        } catch (error) {
+          send(400, { ok: false, error: String(error && error.message || error) })
+        }
+      },
+    }), 'getnote: resolve route')
     // 7) 执行日志：GET /plugins/getnote/log?lines=200
     //
     // 读 dataGetbrain/logs/<YYYYMMDD>.jsonl 的最后 N 条（审计日志，一行一个请求）。

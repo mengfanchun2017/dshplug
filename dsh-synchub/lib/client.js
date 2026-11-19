@@ -222,6 +222,7 @@ window.__ModuleLoader__.load({
 .dsc .head-line.good{color:var(--dsw-alias-state-success-primary, #16a34a)}
 .dsc .head-line.warn{color:var(--dsw-alias-state-warn-primary, #d97706)}
 .dsc .head-line.red{color:var(--dsw-alias-state-error-primary, #dc2626)}
+.dsc .head-line.idle{color:var(--dsw-alias-label-secondary, #6b7280);font-weight:500}
 .dsc .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
 .dsc .stat{display:flex;flex-direction:column;align-items:center;gap:1px;padding:7px 4px;border-radius:8px;background:rgba(128,128,128,.08)}
 .dsc .stat b{font-size:17px;font-variant-numeric:tabular-nums;line-height:1.2}
@@ -589,7 +590,18 @@ window.__ModuleLoader__.load({
       const coveredBySteps = new Set(['remote', 'behind', 'ahead', 'dirty', 'switch']);
       const otherAlerts = alerts.filter(a => !coveredBySteps.has(a.kind));
       const next = (pre && pre.next) || null;
-      const noRemote = !conf.remote || !sess.remote;
+
+      /* 「还没读到数据」与「读到了、确实是没配置」必须分开（ADR-026 同型）。
+         之前 noRemote 直接看 conf.remote，而 own 还没回来时 conf 退化成 {}，
+         于是首帧就显示红色「还没连仓库」。用户看到的是「一进侧边栏先红一下，
+         过一会儿才正常」—— 这不是网络慢，是把「不知道」画成了「坏消息」。
+
+         loading  = 首帧，还没有过任何一次结论；
+         unknown  = 读过但没拿到（请求失败），是「不知道」，不是「没配」；
+         noRemote = 真读到了配置，且确实缺地址。 */
+      const loading = !own && !err;
+      const unknown = !own && Boolean(err);
+      const noRemote = Boolean(own && own.ok && (!conf.remote || !sess.remote));
 
       /* ---------------------------------------------------------------- 仪表盘
          用户反馈（2026-11-18）：「侧边栏应该让我快速了解现在还差多少要同步、差异在哪、
@@ -620,9 +632,15 @@ window.__ModuleLoader__.load({
       const minsToNext = nextAt ? Math.round((nextAt.getTime() - Date.now()) / 60000) : null;
 
       /* 一句话结论：只回答「现在该不该动手」。
-         优先级：没配远端 > 有未同步 > 落后 > 领先 > 干净。 */
+         优先级：读取中 > 读不到 > 没配远端 > 分叉 > 落后 > 有未同步 > 待推送 > 干净。
+
+         「读取中」放最前且不报红：这是首帧的正常状态，不是故障。
+         文案用「正在读取…」而不是「刷新中」—— 后者听起来像用户要做什么，
+         而这一屏用户什么都不用做，等零点几秒它自己就好了。 */
       let headline, tone;
-      if (noRemote) { headline = '还没连仓库，先去设置填两个地址'; tone = 'red'; }
+      if (loading) { headline = '正在读取本机状态…'; tone = 'idle'; }
+      else if (unknown) { headline = '状态没读到，点下面「重新检查」重试'; tone = 'red'; }
+      else if (noRemote) { headline = '还没连仓库，先去设置填两个地址'; tone = 'red'; }
       else if (divergedNow) { headline = '两台机器各自推过，普通同步会失败'; tone = 'red'; }
       else if (behindN > 0) { headline = `落后远端 ${behindN} 个提交，先拉取`; tone = 'red'; }
       else if (pendingN > 0) { headline = `还有 ${pendingN} 处本机变动没同步上去`; tone = 'warn'; }
@@ -631,7 +649,7 @@ window.__ModuleLoader__.load({
       else { headline = '已同步，不用管'; tone = 'good'; }
 
       const dashCard = e('div', { className: 'card dash' },
-        e('div', { className: 'head-line ' + tone }, (tone === 'good' ? '✓ ' : tone === 'red' ? '✗ ' : '! ') + headline),
+        e('div', { className: 'head-line ' + tone }, (tone === 'good' ? '✓ ' : tone === 'red' ? '✗ ' : tone === 'idle' ? '· ' : '! ') + headline),
 
         /* 四个数字：一眼看完全部关键量 */
         e('div', { className: 'stats' },
@@ -974,6 +992,7 @@ window.__ModuleLoader__.load({
             e('div', { className: 'note' },
               '与「开工检查」重复的项不会在这里重写 —— 同一件事只说一遍。')) : null,
 
+          reposCard,
           stepsCard,
 
           /* 状态摘要：通道快照 + 空闲开关一句话（配置本身去设置里改）。 */

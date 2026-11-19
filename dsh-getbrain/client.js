@@ -153,6 +153,25 @@ const zh = {
   undoLoading: '正在读撤销记录…',
   undoFail: '读撤销记录失败：',
   undoNone: '没有可撤销的批次。每次真写前会自动拍一份归属快照，撤销就靠它。',
+  // —— 删除区 ——
+  delTitle: '删除笔记',
+  delSub: '单程票：平台删除可能不进回收站，本工具会先存本地副本',
+  delExpand: '展开删除区',
+  delCollapse: '收起',
+  delWarn: '官方 FAQ 自列 bug：删除后可能直接彻底删除、不进回收站。所以：① 每次只删一条；② 删前先把正文存到本地 trash/；③ 存不下就拒绝删除。',
+  delIdLabel: '笔记 ID',
+  delIdPh: '数字 ID（可从勾选带入）',
+  delResolving: '正在解析…',
+  delUseSel: '用勾选的那一条',
+  delSelNeed: '先在上面的树上勾选要删的那一篇，或直接填 ID',
+  delAck: '我知道删除可能不可恢复',
+  delDry: '干跑（先备份到 trash/，不删）',
+  delArm: '准备删除…',
+  delReally: '真的删掉（不可恢复）',
+  delOk: '完成。',
+  delOkDry: '（干跑，线上未动）',
+  delFail: '失败：',
+  delTrashAt: '本地副本：',
   undoHint: '第一步是干跑，不会发包。确认清单对再点真撤销。',
   undoNotes: '{n} 条',
   undoDry: '干跑',
@@ -191,6 +210,9 @@ const zh = {
   targetKbOpt: '知识库',
   targetTagOpt: '标签',
   topicIdPh: 'topic_id',
+  kbPickPh: '选择知识库…',
+  kbPickNew: '＋ 新建知识库（手填名字）',
+  kbNewNamePh: '新库名',
   tagPh: '新标签名',
   logLoading: '正在读日志…',
   logFail: '读日志失败：',
@@ -398,6 +420,25 @@ const en = {
   undoLoading: 'Reading undo records…',
   undoFail: 'Failed to read undo records: ',
   undoNone: 'No undoable batch. Every real write snapshots ownership first; undo relies on it.',
+  // —— delete ——
+  delTitle: 'Delete note',
+  delSub: 'One-way: the platform may not keep a recycle bin, so a local copy is saved first',
+  delExpand: 'Open delete area',
+  delCollapse: 'Collapse',
+  delWarn: 'The official FAQ lists this bug: deleting may remove the note permanently with no recycle bin. Hence: (1) one note at a time; (2) the body is copied to local trash/ before deleting; (3) if the copy fails, deletion is refused.',
+  delIdLabel: 'Note ID',
+  delIdPh: 'Numeric ID (can be filled from selection)',
+  delResolving: 'Resolving…',
+  delUseSel: 'Use the selected one',
+  delSelNeed: 'Tick the lecture you want to delete in the tree above, or type an ID',
+  delAck: 'I understand deletion may be irreversible',
+  delDry: 'Dry run (copy to trash/ first, do not delete)',
+  delArm: 'Prepare to delete…',
+  delReally: 'Delete for real (irreversible)',
+  delOk: 'Done.',
+  delOkDry: ' (dry run, nothing changed online)',
+  delFail: 'Failed: ',
+  delTrashAt: 'Local copy: ',
   undoHint: 'Step one is a dry-run; nothing is sent. Confirm the list, then click undo for real.',
   undoNotes: '{n} notes',
   undoDry: 'Dry-run',
@@ -436,6 +477,9 @@ const en = {
   targetKbOpt: 'Knowledge base',
   targetTagOpt: 'Tag',
   topicIdPh: 'topic_id',
+  kbPickPh: 'Choose a knowledge base…',
+  kbPickNew: '＋ New knowledge base (type a name)',
+  kbNewNamePh: 'New KB name',
   tagPh: 'New tag name',
   logLoading: 'Reading the log…',
   logFail: 'Failed to read the log: ',
@@ -814,14 +858,30 @@ window.__ModuleLoader__.load({
       const [targetKind, setTargetKind] = React.useState('kb')
       const [topicId, setTopicId] = React.useState('')
       const [tagName, setTagName] = React.useState('')
+      // 「＋ 新建知识库」时手填的名字。单独一个状态，因为下拉框的 value
+      // 要保留 '__new__' 这个哨兵值，不能把库名塞回 topicId。
+      const [newKbName, setNewKbName] = React.useState('')
       const onPlanMenu = React.useCallback(() => {
-        const target = targetKind === 'kb'
-          ? { kind: 'kb', topicId: topicId.trim() }
-          : { kind: 'tag', tag: tagName.trim() }
-        if (target.kind === 'kb' && !target.topicId) return
-        if (target.kind === 'tag' && !target.tag) return
+        let target
+        if (targetKind === 'kb') {
+          if (!topicId) return
+          if (topicId === '__new__') {
+            // 新建：交给后端 kb_ensure（同名复用，幂等），不需要人知道 id
+            const nm = newKbName.trim()
+            if (!nm) return
+            target = { kind: 'kb', topicName: nm }
+          } else if (topicId.startsWith('name:')) {
+            // 清单里没拿到 id 的库（scope 未缓存）——按名字归，同样不需要 id
+            target = { kind: 'kb', topicName: topicId.slice(5) }
+          } else {
+            target = { kind: 'kb', topicId: topicId.trim() }
+          }
+        } else {
+          target = { kind: 'tag', tag: tagName.trim() }
+          if (!target.tag) return
+        }
         onPlan(target)
-      }, [targetKind, topicId, tagName, onPlan])
+      }, [targetKind, topicId, tagName, newKbName, onPlan])
       // 拖拽落点：把一个层级拖到另一个知识库上 → 直接生成计划（不写）。
       //
       // 为何走 onPlan 而不直接调 /apply：拖拽只是一个「意图」，
@@ -870,6 +930,77 @@ window.__ModuleLoader__.load({
         }
       }, [loadUndos])
 
+      // ── 删除区状态 ──────────────────────────────────────
+      // 为何要一整套本地状态而不是复用 apply：删除不能混进批量计划，
+      // 也不能默认干跑——它需要“展开、勾确认、先干跑、再真删”四步。
+      const [delOpen, setDelOpen] = React.useState(false)
+      const [delNoteId, setDelNoteId] = React.useState('')
+      const [delAck, setDelAck] = React.useState(false)
+      const [delResult, setDelResult] = React.useState(null)
+      const [delBusy, setDelBusy] = React.useState(false)
+      const [delArmed, setDelArmed] = React.useState(false)
+      const runDelete = React.useCallback(async (dry) => {
+        if (delBusy || !delNoteId) return
+        setDelBusy(true)
+        setDelResult(null)
+        try {
+          const r = await fetch('/plugins/getnote/delete', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ confirm: 'DELETE', acknowledged: true,
+              dryRun: dry, noteId: delNoteId }),
+          })
+          const d = await r.json()
+          setDelResult(d)
+          if (d && d.ok && !dry) setDelArmed(false)
+        } catch (e) {
+          setDelResult({ ok: false, error: String((e && e.message) || e) })
+        } finally {
+          setDelBusy(false)
+        }
+      }, [delNoteId, delBusy])
+
+      // 把树上勾的层级路径转成 note_id。
+      // 为何必须做这一步：直接要求用户手填 19 位 note_id 等于没法用。
+      const [delResolving, setDelResolving] = React.useState(false)
+      const loadFromSel = React.useCallback(async (paths) => {
+        if (!paths || !paths.length) return
+        setDelResolving(true)
+        setDelResult(null)
+        try {
+          const r = await fetch('/plugins/getnote/resolve', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ paths }),
+          })
+          const d = await r.json()
+          if (!d || !d.ok) {
+            setDelResult({ ok: false, error: (d && d.error) || ('HTTP ' + r.status) })
+            return
+          }
+          const ids = d.noteIds || []
+          if (!ids.length) {
+            setDelResult({ ok: false, error: '选中的层级下没有任何笔记' })
+            return
+          }
+          setDelArmed(false)
+          if (ids.length === 1) {
+            setDelNoteId(String(ids[0]))
+            setDelResult({ ok: true, output: '已从勾选带入 1 条笔记：' + ids[0] })
+          } else {
+            // 多层勾选会解析出很多条。删除只能一条条来，所以不默默取第一条。
+            setDelResult({ ok: false,
+              error: '这次勾选解析出 ' + ids.length + ' 条笔记。删除只能一次一条：'
+                + '请只勾选一篇「讲」，或直接填 ID。前几个：' + ids.slice(0, 5).join(', ') })
+          }
+        } catch (e) {
+          setDelResult({ ok: false, error: String((e && e.message) || e) })
+        } finally {
+          setDelResolving(false)
+        }
+      }, [])
       // 真写成功后、或每次进「确认执行」页，都要刷新可撤销列表：
       // 刚写的批次必须马上出现，否则用户以为无法回退。
       React.useEffect(() => {
@@ -1021,7 +1152,13 @@ window.__ModuleLoader__.load({
         onAutoPlan, autoPlan,
         drag: [drag, setDrag], dropOn: [dropOn, setDropOn], onDropToKb,
         undo: undos, onUndo, undoResult, undoBusy, undoArmed, setUndoArmed,
-        targetKind, setTargetKind, topicId, setTopicId, tagName, setTagName }
+        targetKind, setTargetKind, topicId, setTopicId, tagName, setTagName,
+        newKbName, setNewKbName,
+        del: { open: [delOpen, setDelOpen], noteId: [delNoteId, setDelNoteId],
+          ack: [delAck, setDelAck], result: [delResult, setDelResult],
+          busy: [delBusy, setDelBusy], armed: [delArmed, setDelArmed],
+          run: runDelete, resolveFromSel: loadFromSel, resolving: delResolving },
+        selPaths: Array.from(sel) }
 
       let content
       if (view === 'structure') content = renderStructure(T, h, P, inv, act)
@@ -1418,23 +1555,139 @@ window.__ModuleLoader__.load({
                 h('option', { value: 'kb' }, T('targetKbOpt', '知识库')),
                 h('option', { value: 'tag' }, T('targetTagOpt', '标签'))),
               act.targetKind === 'kb'
-                ? h('input', {
-                    style: { ...P.input, width: 130 },
-                    placeholder: T('topicIdPh', 'topic_id（11 位）'),
+                // 之前这里是必填 topic_id 输入框，用户根本不知道 ID 从哪来。
+                // 库存清单（inventory）里本来就有每个库的真实 id，直接拿来用；
+                // 没清单时退化为「新建/按名归库」，总之不需要人去翻 ID。
+                ? h('select', {
+                    style: { ...P.input, maxWidth: 190 },
                     value: act.topicId,
                     onChange: (e) => act.setTopicId(e.target.value),
-                  })
+                  },
+                    h('option', { value: '' }, T('kbPickPh', '选择知识库…')),
+                    ownKb.map((k) => h('option', { key: k.id || k.name, value: k.id || ('name:' + k.name) },
+                      `${k.name}（${k.count}）`)),
+                    h('option', { value: '__new__' },
+                      T('kbPickNew', '＋ 新建知识库（手填名字）')))
                 : h('input', {
                     style: { ...P.input, width: 130 },
                     placeholder: T('tagPh', '新标签名'),
                     value: act.tagName,
                     onChange: (e) => act.setTagName(e.target.value),
                   }),
+              // 选了「新建」才让人手填库名（这是唯一需要打字的地方）
+              act.targetKind === 'kb' && act.topicId === '__new__'
+                ? h('input', {
+                    style: { ...P.input, width: 130 },
+                    placeholder: T('kbNewNamePh', '新库名'),
+                    value: act.newKbName || '',
+                    onChange: (e) => act.setNewKbName(e.target.value),
+                  })
+                : null,
               h('button', { style: { ...P.btn, ...P.primary }, onClick: act.onPlanMenu },
                 T('selToPlan', '生成计划 →')))
-          : h('p', { style: P.muted }, T('selHint', '点开层级、勾选「讲」，就能把它整批归到别的知识库或加标签。')))
+          : h('p', { style: P.muted }, T('selHint', '点开层级、勾选「讲」，就能把它整批归到别的知识库或加标签。')),
+        renderDelete(T, h, P, act))
     }
 
+    /**
+     * 删除区（默认收起）。
+     *
+     * 为何单独一个区、还要主动展开：删除是单程票。官方 FAQ 自列
+     * 「删除后直接彻底删除、未进回收站」，所以这里不做“一键批量删”。
+     * 流程故意长：展开 → 填/选中一条 → 勾「我知道可能不可恢复」→ 干跑 → 真删。
+     * 干跑会先把正文存到 <数据目录>/trash/，真删时也先存再删
+     * （gn.py 里存不下就拒绝删，不给“反正有回收站”的幻觉）。
+     */
+    function renderDelete(T, h, P, act) {
+      const dl = act.del || {}
+      const [open, setOpen] = dl.open || [false, () => {}]
+      const [noteId, setNoteId] = dl.noteId || ['', () => {}]
+      const [ack, setAck] = dl.ack || [false, () => {}]
+      const [result, setResult] = dl.result || [null, () => {}]
+      const [busy, setBusy] = dl.busy || [false, () => {}]
+      const [armed, setArmed] = dl.armed || [false, () => {}]
+      const delResolving = !!dl.resolving
+
+      // 删除只处理一条：把树上勾的层级交给 loadFromSel 去解析成 note_id。
+      // 之前靠人自己填 19 位 ID，根本没法用——现在从勾选带入。
+      const picked = (act.selPaths || []).slice()
+      const canUse = picked.length > 0
+
+      const head = h('div', { style: { ...P.sgHead, marginTop: 16 } },
+        h('h2', { style: { ...P.cardTitle, marginBottom: 0 } }, T('delTitle', '删除笔记')),
+        h('span', { style: { ...P.muted, fontSize: 11 } },
+          T('delSub', '单程票：平台删除可能不进回收站，本工具会先存本地副本')),
+        h('button', {
+          style: { ...P.btn, marginLeft: 'auto' },
+          onClick: () => setOpen(!open),
+        }, open ? T('delCollapse', '收起') : T('delExpand', '展开删除区')))
+
+      if (!open) {
+        return h('section', { style: { ...P.card, marginTop: 12 } }, head)
+      }
+
+      return h('section', { style: { ...P.card, marginTop: 12 } }, head,
+        h('p', { style: P.muted }, T('delWarn',
+          '官方 FAQ 自列 bug：删除后可能直接彻底删除、不进回收站。所以：① 每次只删一条；② 删前先把正文存到本地 trash/；③ 存不下就拒绝删除。')),
+
+        h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' } },
+          h('span', { style: { fontSize: 12 } }, T('delIdLabel', '笔记 ID')),
+          h('input', {
+            style: { ...P.input, width: 220 },
+            placeholder: T('delIdPh', '数字 ID（可从勾选带入）'),
+            value: noteId,
+            onChange: (e) => { setNoteId(e.target.value.replace(/[^\d]/g, '')); setArmed(false) },
+          }),
+          canUse
+            ? h('button', {
+                style: P.btn,
+                disabled: delResolving,
+                onClick: () => dl.resolveFromSel && dl.resolveFromSel(picked),
+              }, delResolving
+                ? T('delResolving', '正在解析…')
+                : T('delUseSel', '用勾选的那一条'))
+            : h('span', { style: { ...P.muted, fontSize: 11 } },
+                T('delSelNeed', '先在上面的树上勾选要删的那一篇，或直接填 ID'))),
+        h('label', { style: { ...P.boolRow, marginTop: 10 } },
+          h('input', {
+            type: 'checkbox', checked: ack,
+            onChange: (e) => { setAck(e.target.checked); setArmed(false) },
+          }),
+          h('span', { style: { color: 'var(--dsw-alias-state-error-primary)' } },
+            T('delAck', '我知道删除可能不可恢复'))),
+
+        h('div', { style: { display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' } },
+          h('button', {
+            style: { ...P.btn, ...(busy || !noteId || !ack ? { opacity: 0.5, cursor: 'not-allowed' } : null) },
+            disabled: busy || !noteId || !ack,
+            onClick: () => dl.run && dl.run(true),
+          }, T('delDry', '干跑（先备份到 trash/，不删）')),
+          armed
+            ? h('button', {
+                style: { ...P.btn, ...P.danger, ...(busy ? { opacity: 0.5 } : null) },
+                disabled: busy,
+                onClick: () => dl.run && dl.run(false),
+              }, T('delReally', '真的删掉（不可恢复）'))
+            : h('button', {
+                style: { ...P.btn, ...(busy || !noteId || !ack ? { opacity: 0.5, cursor: 'not-allowed' } : null) },
+                disabled: busy || !noteId || !ack,
+                onClick: () => setArmed(true),
+              }, T('delArm', '准备删除…'))),
+
+        result
+          ? h('div', { style: { marginTop: 12 } },
+              h('p', { style: { ...P.muted, color: result.ok ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)' } },
+                result.ok
+                  ? T('delOk', '完成。') + (result.dryRun ? T('delOkDry', '（干跑，线上未动）') : '')
+                  : T('delFail', '失败：') + (result.error || '')),
+              result.trashPath
+                ? h('p', { style: P.muted }, T('delTrashAt', '本地副本：') + result.trashPath)
+                : null,
+              result.output
+                ? h('pre', { style: P.logPre }, String(result.output).slice(0, 2000))
+                : null)
+          : null)
+    }
     /** 「确认执行」页：列出计划、干跑、双重闸门。 */
     function renderApply(T, h, P, plan, apply) {
       if (plan.phase === 'building') {
