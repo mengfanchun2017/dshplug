@@ -82,11 +82,23 @@ git --version
 # 3) 本机仓库级设置（MinGit 的 schannel 会报 SEC_E_NO_CREDENTIALS，必须换 OpenSSL）
 git -C C:\dsh\dshplug config http.sslBackend openssl
 
-# 4) 认证：HTTPS + PAT，Windows 凭据管理器各机做一次
-#    GitHub → Settings → Developer settings → Fine-grained token
-#    只授权 dshplug 私有仓库、只给 Contents: Read and write
-#    首次 push 时 GCM 弹窗：用户名 = GitHub 账号，密码栏粘贴 PAT（不是账号密码）
-#    SSH 实测被墙，不要用 git@github.com: 地址
+# 4) 认证：交给 dsh-gitok（GCM + Windows 凭据管理器），不要手工填 PAT
+#    在 DSH 里说一句「初始化 git 认证」即可，等价于跑：
+#      gitok_bootstrap                       # S0 自检 → S1 幂等配 helper → S2 登录 → S3 验收
+#    它做的事：把 credential.helper 指向 GCM，密钥由 GCM 写进 Windows 凭据管理器
+#    （DPAPI 加密，用户态可见、离开本机不可用），令牌全程不经过我和聊天。
+#
+#    为什么不再推荐手贴 PAT：
+#      · PAT 会以明文留在命令历史/聊天记录里，且永不过期，泄露即长期有效
+#      · 凭据管理器里是 LegacyGeneric 明文条目，换机器要重贴，容易贴错账号
+#      · GCM 支持设备流刷新，过期自动续，不用记"这个 token 什么时候到期"
+#
+#    要确认现在是什么状态：gitok_doctor（只读体检，令牌只报类型与长度）
+#    要端到端验证：          gitok_verify（对目标仓库跑 git ls-remote）
+#    要换掉旧凭据：          gitok_rotate（先预检通路，断网时不会误删可用凭据）
+#
+#    历史备注：SSH（git@github.com:）在本机实测不通，所以这里统一用 HTTPS。
+#    现在有了 GCM 也不必回头用 SSH —— HTTPS + GCM 已经不需要记密码。
 ```
 
 > 网络是间歇的：直连可能 `Connection was reset`，代理 7897 可能 `TLS connect error`。
@@ -372,25 +384,64 @@ Get-Process -Id $pid0 | Select-Object Id, StartTime
 
 ---
 
-## 7. 当前仓库状态（2026-11-12，写死快照）
+## 7. 当前仓库状态（2026-11-19，写死快照）
 
 | 项 | 值 |
 |---|---|
-| 分支 / 远端 | `master` → `https://github.com/mengfanchun2017/dshplug.git` |
-| 本地 HEAD | `3221bdf`（`origin/master` = `5438e0ad`，**ahead 1**：「新增 dsh-pixel」未推——该插件已于 2026-11-16 退役并归档，见 [`archive/dsh-pixel/`](<archive/dsh-pixel/README.md>)；这份历史快照留着不追改） |
-| 未提交 | 根 `.gitignore`、`plugpush.ps1`、`README`、`ADR.md`、`docs/`、4 份插件内文档/代码、`dsh-getbrain/{cordis.patch.yml,index.js}`（后两项是你之前的 dataDir 绝对路径修正，非本次改动） |
-| `dsh-synchub` 状态目录 | `C:\Users\franc\.dsh\dsh-synchub\` **不存在** → 同步引擎尚未配置，面板会显示「尚未配置」；本文不依赖它 |
-| 本次脚本修复 | `plugpush.ps1` 去掉 `status -eq 'active'` 过滤（含 `dev` 插件 + 根级文件）；`install.ps1 -Check` 汇总改用 `packageName`（否则 `dsh-getbrain` 误报 missing） |
+| 分支 / 远端 | `master` → `https://github.com/mengfanchun2017/dshplug.git`（GitHub 上已改名为 `dshwp-plugin`，本地目录仍是 `C:\dsh\dshplug`） |
+| 基线仓库 | `C:\dsh\dw-base`，分支 `main`，**尚未建远端**（本地 `7bf9e2d`，128 文件 / 1.28 MB） |
+| 认证 | GCM + Windows 凭据管理器（`gitok_bootstrap` 一键配）。不再手工贴 PAT，见第 0 步 ④ |
+| 同步中心 | `C:\Users\franc\.dsh\dsh-synchub\`（`config.json` / `payload/` / `state.json` / `repos/{config,sessions}` / `backups/`） |
+| 代码仓库登记 | `dshwp-plugin` → `C:\dsh\dshplug`；`dshwp-base` → `C:\dsh\dw-base`（设置面板可增删，路径任意） |
+| 本次脚本修复 | `plugpush.ps1` 去掉 `status -eq 'active'` 过滤（含 `dev` 插件 + 根级文件）；`install.ps1 -Check` 汇总改用 `packageName` |
 
-> 下一步（`dsh-synchub` 自动同步）属于**后续插件内容**：在 GUI 设置 → 同步中心填
-> `dsh-config` / `dsh-sessions` 两个私有仓库远端，第一台「① 推送」建基线、第二台「① 拉取」。
-> 在打通本文的命令行链路之前，先不要配它，免得两条通道互相干扰。
+> **三种"仓库"别混**（这是最容易搞错的一处）：
+>
+> | 名称 | 是什么 | 谁在管 | 在哪配置 |
+> |---|---|---|---|
+> | `dsh-config` / `dsh-sessions` | 同步通道：只搬 `profiles/` 与 `skills/` | `dsh-synchub` | GUI 设置 → Msynchub |
+> | `dshwp-plugin` / `dshwp-base` | 代码仓库：完整的开发仓库（含源码、文档、提交历史） | `dsh-synchub` 的「代码仓库同步」卡 | 同上，第二张表 |
+> | `C:\dsh\dw-base` | 基线工作区目录本身（DSH 的工作区，不是同步通道） | 你自己 / DSH | DSH 工作区列表 |
+>
+> 前两者**都要远端**，但目的不同：通道是"把我的配置带到另一台机器"，代码仓库是"把我的代码备份到 GitHub"。
+> 第三条是**本地目录**，它可以是代码仓库（现在是），也可以完全不入库。
+
+### 7.1 加一个新的代码仓库（不必在 `C:\dsh` 下）
+
+对应场景：「我还有一个之前的仓库要做同步和开发，但不在 dsh 目录下」。
+
+1. GUI 设置 → **Msynchub** → 滚到「代码仓库同步」表。
+2. 点「+ 增加一个仓库」，填两项：
+   - **路径**：必须是**绝对路径**（如 `D:\work\old-project`）。相对路径会被拒 —— 相对谁都不明确。
+   - **间隔**：自动提交的分钟数，`0` 表示不自动提交、只手动点。
+3. 保存后回侧边栏，卡片里会多一行。点该行的「同步」即 `add -A → commit → push`。
+
+三个必须知道的边界：
+
+- **「移除」只从清单里删，不删磁盘上的仓库。** 想真删目录得自己动手。
+- **没连远端（没有 `origin`）时只提交、不推送**，卡片会显示黄色「未连远端」并说明
+  「本地有提交也无处可推」。这是**故意的**：有提交但没推 = 只备份在本机，硬盘坏了就没了，
+  不能给它打绿勾（ADR-032）。
+- **自动提交只按"过了多少分钟"触发，与"用户是否空闲"无关。**
+  同步通道的自动上传看的是空闲，代码仓库看的是时间 —— 两个门是独立的，不要合并（ADR-024）。
+
+先建远端再登记，顺序更省事：
+
+```powershell
+# 在本机仓库里建好远端（GitHub 上先建一个空的私有仓库，不要勾 README）
+cd D:\work\old-project
+git remote add origin https://github.com/<你>/<仓库名>.git
+git push -u origin main          # 首次推，之后 Msynchub 就能推了
+```
+
+> 建远端这一步 `gh` CLI 没装，只能用网页或 REST API。之后 `Msynchub` 会自己按分钟提交推送。
 
 ---
-
 ## 8. 验收清单
 
-- [ ] `& .\plugpush.ps1 -List` 列出 4 个插件（含 `dsh-larkcli`）
+**仓库与插件**
+
+- [ ] `& .\plugpush.ps1 -List` 列出全部插件（含 `dsh-larkcli`）
 - [ ] `& .\plugpush.ps1 -All "x" -DryRun` 的清单里能看到 `dsh-larkcli`、根级 `.gitignore`、`BOOTSTRAP.md`
 - [ ] `& .\install.ps1 -Check` 输出「全部为 link: 形态且已安装」（`dev` 插件的 `missing` 不算问题）
 - [ ] A 机 `plugpush` 后 `git rev-list --left-right --count origin/master...HEAD` 右列为 0
@@ -398,3 +449,32 @@ Get-Process -Id $pid0 | Select-Object Id, StartTime
 - [ ] B 机 `& .\install.ps1 -Check` 同样全绿
 - [ ] B 机完全退出 DSH 再打开，插件面板/侧栏出现
 - [ ] 两台机器工作区绝对路径一致（`C:\dsh\dshplug`）
+
+**认证（新机必做，`gitok_bootstrap` 一条词）**
+
+- [ ] 在 DSH 里说「初始化 git 认证」，`gitok_bootstrap` 跑到 S3 验收通过
+- [ ] `gitok_doctor` 报的凭据存储后端是 GCM / 凭据管理器，不是明文文件
+- [ ] `gitok_list` 里没有 `~/.git-credentials` 这类明文条目（有就该 `gitok_bootstrap cleanPlaintext`）
+- [ ] `gitok_verify` 对 `https://github.com/mengfanchun2017/dshwp-plugin.git` 返回 ref
+
+**Msynchub 面板（打开即验，不用等）**
+
+- [ ] 侧边栏点开**立刻有内容**，不出现「正在读取本机状态…」（说明 20 分钟缓存命中）
+- [ ] 头部时间写着「xx:xx 的结果（N 分钟内沿用，打开不用等）」，不是干巴巴的「检查于 xx:xx」
+- [ ] 已配置时一句话结论是「已同步，不用管」或明确的待办数，**不是**「还缺两个仓库地址」
+- [ ] 代码仓库卡每行是四态之一：绿 `✓`（真同步）/ 黄 `!`（有差异或未连远端）/ 红 `✗`（读不到）
+- [ ] `C:\dsh\dw-base` 那行显示**黄色「未连远端」** —— 它确实没推任何地方，不该是绿的
+- [ ] 设置里「代码仓库同步」表的路径都是绝对路径，间隔是数字
+
+**会话迁移（改过工作区路径才需要）**
+
+- [ ] `GET /api/dsh-synchub/session-move?id=<id>&to=<工作区名>` 能预览出源/目标组目录
+- [ ] `POST` 带 `{confirm:'MOVE'}` 才执行；不带 confirm 必须返回 400 且**不动任何文件**
+- [ ] 迁移后侧边栏会话出现在目标工作区，不再是「未分组」
+- [ ] `<state>/backups/move-<时间>-<会话id>/` 里有回滚点
+
+**三个测试套件（改了代码就跑）**
+
+- [ ] `test\synchub-smoke.cjs` — 25 条路由 + 导出 + guard
+- [ ] `test\sessionmove-smoke.cjs` — 7 组，含 14 个真实组目录交叉验证
+- [ ] 其余 7 个 `test\*-smoke.cjs` 全绿（一共 9 个）

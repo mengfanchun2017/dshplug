@@ -1,4 +1,4 @@
-// dsh-synchub · 浏览器半（v0.5.9）
+// Msynchub 浏览器半 v0.7.0：主面板（只读状态 + 手动同步）+ 设置面板。
 // 与 chatsync / dsh-config-manager 同形态：window.__ModuleLoader__.load 包装 + Cordis 导出。
 //
 // v0.3.0 的界面职责变了：0.2.0 是「看别人状态」，现在是「管自己同步」。
@@ -355,16 +355,76 @@ window.__ModuleLoader__.load({
             e('td', null, hide ? '—' : bytes(r.bytes)));
         })));
     }
-    /* ---------------------------------------------------------------- 主面板 */
+/* ──────────────────────────────────────────────────────────────────────────────
+   跨挂载缓存：侧边栏关掉再打开不该重新联网
+
+   问题（用户原话）：「侧边栏每次点击都要重新去刷新，能否设定一个刷新时间，
+   如果没到就以上次结果显示，但是提示上次检查是什么时候」。
+
+   为什么不能只靠组件内 state：侧边栏收起时组件**被卸载**，useState 全丢，
+   下次打开必然是空的 → 只能重新请求。所以要存在模块级（组件外）。
+
+   TTL 取 20 分钟，与已有的 20 秒轮询 + 5 分钟全量刷新配合：
+     · 20 秒轮询负责「面板开着时数据新鲜」；
+     · 这个 TTL 只负责「刚打开的那一瞬间要不要等网络」。
+   两者不冲突：命中缓存先渲染旧值，紧接着照常跑 refresh 更新（不阻塞首屏）。
+   这样「打开就有内容」和「数据最终是最新的」同时成立，不是二选一。
+   ────────────────────────────────────────────────────────────────────────────── */
+const PANEL_TTL_MS = 20 * 60 * 1000;
+const PANEL_CACHE = {
+  own: null, map: null, repos: null, pre: null, selfCheck: null,
+  at: 0, /* 上次成功刷新的时刻（毫秒） */
+};
+
+/** 缓存是否还新鲜。 */
+function panelCacheFresh() {
+  return Boolean(PANEL_CACHE.at) && (Date.now() - PANEL_CACHE.at) < PANEL_TTL_MS;
+}
+
+/**
+ * 把一次刷新的结果写回缓存（只存成功拿到的，失败不清空旧值）。
+ */
+function panelCacheStore(patch) {
+  if (!patch) return;
+  for (const k of ['own', 'map', 'repos', 'pre', 'selfCheck']) {
+    if (patch[k]) PANEL_CACHE[k] = patch[k];
+  }
+  if (patch.own || patch.map) PANEL_CACHE.at = Date.now();
+}
+
+/* 检查时间要说明「这个数字新不新、要不要管」，
+   只写「检查于 14:32」用户不知道它是刚才还是刚才那个「刚才」（ADR-026 同型）。
+   规则：
+     · 20 分钟内   → 「14:32 的结果（N 分钟内沿用，打开不用等）」
+     · 20 分钟以上 → 「14:32 的结果（已过 N 分钟，正在后台更新）」
+     · 没有时间    → 「尚未检查」
+   注意：这里只解释它，不改刷新行为（那由 PANEL_TTL_MS 与轮询控制）。 */
+function checkedAtText(atMs) {
+  if (!atMs) return '尚未检查';
+  const t = new Date(atMs);
+  const hh = String(t.getHours()).padStart(2, '0');
+  const mm = String(t.getMinutes()).padStart(2, '0');
+  const ageMs = Date.now() - atMs;
+  if (ageMs < PANEL_TTL_MS) {
+    const leftMin = Math.max(1, Math.ceil((PANEL_TTL_MS - ageMs) / 60000));
+    const tail = ' 分钟内沿用，打开不用等）';
+    return hh + ':' + mm + ' 的结果（' + leftMin + tail;
+  }
+  const passedMin = Math.floor(ageMs / 60000);
+  const tail2 = ' 分钟，正在后台更新）';
+  return hh + ':' + mm + ' 的结果（已过 ' + passedMin + tail2;
+}
     function Panel() {
-      const [own, setOwn] = useState(null);
-      const [pre, setPre] = useState(null);
-      const [map, setMap] = useState(null);
+      /* 首帧就用上次的结果渲染：侧边栏关掉再打开时不必等网络（用户要求）。
+         缓存为空（首次使用 / 进程刚起）时仍是 null，会走正常的加载态。 */
+      const [own, setOwn] = useState(() => PANEL_CACHE.own);
+      const [pre, setPre] = useState(() => PANEL_CACHE.pre);
+      const [map, setMap] = useState(() => PANEL_CACHE.map);
       const [busy, setBusy] = useState('');
       const [err, setErr] = useState('');
       const [okMsg, setOkMsg] = useState('');
       const [log, setLog] = useState([]);
-      const [checkedAt, setCheckedAt] = useState(null);
+      const [checkedAt, setCheckedAt] = useState(() => (PANEL_CACHE.at ? new Date(PANEL_CACHE.at) : null));
       /* 历史：这里曾有 draft/setDraftField 用来在侧边栏直接填仓库地址。
          0.5.4 起配置只在设置里改（ADR-022），因此整套输入与保存链路已从侧边栏移除；
          旧 bug（setDraft 当字段 setter 用）也随之不存在了。回归断言看 smoke D 段。 */
@@ -403,6 +463,8 @@ window.__ModuleLoader__.load({
         if (rp.status === 'fulfilled' && rp.value) setRepos(rp.value);
         setCheckedAt(new Date());
         bridge.publish(deriveAlerts(S));
+        /* 快接口也回写：own/map 是缓存的「新鲜度锚」，at 由它们刷新。 */
+        panelCacheStore({ own: S, map: M, repos: rp.status === 'fulfilled' ? rp.value : null });
         // 快接口失败才值得报错；慢接口单独处理，不拖累首屏。
         const fastFail = [s, m].filter(x => x.status === 'rejected');
         if (fastFail.length) {
@@ -420,10 +482,15 @@ window.__ModuleLoader__.load({
         const [p, sc] = slow;
         if (p.status === 'fulfilled' && p.value) setPre(p.value);
         if (sc.status === 'fulfilled' && sc.value) setSelfCheck(sc.value);
+        /* 回写跨挂载缓存：下次打开侧边栏直接用它先渲染，不用等网络。 */
+        panelCacheStore({ pre: p.status === 'fulfilled' ? p.value : null, selfCheck: sc.status === 'fulfilled' ? sc.value : null });
       }, []);
 
       useEffect(() => {
         mounted.current = true;
+        /* 缓存还新鲜（20 分钟内）→ 首帧已经有内容了，这时 refresh 只做「后台更新」，
+           不进入加载态、不显示正在读取，用户点开就能看见上次结论和时间。*/
+        const cached = panelCacheFresh();
         refresh(false);
         /* 轮询只跑快接口：不能每 45s 就把 preflight + self-check 也拉一遍，
            那等于每 45s 做一次 87MB 指纹 + 4 趟 GitHub 往返。
@@ -813,23 +880,34 @@ window.__ModuleLoader__.load({
             '  ' + repoShown.length + ' 个 · 定时提交 ' + (reposAuto.enabled ? (reposAuto.minutes || 60) + ' 分钟' : '未开启'))),
         e('div', { className: 'muted', style: { marginBottom: 6 } },
           '把你自己的 git 仓库（插件源码 / 工作区笔记）纳入：先提交，再先拉后推；冲突时停下等你处理。'),
-        repoShown.map((r, i) => e('div', { key: r.id || i, className: 'step ' + (r.error ? 'fail' : (r.unsynced > 0 || r.ahead > 0 || r.behind > 0) ? 'need' : 'ok') },
-          e('span', { className: r.error ? 'red' : (r.unsynced > 0 || r.ahead > 0) ? 'warn' : 'good' },
-            r.error ? '✗' : (r.unsynced > 0 || r.ahead > 0 || r.behind > 0) ? '!' : '✓'),
-          e('div', { style: { flex: 1 } },
-            e('strong', null, r.id),
-            e('span', { className: 'muted', style: { fontSize: '0.85em', marginLeft: 6 } }, r.branch || ''),
-            r.error
-              ? e('div', { className: 'act red' }, r.error)
-              : e('div', { className: 'act' },
-                (r.unsynced || 0) + ' 未提交',
-                r.behind ? ' · ' + r.behind + ' 落后' : '',
-                r.ahead ? ' · ' + r.ahead + ' 领先' : '',
-                r.diverged ? ' · 分叉' : '',
-                r.lastCommit ? ' · ' + String(r.lastCommit).slice(0, 7) : '')),
-          e('button', { disabled: Boolean(busy) || Boolean(r.error), onClick: () => actRepoSync(r.id),
-            title: '提交并推送这个仓库（先 pull --rebase）' },
-            busy === ('仓库:' + r.id) ? '同步中…' : '同步'))),
+        repoShown.map((r, i) => {
+          /* 三种「不是同步成功」必须分开画（ADR-026 同型，第三次踩）：
+               error         读不到（目录不存在 / 不是仓库）→ 红 ✗
+               remoteMissing 没有 origin，本地提交无处可去      → 黄 ! 「未连远端」
+                             （0/0/0 在这里毫无意义，不能画绿）
+               有远端且三数全零 = 真的已同步                    → 绿 ✓ */
+          const noRemote = !r.error && r.remoteMissing === true;
+          const tone = r.error ? 'fail' : (r.unsynced > 0 || r.ahead > 0 || r.behind > 0 || noRemote) ? 'need' : 'ok';
+          return e('div', { key: r.id || i, className: 'step ' + tone },
+            e('span', { className: r.error ? 'red' : (r.unsynced > 0 || r.ahead > 0) ? 'warn' : noRemote ? 'warn' : 'good' },
+              r.error ? '✗' : (r.unsynced > 0 || r.ahead > 0 || r.behind > 0 || noRemote) ? '!' : '✓'),
+            e('div', { style: { flex: 1 } },
+              e('strong', null, r.id),
+              e('span', { className: 'muted', style: { fontSize: '0.85em', marginLeft: 6 } }, r.branch || ''),
+              r.error
+                ? e('div', { className: 'act red' }, r.error)
+                : noRemote
+                  ? e('div', { className: 'act warn' }, '未连远端：本地有提交也无处可推，先在设置里填仓库地址')
+                  : e('div', { className: 'act' },
+                    (r.unsynced || 0) + ' 未提交',
+                    r.behind ? ' · ' + r.behind + ' 落后' : '',
+                    r.ahead ? ' · ' + r.ahead + ' 领先' : '',
+                    r.diverged ? ' · 分叉' : '',
+                    r.lastCommit ? ' · ' + String(r.lastCommit).slice(0, 7) : '')),
+            e('button', { disabled: Boolean(busy) || Boolean(r.error), onClick: () => actRepoSync(r.id),
+              title: noRemote ? '会先提交，但没有远端可推，请先在设置里填地址' : '提交并推送这个仓库（先 pull --rebase）' },
+              busy === ('仓库:' + r.id) ? '同步中…' : '同步'));
+        }),
         e('div', { className: 'btns' },
           e('button', { disabled: Boolean(busy) || !repoShown.length, onClick: actRepoAll },
             busy === '全部仓库' ? '同步中…' : '全部同步'),
@@ -957,7 +1035,7 @@ window.__ModuleLoader__.load({
         e('div', { className: 'hd' },
           e('h2', null, 'Msynchub', e(Dot, { alerts })),
           e('div', { className: 'sub' },
-            `本机 ${own ? own.machine : '—'} · 插件 v${own ? own.version : '—'} · 检查于 ${fmt(checkedAt)} `,
+            `本机 ${own ? own.machine : '—'} · 插件 v${own ? own.version : '—'} · ${checkedAtText(PANEL_CACHE.at || (checkedAt && checkedAt.getTime()))} `,
             e('button', { onClick: refresh, disabled: Boolean(busy), style: { marginLeft: 6 } }, busy === '刷新' ? '刷新中…' : '刷新'))),
 
         /* 滚动主体：所有卡片都在这里，内容再多也能滚到。 */
@@ -1112,6 +1190,23 @@ window.__ModuleLoader__.load({
         const add = miss.filter(m => !have.has(m.name.toLowerCase())).map(m => ({ name: m.name, path: '' }));
         // 只保留有内容的行，再追新（不要把占位空行也存进去）。
         if (add.length) setWsRows([...wsRows.filter(r => r.name || r.path), ...add]);
+      };
+      /* ── 代码仓库登记表（form.codeRepos）────────────────────────────────
+         为什么要能在设置里改：这一项之前只能手改 config.json ——
+         用户要在家里那台机器上添加仓库时，等于要我先教他找到配置文件、改 JSON、
+         注意反斜杠转义。那不是「能自己完成」的状态。
+
+         形状与 workspaceMap 一致（数组编辑，保存时宿主 mergeConfig 去重+校验），
+         所以这里复用同一套 wsRows 模式。文案按用户原话「我有第三个仓库不在 C:\dsh 下」
+         来写：路径任意、可以不在这个仓库树里。 */
+      const repoRowsRaw = (form && Array.isArray(form.codeRepos)) ? form.codeRepos : [];
+      const repoRows = repoRowsRaw.length ? repoRowsRaw : [{ id: '', path: '' }];
+      const setRepoRows = next => setForm(f => ({ ...(f || {}), codeRepos: next }));
+      const setRepoRow = (i, patch) => setRepoRows(repoRows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+      const addRepoRow = () => setRepoRows([...repoRows, { id: '', path: '' }]);
+      const removeRepoRow = i => {
+        const left = repoRows.filter((_, j) => j !== i);
+        setRepoRows(left.length ? left : [{ id: '', path: '' }]);
       };
       /* 检查并自动填写：把 DSH 里真实登记的工作区一次性带进来。
          纯确定性数据（读 workspace.json），不涉及 LLM，也不猜路径。
@@ -1330,6 +1425,54 @@ window.__ModuleLoader__.load({
               e('button', { className: 'primary', disabled: Boolean(busy) || !dirty, onClick: doSave },
                 busy === 'save' ? '保存中…' : dirty ? '保存' : '已保存'))));
 
+      /* 代码仓库卡：登记任意 git 仓库，纳入定时提交 + 手动同步。
+         与「工作区映射」是两件事：映射管的是 DSH 的会话归属提示，
+         这里管的是「这些 git 仓库我要定期提交推送」。表格样式沿用映射表，
+         避免再引入一套 CSS。 */
+      const repoCard = e('div', { className: 'card' },
+        e('h3', null, '代码仓库同步'),
+        e('div', { className: 'hint', style: { marginBottom: 8 } },
+          '登记你自己的 git 仓库（插件源码、笔记库…），路径任意 —— 不必在 DSH 目录下。',
+          e('br'),
+          '同步流程固定为「先提交 → 再 pull --rebase → 最后 push」，冲突时停下保留现场等你处理。',
+          e('br'),
+          '名称可留空，留空时自动用目录名，所以通常只填路径就够。'),
+        e('table', { style: { marginTop: 6 } },
+          e('thead', null, e('tr', null,
+            e('th', null, '名称（可留空）'), e('th', null, '仓库绝对路径'), e('th', null, ''))),
+          e('tbody', null,
+            repoRows.map((row, i) => e('tr', { key: i },
+              e('td', null, e('input', {
+                type: 'text', value: row.id || '', placeholder: 'dshwp-plugin',
+                style: { width: '100%', boxSizing: 'border-box', font: 'inherit', padding: 4, borderRadius: 5, border: '1px solid rgba(128,128,128,.4)', background: 'transparent', color: 'inherit' },
+                onChange: ev => setRepoRow(i, { id: ev.target.value }),
+              })),
+              e('td', null, e('input', {
+                type: 'text', value: row.path || '', placeholder: 'C:\\dsh\\dshplug',
+                style: { width: '100%', boxSizing: 'border-box', font: 'inherit', padding: 4, borderRadius: 5, border: '1px solid rgba(128,128,128,.4)', background: 'transparent', color: 'inherit' },
+                onChange: ev => setRepoRow(i, { path: ev.target.value }),
+              })),
+              e('td', null, e('button', {
+                type: 'button', style: { padding: '2px 8px' },
+                onClick: () => removeRepoRow(i),
+                title: '从列表里移除（不会删磁盘上的仓库）',
+              }, '移除')))))),
+        e('div', { className: 'btns' },
+          e('button', { type: 'button', onClick: addRepoRow }, '+ 增加一个仓库'),
+          e('span', { className: 'muted', style: { alignSelf: 'center', fontSize: '0.85em' } },
+            '路径必须是绝对路径，且在磁盘上真的存在')),
+        e('div', { className: 'chk' },
+          e('input', {
+            type: 'checkbox', checked: Boolean(form?.codeRepoAutoEnabled),
+            onChange: ev => set('codeRepoAutoEnabled', ev.target.checked),
+          }),
+          e('span', null, '开启定时自动提交'),
+          e('span', { className: 'why' },
+            '与「空闲自动上传」是两个独立闸门：这里只看距上次多久，没有改动就不提交、不联网。')),
+        F('codeRepoAutoMinutes', '自动提交间隔（分钟）', '默认 60。设为 0 等同关闭。', 'number'),
+        e('div', { className: 'note' },
+          '只同步你在这里明确登记的仓库。未跟踪文件也会一起提交 —— '
+          + '想排除就在那个仓库自己的 .gitignore 里写规则。'));
       const surfCard = e('div', { className: 'card' },
         e('h3', null, '同步面开关'),
         form === null ? e('div', { className: 'k' }, '读取中…')
@@ -1463,6 +1606,7 @@ window.__ModuleLoader__.load({
         e('div', { className: 'groupTitle' }, '② 可选：本机与同步面'),
         formCard,
         surfCard,
+        repoCard,
 
         e('div', { className: 'groupTitle' }, '③ 诊断与维护'),
         statusCard,

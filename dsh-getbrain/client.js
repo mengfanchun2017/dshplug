@@ -154,6 +154,54 @@ const zh = {
   undoFail: '读撤销记录失败：',
   undoNone: '没有可撤销的批次。每次真写前会自动拍一份归属快照，撤销就靠它。',
   // —— 删除区 ——
+  pkmTitle: 'AI 能读到什么',
+  pkmSub: '只读体检：不调 API、不耗配额',
+  pkmLoading: '正在读本地镜像…',
+  pkmFail: '读取失败：',
+  pkmIdle: '切到本页后会自动读一次。',
+  pkmTotal: '笔记',
+  pkmTotalHint: '篇',
+  pkmOwn: '自己记的',
+  pkmTodos: '没合上的待办',
+  pkmTodosHint: '条',
+  pkmDup: '名字撞 ID',
+  pkmDupHint: '组',
+  pkmTodoHead: '没合上的待办',
+  pkmNoTodo: '没有被结构化的待办。注意这不等于事情都做完了——也可能只是没写进笔记。',
+  pkmOwnHead: '自己的记录归到什么',
+  pkmUntagged: '还有',
+  pkmUntaggedUnit: '篇自己的记录两边都没归。AI 看不到它们属于什么主题。',
+  pkmIdsHead: '名字与 ID 是否对得上',
+  pkmKindTag: '标签',
+  pkmKindKb: '知识库',
+  pkmNotesUnit: '篇',
+  pkmNoDup: '没发现同名不同 ID。',
+  pkmRefresh: '重新体检',
+  pkmOverlap: '知识库名与标签名重复',
+  pkmOverlapHint: '个（结构性冗余，不一定是错）',
+  pkmHint: '这些数字只来自本地镜像。想让 AI 真正读懂某个主题，用 context-pack 取那一条的上下文。',
+  mgTitle: '合并笔记',
+  mgSub: '拼成一条新笔记；旧的全部保留，不删',
+  mgExpand: '展开合并区',
+  mgCollapse: '收起',
+  mgWarn: '平台没有「合并」接口，只能读旧正文 → 写一条新笔记。因此：① 新笔记是全新 ID，指向旧 ID 的链接会断；② 旧笔记一条不删，删旧请另走上面的删除区。',
+  mgUseSel: '用当前勾选作合并源',
+  mgSelNeed: '先在上面的树上勾选要合并的笔记（至少 2 条），或手动填 ID',
+  mgPicked: '已选',
+  mgPickedUnit: '条',
+  mgClear: '清空',
+  mgIdsLabel: '笔记 ID',
+  mgIdsPh: '多个 ID 用逗号或空格分隔（至少 2 个）',
+  mgNewTitle: '新笔记标题',
+  mgNewTitlePh: '留空则自动起名：合并 N 篇 · 第一篇标题',
+  mgAck: '我知道合并会得到一个全新的笔记 ID，旧 ID 的引用会断',
+  mgDry: '干跑（只看预览，不写）',
+  mgArm: '准备合并…',
+  mgReally: '真的合并（建新笔记）',
+  mgOk: '完成。',
+  mgOkDry: '（干跑，线上未动）',
+  mgFail: '失败：',
+  mgNewId: '新笔记 ID：',
   delTitle: '删除笔记',
   delSub: '单程票：平台删除可能不进回收站，本工具会先存本地副本',
   delExpand: '展开删除区',
@@ -421,6 +469,54 @@ const en = {
   undoFail: 'Failed to read undo records: ',
   undoNone: 'No undoable batch. Every real write snapshots ownership first; undo relies on it.',
   // —— delete ——
+  pkmTitle: 'What the AI can read',
+  pkmSub: 'Read-only health check: no API calls, no quota used',
+  pkmLoading: 'Reading the local mirror...',
+  pkmFail: 'Read failed: ',
+  pkmIdle: 'Loads once when you open this page.',
+  pkmTotal: 'Notes',
+  pkmTotalHint: 'total',
+  pkmOwn: 'My own notes',
+  pkmTodos: 'Open todos',
+  pkmTodosHint: 'items',
+  pkmDup: 'Name/ID clashes',
+  pkmDupHint: 'groups',
+  pkmTodoHead: 'Open todos',
+  pkmNoTodo: 'No structured todos found. That does not mean everything is done - they may simply never have been written down.',
+  pkmOwnHead: 'Where my own notes land',
+  pkmUntagged: 'Still',
+  pkmUntaggedUnit: 'own notes are filed nowhere, so the AI cannot tell what topic they belong to.',
+  pkmIdsHead: 'Do names and IDs line up',
+  pkmKindTag: 'Tag',
+  pkmKindKb: 'Knowledge base',
+  pkmNotesUnit: 'notes',
+  pkmNoDup: 'No same-name-different-ID cases found.',
+  pkmRefresh: 'Re-check',
+  pkmOverlap: 'Knowledge-base names that duplicate tag names:',
+  pkmOverlapHint: 'items (structural redundancy, not necessarily wrong)',
+  pkmHint: 'These numbers come only from the local mirror. To get the AI to truly understand a topic, pull that note context with context-pack.',
+  mgTitle: 'Merge notes',
+  mgSub: 'Combine into one new note; all originals are kept',
+  mgExpand: 'Open merge area',
+  mgCollapse: 'Collapse',
+  mgWarn: 'The platform has no merge API, so this reads the old bodies and writes one new note. Therefore: (1) the new note gets a brand-new ID and links to the old IDs break; (2) nothing is deleted here - use the delete area above to remove originals.',
+  mgUseSel: 'Use current selection as merge source',
+  mgSelNeed: 'Tick the notes to merge in the tree above (at least 2), or type IDs',
+  mgPicked: 'Selected',
+  mgPickedUnit: 'notes',
+  mgClear: 'Clear',
+  mgIdsLabel: 'Note IDs',
+  mgIdsPh: 'Separate multiple IDs with commas or spaces (at least 2)',
+  mgNewTitle: 'New note title',
+  mgNewTitlePh: 'Leave empty to auto-name: Merge N - first title',
+  mgAck: 'I understand the merge creates a brand-new note ID and links to the old ID break',
+  mgDry: 'Dry run (preview only, no write)',
+  mgArm: 'Prepare merge...',
+  mgReally: 'Merge for real (create note)',
+  mgOk: 'Done.',
+  mgOkDry: ' (dry run, nothing written)',
+  mgFail: 'Failed: ',
+  mgNewId: 'New note ID: ',
   delTitle: 'Delete note',
   delSub: 'One-way: the platform may not keep a recycle bin, so a local copy is saved first',
   delExpand: 'Open delete area',
@@ -773,6 +869,137 @@ window.__ModuleLoader__.load({
       }, [])
 
       React.useEffect(() => {
+      // ── 知识管理体检：ID 表 + 工作内容提纯包 ──
+      // 两个都是纯本地、不耗配额，所以进「笔记现状」页时拉一次就行。
+      // 为何合在一起：它们回答同一个问题「这个库能不能拿给 AI 用」。
+      const [pkm, setPkm] = React.useState({ phase: 'idle', brief: null, ids: null, error: null })
+      const loadPkm = React.useCallback(async () => {
+        setPkm({ phase: 'loading', brief: null, ids: null, personas: null, error: null })
+        try {
+          const [rb, ri, rp] = await Promise.all([
+            fetch('/plugins/getnote/brief?top=8&recent=6', { credentials: 'same-origin' }),
+            fetch('/plugins/getnote/ids', { credentials: 'same-origin' }),
+            // 归属盘点也要扫一遍镜像（约 2 秒），失败不该拖垮整个诊断块：
+            // brief / ids 拿得到就先显示，归属这一块单独降级。
+            fetch('/plugins/getnote/personas', { credentials: 'same-origin' })
+              .catch(() => null),
+          ])
+          const [jb, ji] = await Promise.all([rb.json(), ri.json()])
+          if (!jb || !jb.ok || !ji || !ji.ok) {
+            throw new Error((jb && jb.error) || (ji && ji.error) || '读取失败')
+          }
+          let pers = null
+          try {
+            const jp = rp ? await rp.json() : null
+            if (jp && jp.ok) pers = jp.data
+          } catch (e2) { pers = null }
+          setPkm({ phase: 'ready', brief: jb.data, ids: ji.data, personas: pers,
+            error: null, reload: loadPkm })
+        } catch (e) {
+          setPkm({ phase: 'error', brief: null, ids: null, personas: null,
+            error: String((e && e.message) || e) })
+        }
+      }, [])
+      // 进「笔记现状」页才拉：这是诊断信息，不是首屏必需
+      React.useEffect(() => {
+        if (view === 'overview' && pkm.phase === 'idle') loadPkm()
+      }, [view, pkm.phase, loadPkm])
+
+      // ── 本地检索 / 发布 ──
+      // 检索走本地 sqlite 索引（/find），不联网、不耗配额，所以可以边打字边搜。
+      // 但每次输入都发请求会打爆宿主，所以加 300ms 防抖。
+      const [srch, setSrch] = React.useState({
+        q: '', kb: '', owner: '', phase: 'idle', hits: [], count: 0, error: null, note: '',
+      })
+      const srchSeq = React.useRef(0)
+      const runFind = React.useCallback(async (q, kb, owner) => {
+        const query = String(q || '').trim()
+        const own = String(owner || '').trim()
+        if (!query) {
+          setSrch({ q: '', kb: kb || '', owner: own, phase: 'idle', hits: [], count: 0,
+            error: null, note: '' })
+          return
+        }
+        // 用序号挡掉「先发的请求后返回」导致的旧结果覆盖新结果
+        const seq = ++srchSeq.current
+        setSrch((x) => ({ ...x, q: query, kb: kb || '', owner: own,
+          phase: 'loading', error: null }))
+        try {
+          const qs = new URLSearchParams({ q: query, limit: '20' })
+          if (kb) qs.set('kb', kb)
+          if (own) qs.set('owner', own)
+          const r = await fetch('/plugins/getnote/find?' + qs.toString(),
+            { credentials: 'same-origin' })
+          const j = await r.json()
+          if (seq !== srchSeq.current) return
+          if (!j || !j.ok) {
+            // 没建索引是「还没准备」，不是出错 —— 要给出下一步动作
+            setSrch({ q: query, kb: kb || '', owner: own,
+              phase: j && j.needIndex ? 'needIndex' : 'error',
+              hits: [], count: 0, error: (j && (j.error || j.hint)) || '检索失败', note: '' })
+            return
+          }
+          const d = j.data || {}
+          setSrch({ q: query, kb: kb || '', owner: own, phase: 'ready',
+            hits: d.hits || [], count: d.count || 0, error: null, note: '' })
+        } catch (e) {
+          if (seq !== srchSeq.current) return
+          setSrch({ q: query, kb: kb || '', owner: own, phase: 'error',
+            hits: [], count: 0, error: String((e && e.message) || e), note: '' })
+        }
+      }, [])
+
+      // 防抖：输入框每敲一个字都进 state，但只在停下 300ms 后才真的查
+      React.useEffect(() => {
+        if (srch.phase === 'idle') return
+        const t = setTimeout(() => { runFind(srch.q, srch.kb, srch.owner) }, 300)
+        return () => clearTimeout(t)
+        // 只跟 q / kb / owner 走；phase 变化不该重新触发
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, [srch.q, srch.kb, srch.owner])
+
+      const [pub, setPub] = React.useState({ phase: 'idle', dir: '', msg: '', error: null })
+      const runIndex = React.useCallback(async () => {
+        setSrch((x) => ({ ...x, note: '正在建索引，全量约需 40 秒…' }))
+        try {
+          const r = await fetch('/plugins/getnote/index', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' }, body: '{}',
+          })
+          const j = await r.json()
+          if (!j || !j.ok) throw new Error((j && j.error) || '建索引失败')
+          // gn.py 的第一行是「已建索引：路径」，第二行才是统计
+          const line = String(j.output || '').split('\n').find((s) => s.includes('新增'))
+          setSrch((x) => ({ ...x, note: line || '索引已更新' }))
+          if (srch.q) runFind(srch.q, srch.kb, srch.owner)
+        } catch (e) {
+          setSrch((x) => ({ ...x, note: '建索引失败：' + String((e && e.message) || e) }))
+        }
+      }, [srch.q, srch.kb, srch.owner, runFind])
+
+      const runPublish = React.useCallback(async (kb) => {
+        const name = String(kb || '').trim()
+        if (!name) {
+          setPub({ phase: 'error', dir: '', msg: '先选一个知识库', error: '要选库' })
+          return
+        }
+        setPub({ phase: 'loading', dir: '', msg: '', error: null })
+        try {
+          const r = await fetch('/plugins/getnote/publish', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ kb: name }),
+          })
+          const j = await r.json()
+          if (!j || !j.ok) throw new Error((j && j.error) || '发布失败')
+          const line = String(j.output || '').split('\n').find((s) => s.includes('篇 ·'))
+          setPub({ phase: 'ready', dir: j.dir || '', msg: line || '已导出', error: null })
+        } catch (e) {
+          setPub({ phase: 'error', dir: '', msg: '', error: String((e && e.message) || e) })
+        }
+      }, [])
+
+
         if (view === 'structure' && inv.phase === 'loading' && !inv.__tried) {
           setInv((x) => ({ ...x, __tried: true }))
           loadInv()
@@ -1003,6 +1230,72 @@ window.__ModuleLoader__.load({
           setDelResolving(false)
         }
       }, [])
+
+      // ── 合并区状态 ──────────────────────────────────────
+      // 与删除分开：合并**不删任何东西**，只新建一条。风险点不同（新 note_id 会断旧引用），
+      // 所以给的是「我知道会得到新 ID」而不是「不可恢复」。
+      const [mgOpen, setMgOpen] = React.useState(false)
+      const [mgAck, setMgAck] = React.useState(false)
+      const [mgTitle, setMgTitle] = React.useState('')
+      const [mgResult, setMgResult] = React.useState(null)
+      const [mgBusy, setMgBusy] = React.useState(false)
+      const [mgArmed, setMgArmed] = React.useState(false)
+      const [mgIds, setMgIds] = React.useState([])
+      const runMerge = React.useCallback(async (dry, ids) => {
+        const list = (ids || []).filter(Boolean)
+        if (mgBusy) return
+        if (list.length < 2) {
+          setMgResult({ ok: false, error: '合并至少要选两条笔记' })
+          return
+        }
+        setMgBusy(true)
+        setMgResult(null)
+        try {
+          const r = await fetch('/plugins/getnote/merge', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            credentials: 'same-origin',
+            // 和服务端一致：勾框不勾就不发，别写死 true
+            body: JSON.stringify({ confirm: 'MERGE', acknowledged: !!mgAck,
+              dryRun: dry, noteIds: list, title: mgTitle || undefined }),
+          })
+          const d = await r.json()
+          setMgResult(d)
+          if (d && d.ok && !dry) { setMgArmed(false); setMgAck(false) }
+        } catch (e) {
+          setMgResult({ ok: false, error: String((e && e.message) || e) })
+        } finally {
+          setMgBusy(false)
+        }
+      }, [mgBusy, mgAck, mgTitle])
+      // 用当前勾选作合并源：合并可以多条（与删除不同），直接拿来用
+      const mergeFromSel = React.useCallback(() => {
+        const paths = Array.from(sel)
+        if (!paths.length) {
+          setMgResult({ ok: false, error: '没有勾选任何东西' })
+          return
+        }
+        fetch('/plugins/getnote/resolve', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ paths }),
+        }).then((r) => r.json()).then((d) => {
+          if (!d || !d.ok) throw new Error((d && d.error) || 'resolve 失败')
+          const ids = d.noteIds || []
+          if (ids.length < 2) {
+            setMgResult({ ok: false,
+              error: '这次只解析出 ' + ids.length + ' 条笔记，合并不了（至少 2 条）。'
+                + '可以把范围勾大一点（如整本书或整个目录）。' })
+            return
+          }
+          setMgIds(ids.map(String))
+          setMgArmed(false)
+          setMgResult({ ok: true, output: '已带入 ' + ids.length + ' 条笔记作为合并源' })
+        }).catch((e) => {
+          setMgResult({ ok: false, error: String((e && e.message) || e) })
+        })
+      }, [sel])
       // 真写成功后、或每次进「确认执行」页，都要刷新可撤销列表：
       // 刚写的批次必须马上出现，否则用户以为无法回退。
       React.useEffect(() => {
@@ -1149,6 +1442,8 @@ window.__ModuleLoader__.load({
         { id: 'log', label: T('tabLog', '执行日志') },
       ]
       const act = { openKb: [openKb, setOpenKb], openCourse: [openCourse, setOpenCourse],
+        srch: { set: (patch) => setSrch((x) => ({ ...x, ...patch })), run: runFind },
+        pub: { run: runPublish, index: runIndex, state: pub },
         openBook: [openBook, setOpenBook], sel: [sel, setSel], setSel, onPlanMenu,
         showShelf: [showShelf, setShowShelf], showUnknown: [showUnknown, setShowUnknown],
         onAutoPlan, autoPlan,
@@ -1160,11 +1455,15 @@ window.__ModuleLoader__.load({
           ack: [delAck, setDelAck], result: [delResult, setDelResult],
           busy: [delBusy, setDelBusy], armed: [delArmed, setDelArmed],
           run: runDelete, resolveFromSel: loadFromSel, resolving: delResolving },
+        mg: { open: [mgOpen, setMgOpen], ack: [mgAck, setMgAck],
+          title: [mgTitle, setMgTitle], result: [mgResult, setMgResult],
+          busy: [mgBusy, setMgBusy], armed: [mgArmed, setMgArmed],
+          ids: [mgIds, setMgIds], run: runMerge, fromSel: mergeFromSel },
         selPaths: Array.from(sel) }
 
       let content
       if (view === 'structure') content = renderStructure(T, h, P, inv, act)
-      else if (view === 'overview') content = renderOverview(sum, T, h, P)
+      else if (view === 'overview') content = renderOverview(sum, T, h, P, pkm, srch, act)
       else if (view === 'apply') content = renderApply(T, h, P, { ...plan, result },
         { run: runApply, busy, armed, setArmed,
           undo: undos, onUndo, undoResult, undoBusy, undoArmed, setUndoArmed })
@@ -1213,7 +1512,285 @@ window.__ModuleLoader__.load({
     }
 
     /** 「笔记现状」页：真实数据。 */
-    function renderOverview(sum, T, h, P) {
+    /**
+     * 知识管理体检：这个库现在能不能拿给 AI 用。
+     *
+     * 两件事合在一张卡里，因为它们回答的是同一个问题：
+     *   · brief —— AI 读到什么（待办、主要来源、自己记的主题）
+     *   · ids   —— 名字与 ID 是否对得上（对不上，AI 就指错东西）
+     * 都是只读、纯本地，所以带「刷新」按钮，不加任何确认闸门。
+     */
+    function renderPkm(T, h, P, pkm) {
+      const head = h('div', { style: { ...P.sgHead, marginTop: 16 } },
+        h('h2', { style: { ...P.cardTitle, marginBottom: 0 } },
+          T('pkmTitle', 'AI 能读到什么')),
+        h('span', { style: { ...P.muted, fontSize: 11 } },
+          T('pkmSub', '只读体检：不调 API、不耗配额')))
+
+      if (pkm.phase === 'loading') {
+        return h('section', { style: { ...P.card, marginTop: 14 } }, head,
+          h('p', { style: P.muted }, T('pkmLoading', '正在读本地镜像…')))
+      }
+      if (pkm.phase === 'error') {
+        return h('section', { style: { ...P.card, marginTop: 14 } }, head,
+          h('p', { style: { ...P.muted, color: 'var(--dsw-alias-state-error-primary)' } },
+            T('pkmFail', '读取失败：') + (pkm.error || '')))
+      }
+      if (pkm.phase !== 'ready') {
+        return h('section', { style: { ...P.card, marginTop: 14 } }, head,
+          h('p', { style: P.muted }, T('pkmIdle', '切到本页后会自动读一次。')))
+      }
+
+      const b = pkm.brief || {}
+      const s = b.scope || {}
+      const ids = pkm.ids || {}
+      const drift = (ids.id_renamed || []).length
+      const dup = (ids.same_name_multi_id || []).length
+      const overlap = ids.kb_tag_overlap_count || 0
+      const ownTopics = b.own_topics || { tags: [], kbs: [], untagged: 0 }
+      const todos = b.todos || []
+
+      return h('section', { style: { ...P.card, marginTop: 14 } }, head,
+
+        h('div', { style: P.statRow },
+          h(Stat, { label: T('pkmTotal', '笔记'), value: s.notes_total || 0,
+            hint: T('pkmTotalHint', '篇') }),
+          h(Stat, { label: T('pkmOwn', '自己记的'), value: s.own || 0,
+            hint: Math.round((s.own || 0) * 100 / Math.max(1, s.notes_total || 1)) + '%' }),
+          h(Stat, { label: T('pkmTodos', '没合上的待办'), value: b.todos_total || 0,
+            tone: (b.todos_total || 0) > 0 ? 'warn' : 'ok',
+            hint: T('pkmTodosHint', '条') }),
+          h(Stat, { label: T('pkmDup', '名字撞 ID'), value: dup,
+            tone: dup > 0 ? 'warn' : 'ok',
+            hint: T('pkmDupHint', '组') })),
+
+        // 待办：这是 AI 最能直接帮上忙的东西
+        h('div', { style: { marginTop: 12 } },
+          h('h3', { style: { ...P.cardTitle, fontSize: 13 } },
+            T('pkmTodoHead', '没合上的待办')),
+          todos.length
+            ? h('div', null, todos.slice(0, 8).map((t, i) =>
+                h('div', { key: 'td' + i, style: { ...P.rowLine, flexDirection: 'column', alignItems: 'flex-start', gap: 2 } },
+                  h('span', { style: { fontSize: 12 } }, '· ' + String(t.text || '').slice(0, 80)),
+                  h('span', { style: { ...P.muted, fontSize: 10.5 } },
+                    (t.created || '?') + '  ← ' + String(t.title || '').slice(0, 40)))))
+            : h('p', { style: P.muted },
+                T('pkmNoTodo', '没有被结构化的待办。注意这不等于事情都做完了——也可能只是没写进笔记。'))),
+
+        // 自己记的主题：标签 + 知识库
+        h('div', { style: { marginTop: 12 } },
+          h('h3', { style: { ...P.cardTitle, fontSize: 13 } },
+            T('pkmOwnHead', '自己的记录归到什么')),
+          h('div', { style: P.chipWrap },
+            (ownTopics.tags || []).map((t, i) =>
+              h('span', { key: 'ot' + i, style: P.chip }, t.name + ' ' + t.count)),
+            (ownTopics.kbs || []).map((k, i) =>
+              h('span', { key: 'ok' + i, style: { ...P.chip, fontWeight: 600 } },
+                k.name + ' ' + k.count))),
+          (ownTopics.untagged || 0) > 0
+            ? h('p', { style: { ...P.muted, fontSize: 11 } },
+                T('pkmUntagged', '还有') + ' ' + ownTopics.untagged + ' '
+                + T('pkmUntaggedUnit', '篇自己的记录两边都没归。AI 看不到它们属于什么主题。'))
+            : null),
+
+        // ID 一致性
+        h('div', { style: { marginTop: 12 } },
+          h('h3', { style: { ...P.cardTitle, fontSize: 13 } },
+            T('pkmIdsHead', '名字与 ID 是否对得上')),
+          dup > 0
+            ? h('div', null, (ids.same_name_multi_id || []).slice(0, 5).map((x, i) =>
+                h('p', { key: 'dup' + i, style: { ...P.muted, fontSize: 11.5, color: 'var(--dsw-alias-state-warning-primary)' } },
+                  '· ' + (x.kind === 'tag' ? T('pkmKindTag', '标签') : T('pkmKindKb', '知识库'))
+                  + ' 「' + x.name + '」→ ' + (x.ids || []).join(', ')
+                  + '（' + (x.count || 0) + ' ' + T('pkmNotesUnit', '篇') + '）')))
+            : h('p', { style: { ...P.muted, fontSize: 11.5 } },
+                T('pkmNoDup', '没发现同名不同 ID。'))), 
+
+        h('div', { style: { display: 'flex', gap: 8, marginTop: 12, alignItems: 'center' } },
+          h('button', { style: P.btn, onClick: () => pkm.reload && pkm.reload() },
+            T('pkmRefresh', '重新体检')),
+          overlap > 0
+            ? h('span', { style: { ...P.muted, fontSize: 11 } },
+                T('pkmOverlap', '知识库名与标签名重复') + ' ' + overlap + ' '
+                + T('pkmOverlapHint', '个（结构性冗余，不一定是错）'))
+            : null),
+        h('p', { style: P.dirLine }, T('pkmHint',
+          '这些数字只来自本地镜像。想让 AI 真正读懂某个主题，用 context-pack 取那一条的上下文。')))
+    }
+
+    // 本地检索 + 按库发布。
+    //
+    // 为什么放进「笔记现状」页而不是单开一个标签：检索的对象就是「这批笔记」，
+    // 和上面的体检数字看的是同一份东西；单开一个页会让「我在看什么」割裂。
+    //
+    // 文案原则（用户明确要求过）：每个状态都要回答「我要不要管」。
+    // 尤其「还没建索引」不能报成错误 —— 它只是还没准备，要说清下一步点哪儿。
+    function renderPkmSearch(T, h, P, srch, pub, act) {
+      const st = srch || { phase: 'idle', q: '', kb: '', hits: [], count: 0 }
+      const pb = pub || { phase: 'idle', dir: '', msg: '', error: null }
+      const list = (st.hits || []).map((x, i) => h('div', { key: 'h' + i, style: P.rowLine },
+        h('div', { style: { flex: 1, minWidth: 0 } },
+          h('a', {
+            href: 'https://www.biji.com/note/' + x.note_id,
+            target: '_blank', rel: 'noreferrer',
+            style: { color: 'var(--dsw-alias-label-primary)', textDecoration: 'none' },
+          }, String(x.title || x.note_id).slice(0, 70)),
+          x.snippet ? h('div', { style: P.muted }, String(x.snippet).slice(0, 110)) : null,
+          (x.kb || x.created || x.owner)
+            ? h('div', { style: P.muted }, [x.created ? String(x.created).slice(0, 10) : '',
+              x.owner || '', x.type || '', x.kb ? '[' + x.kb + ']' : '']
+              .filter(Boolean).join('  '))
+            : null)))
+
+      let noteLine = null
+      if (st.phase === 'needIndex') {
+        noteLine = h('p', { style: P.warn },
+          T('pkmNeedIndex', '还没有本地索引。点下面的「建索引」——全量约 40 秒，只写本地文件，不联网、不耗配额。'))
+      } else if (st.phase === 'error') {
+        noteLine = h('p', { style: P.warn }, '检索失败：' + String(st.error || ''))
+      } else if (st.phase === 'loading') {
+        noteLine = h('p', { style: P.muted }, T('pkmSearching', '检索中…'))
+      } else if (st.phase === 'ready') {
+        noteLine = h('p', { style: st.count ? P.ok : P.muted },
+          st.count ? T('pkmHitN', '命中 ') + st.count + T('pkmHitUnit', ' 条') +
+            T('pkmHitCap', '（最多显示 20）')
+            : T('pkmNoHit', '没有命中。这是字面检索——试试更短的关键词。'))
+      }
+
+      let pubLine = null
+      if (pb.phase === 'loading') {
+        pubLine = h('p', { style: P.muted }, T('pkmPublishing', '正在导出…'))
+      } else if (pb.phase === 'error') {
+        pubLine = h('p', { style: P.warn }, '发布失败：' + String(pb.error || ''))
+      } else if (pb.phase === 'ready') {
+        pubLine = h('div', null,
+          h('p', { style: P.ok }, pb.msg || T('pkmPubDone', '已导出')),
+          h('p', { style: P.dirLine }, pb.dir || ''),
+          h('p', { style: P.muted },
+            T('pkmPubHow', '打开该目录的 index.html 即可阅读，search.html 是纯前端搜索；整个目录可打包发人，不依赖网络与凭据。')))
+      }
+
+      return h('div', { style: { marginTop: 18 } },
+        h('div', { style: P.groupLabel }, T('pkmSearchTitle', '本地检索与发布')),
+        h('p', { style: P.muted },
+          T('pkmSearchIntro', '检索只查本地镜像，不联网、不耗配额；结果是字面匹配，不是语义检索。')),
+
+        h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+          h('input', {
+            style: Object.assign({}, P.input, { flex: '1 1 240px' }),
+            placeholder: T('pkmSearchPh', '搜标题或正文，例如：高考 强基'),
+            value: st.q || '',
+            onChange: (e) => act.srch.set({ q: e.target.value }),
+          }),
+          // 归属筛选：同一个账号里混着三个人，不分开搜出来的东西没法用。
+          // 搜「志愿」不分人，出来的是孩子的事；我只想看我的事时这就是噪声。
+          h('select', {
+            style: Object.assign({}, P.input, { flex: '0 0 108px' }),
+            value: st.owner || '',
+            onChange: (e) => act.srch.set({ owner: e.target.value }),
+          }, [
+            h('option', { key: 'all', value: '' }, T('pkmOwnerAll', '全部人')),
+            h('option', { key: 'me', value: '我' }, T('pkmOwnerMe', '我')),
+            h('option', { key: 'kid', value: '孩子' }, T('pkmOwnerKid', '孩子')),
+            h('option', { key: 'sp', value: '老婆' }, T('pkmOwnerSpouse', '老婆')),
+            h('option', { key: 'sh', value: '共用' }, T('pkmOwnerShared', '共用')),
+            h('option', { key: 'un', value: '未知' }, T('pkmOwnerUnknown', '未知')),
+          ]),
+          h('button', {
+            style: P.btn,
+            onClick: () => act.pub.index(),
+          }, T('pkmBuildIndex', '建索引')),
+        ),
+        noteLine,
+        st.note ? h('p', { style: P.muted }, st.note) : null,
+        list.length ? h('div', null, list) : null,
+
+        h('div', { style: { marginTop: 22 } },
+          h('div', { style: P.groupLabel }, T('pkmPubTitle', '按知识库导出成可发布的站点')),
+          h('p', { style: P.muted },
+            T('pkmPubIntro', '选一个库，导出一个自包含目录（索引页 + 每篇一页 + 搜索页）。不带凭据、不用联网。')),
+          h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+            h('input', {
+              style: Object.assign({}, P.input, { flex: '1 1 240px' }),
+              placeholder: T('pkmPubPh', '知识库名，例如：university'),
+              value: st.kb || '',
+              onChange: (e) => act.srch.set({ kb: e.target.value }),
+            }),
+            h('button', {
+              style: P.primary,
+              onClick: () => act.pub.run(st.kb),
+            }, T('pkmPubGo', '导出')),
+          ),
+          pubLine,
+        ),
+      )
+    }
+
+    // 归属分布：一个账号，三个人。
+    //
+    // 为什么这块要放在首屏：用户打开插件想知道的是「这个库现在能不能用」。
+    // 在不知道「几千篇里九成以上是全家一起读的摘录、只有两百多篇是自己记的」之前，
+    // 任何「分类进度 3%」都会被误读成「我落后了」。
+    // 这块给出的是一个更准的图景：该管的只有那 269 篇，其中按人分开看。
+    function renderOwnerDist(T, h, P, pkm) {
+      const pers = pkm && pkm.personas
+      if (!pers) {
+        // 降级不能是空白：要说清「没拿到」和「为什么」，别让人以为没有归属数据。
+        return h('section', { style: { ...P.card, marginTop: 14 } },
+          h('h2', { style: P.cardTitle }, T('ownDistTitle', '这个账号里都有谁的内容')),
+          h('p', { style: P.muted },
+            T('ownDistUnavailable',
+              '归属统计没拿到（可能镜像还没下载完）。它只读本地文件，不影响其他功能。')))
+      }
+      const byAll = pers.by_owner || {}
+      const byOwn = pers.by_owner_own || {}
+      // 顺序固定：我 / 孩子 / 老婆 / 共用 / 未知。
+      // 让人每次都按同一个顺序扫，不用重新找。
+      const order = ['我', '孩子', '老婆', '共用', '未知']
+      const tone = { '我': null, '孩子': null, '老婆': null, '共用': 'ok', '未知': 'warn' }
+      const total = pers.notes_total || 0
+      const ownTotal = pers.own_total || 0
+
+      const rows = order.filter((o) => byAll[o]).map((o, i) => {
+        const n = byAll[o] || 0
+        const own = byOwn[o] || 0
+        return h('div', { key: 'o' + i, style: P.rowLine },
+          h('span', { style: { flex: '0 0 52px', fontWeight: 600 } }, o),
+          h('span', { style: { flex: '1 1 auto' } },
+            n + T('ownUnit', ' 篇') +
+            (total ? '  ' + Math.round(n * 100 / total) + '%' : '')),
+          h('span', { style: { flex: '0 0 auto', ...P.muted } },
+            T('ownSelfRecorded', '自己记的 ') + own + T('ownUnit', ' 篇')))
+      })
+
+      // 空白笔记单独说一句。不说的话「未知 98 篇」看起来像 98 件事要做，
+      // 实际其中 20 篇是空白录音，不用管。
+      const blankN = (pers.blank_own && pers.blank_own.count) || 0
+      const unknownN = (pers.unknown_own || []).length
+
+      return h('section', { style: { ...P.card, marginTop: 14 } },
+        h('h2', { style: P.cardTitle }, T('ownDistTitle', '这个账号里都有谁的内容')),
+        h('p', { style: P.muted },
+          T('ownDistIntro',
+            '这是三个人共用的一个账号：我、孩子、老婆。归属按知识库、标题、正文三种本地信号判定。')),
+        h('p', { style: P.muted },
+          T('ownDistScope', '全账号 ') + total + T('ownUnit', ' 篇，其中 ') +
+          ownTotal + T('ownDistOnly', ' 篇是自己记的——只有这批带工作方向和待办。')),
+        rows.length ? h('div', null, rows) : null,
+        blankN
+          ? h('p', { style: P.muted },
+              T('ownDistBlank', '其中空白/测试笔记 ') + blankN + T('ownDistBlank2', ' 篇，不用管。'))
+          : null,
+        unknownN
+          ? h('p', { style: P.warn },
+              T('ownDistUnknown', '判不出来的 ') + unknownN +
+              T('ownDistUnknown2',
+                ' 篇需要你指一下（不自动猜）。在检索里把归属选「未知」就能逐条看。'))
+          : h('p', { style: P.ok }, T('ownDistAllDone', '自己记的笔记都已分清归属。')),
+        h('p', { style: P.dirLine }, T('ownDistConf', '归属配置：') + (pers.conf_path || '')))
+    }
+
+    function renderOverview(sum, T, h, P, pkm, srch, act) {
       if (sum.phase === 'loading') {
         return h('section', { style: P.card }, h('p', { style: P.muted }, T('loading', '正在读取本地镜像…')))
       }
@@ -1259,6 +1836,10 @@ window.__ModuleLoader__.load({
             Object.entries(d.byType).sort((a, b) => b[1] - a[1]).map(([k, v]) =>
               h('span', { key: k, style: P.chip }, k + ' ' + v)))),
 
+        renderOwnerDist(T, h, P, pkm),
+
+        pkm ? renderPkm(T, h, P, pkm) : null,
+        renderPkmSearch(T, h, P, srch, act.pub.state, act),
         h('p', { style: P.dirLine }, T('dirLabel', '镜像目录：') + d.dir))
     }
 
@@ -1588,6 +2169,7 @@ window.__ModuleLoader__.load({
               h('button', { style: { ...P.btn, ...P.primary }, onClick: act.onPlanMenu },
                 T('selToPlan', '生成计划 →')))
           : h('p', { style: P.muted }, T('selHint', '点开层级、勾选「讲」，就能把它整批归到别的知识库或加标签。')),
+        renderMerge(T, h, P, act),
         renderDelete(T, h, P, act))
     }
 
@@ -1690,6 +2272,123 @@ window.__ModuleLoader__.load({
                 : null)
           : null)
     }
+
+    /**
+     * 合并笔记：把多条拼成一条新笔记。
+     * 与删除的关键区别：这里**不删任何东西**。风险点不是“不可恢复”，
+     * 而是“会得到全新 note_id，指向旧 id 的引用全部断开”。
+     * 所以确认文案写的是“我知道会得到新 ID”，而不是“不可恢复”。
+     */
+    function renderMerge(T, h, P, act) {
+      const mg = act.mg || {}
+      const [open, setOpen] = mg.open || [false, () => {}]
+      const [ack, setAck] = mg.ack || [false, () => {}]
+      const [title, setTitle] = mg.title || ['', () => {}]
+      const [result, setResult] = mg.result || [null, () => {}]
+      const [busy, setBusy] = mg.busy || [false, () => {}]
+      const [armed, setArmed] = mg.armed || [false, () => {}]
+      const [ids, setIds] = mg.ids || [[], () => {}]
+      const list = ids || []
+      const picked = (act.selPaths || []).slice()
+      const canUse = picked.length > 0
+
+      const head = h('div', { style: { ...P.sgHead, marginTop: 16 } },
+        h('h2', { style: { ...P.cardTitle, marginBottom: 0 } }, T('mgTitle', '合并笔记')),
+        h('span', { style: { ...P.muted, fontSize: 11 } },
+          T('mgSub', '拼成一条新笔记；旧的全部保留，不删')),
+        h('button', {
+          style: { ...P.btn, marginLeft: 'auto' },
+          onClick: () => setOpen(!open),
+        }, open ? T('mgCollapse', '收起') : T('mgExpand', '展开合并区')))
+
+      if (!open) return h('section', { style: { ...P.card, marginTop: 12 } }, head)
+
+      return h('section', { style: { ...P.card, marginTop: 12 } }, head,
+        h('p', { style: P.muted }, T('mgWarn',
+          '平台没有「合并」接口，只能读旧正文 → 写一条新笔记。因此：① 新笔记是全新 ID，指向旧 ID 的链接会断；② 旧笔记一条不删，删旧请另走上面的删除区。')),
+
+        h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' } },
+          canUse
+            ? h('button', {
+                style: P.btn,
+                onClick: () => mg.fromSel && mg.fromSel(picked),
+              }, T('mgUseSel', '用当前勾选作合并源'))
+            : h('span', { style: { ...P.muted, fontSize: 11 } },
+                T('mgSelNeed', '先在上面的树上勾选要合并的笔记（至少 2 条），或手动填 ID')),
+          list.length
+            ? h('span', { style: { ...P.muted, fontSize: 12 } },
+                T('mgPicked', '已选') + ' ' + list.length + ' ' + T('mgPickedUnit', '条'))
+            : null,
+          h('button', {
+            style: { ...P.btn },
+            onClick: () => { setIds([]); setArmed(false); setResult(null) },
+          }, T('mgClear', '清空'))),
+
+        // 手动填 ID：合并可以多条，所以给一个逗号分隔的输入框（删除只一条，不同）
+        h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' } },
+          h('span', { style: { fontSize: 12 } }, T('mgIdsLabel', '笔记 ID')),
+          h('input', {
+            style: { ...P.input, flex: 1, minWidth: 260 },
+            placeholder: T('mgIdsPh', '多个 ID 用逗号或空格分隔（至少 2 个）'),
+            value: list.join(', '),
+            onChange: (e) => {
+              const parts = String(e.target.value).split(/[\s,，]+/).map((s) => s.trim())
+                .filter((s) => /^\d{10,25}$/.test(s))
+              setIds(parts)
+              setArmed(false)
+            },
+          })),
+
+        h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' } },
+          h('span', { style: { fontSize: 12 } }, T('mgNewTitle', '新笔记标题')),
+          h('input', {
+            style: { ...P.input, flex: 1, minWidth: 260 },
+            placeholder: T('mgNewTitlePh', '留空则自动起名：合并 N 篇 · 第一篇标题'),
+            value: title,
+            onChange: (e) => setTitle(e.target.value),
+          })),
+
+        h('label', { style: { ...P.boolRow, marginTop: 10 } },
+          h('input', {
+            type: 'checkbox', checked: ack,
+            onChange: (e) => { setAck(e.target.checked); setArmed(false) },
+          }),
+          h('span', { style: { color: 'var(--dsw-alias-state-error-primary)' } },
+            T('mgAck', '我知道合并会得到一个全新的笔记 ID，旧 ID 的引用会断'))),
+
+        h('div', { style: { display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' } },
+          h('button', {
+            style: { ...P.btn, ...(busy || list.length < 2 || !ack ? { opacity: 0.5, cursor: 'not-allowed' } : null) },
+            disabled: busy || list.length < 2 || !ack,
+            onClick: () => mg.run && mg.run(true, list),
+          }, T('mgDry', '干跑（只看预览，不写）')),
+          armed
+            ? h('button', {
+                style: { ...P.btn, ...(busy ? { opacity: 0.5 } : null) },
+                disabled: busy,
+                onClick: () => mg.run && mg.run(false, list),
+              }, T('mgReally', '真的合并（建新笔记）'))
+            : h('button', {
+                style: { ...P.btn, ...(busy || list.length < 2 || !ack ? { opacity: 0.5, cursor: 'not-allowed' } : null) },
+                disabled: busy || list.length < 2 || !ack,
+                onClick: () => setArmed(true),
+              }, T('mgArm', '准备合并…'))),
+
+        result
+          ? h('div', { style: { marginTop: 12 } },
+              h('p', { style: { ...P.muted, color: result.ok ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)' } },
+                result.ok
+                  ? T('mgOk', '完成。') + (result.dryRun ? T('mgOkDry', '（干跑，线上未动）') : '')
+                  : T('mgFail', '失败：') + (result.error || '')),
+              result.newNoteId
+                ? h('p', { style: P.muted }, T('mgNewId', '新笔记 ID：') + result.newNoteId)
+                : null,
+              result.output
+                ? h('pre', { style: P.logPre }, String(result.output).slice(0, 3000))
+                : null)
+          : null)
+    }
+
     /** 「确认执行」页：列出计划、干跑、双重闸门。 */
     function renderApply(T, h, P, plan, apply) {
       if (plan.phase === 'building') {
@@ -2184,6 +2883,10 @@ window.__ModuleLoader__.load({
 
         // ── 数据页样式 ─────────────────────────────────────
         statRow: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 10 },
+        // rowLine / boolRow 之前一直在用却没定义，取到的是 undefined，
+        // 于是「一行一条」的布局根本没生效（不报错，只是挤成一团）。
+        rowLine: { display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0' },
+        boolRow: { display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' },
         stat: {
           border: bd, borderRadius: 10, padding: '12px 14px',
           background: 'var(--dsw-alias-bg-layer-2)',

@@ -1335,6 +1335,280 @@ export function apply(ctx, config) {
         }
       },
     }), 'getnote: resolve route')
+
+    // 13) 合并：POST /plugins/getnote/merge
+    //
+    // 把多条笔记拼成一条新笔记。**不删任何东西**，删旧另走 /delete。
+    // 为什么不做成一次调用：合并会创建全新 note_id，旧引用全断，
+    // 这是不可逆的语义变化，必须让人先看到预览再确认。
+    //
+    // 闸门：confirm 必须是 MERGE；acknowledged 必须 true；dryRun 默认 true。
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/getnote/merge',
+      handler: async (req, res) => {
+        const send = (code, obj) => {
+          res.writeHead(code, { 'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store' })
+          res.end(JSON.stringify(obj))
+        }
+        if (req.method !== 'POST') return send(405, { ok: false, error: '只支持 POST' })
+        try {
+          let raw = ''
+          for await (const chunk of req) {
+            raw += chunk
+            if (raw.length > 256 * 1024) throw new Error('请求体太大')
+          }
+          const body = JSON.parse(raw || '{}')
+          if (body.confirm !== 'MERGE') {
+            return send(400, { ok: false, error: '需要 confirm: "MERGE"' })
+          }
+          if (body.acknowledged !== true) {
+            return send(400, { ok: false, error: '需要先在界面上勾选「我知道合并会得到新 ID」' })
+          }
+          const ids = Array.isArray(body.noteIds)
+            ? body.noteIds.map((x) => String(x).trim()).filter(Boolean) : []
+          if (ids.length < 2) return send(400, { ok: false, error: '合并至少要两条笔记' })
+          if (ids.length > 50) return send(400, { ok: false, error: '一次最多 50 条' })
+          for (const id of ids) {
+            if (!/^\d{10,25}$/.test(id)) return send(400, { ok: false, error: 'note_id 格式不对：' + id })
+          }
+          // 默认干跑：不显式传 false 就绝不写
+          const dryRun = body.dryRun !== false
+          const argv = ['merge', ...ids]
+          if (body.title) argv.push('--title', String(body.title))
+          if (body.style === 'divider') argv.push('--style', 'divider')
+          if (body.show) argv.push('--show')
+          if (!dryRun) {
+            argv.push('--apply', '--i-understand-new-id')
+          }
+          const out = await runGn(config, resolveCreds(), argv, undefined, 180000)
+          const txt = String(out.output || '')
+          let newId = ''
+          const m = txt.match(/已建新笔记：(\S+)/)
+          if (m) newId = m[1]
+          // runGn 的 code 是字符串（'OK' / 'EXIT_1'），判断成功要用 out.ok。
+          // 写成 out.code === 0 会永远 false，把成功的合并报成失败。
+          send(200, {
+            ok: !!out.ok,
+            dryRun,
+            newNoteId: newId || null,
+            noteIds: ids,
+            code: out.code,
+            output: txt.slice(0, 60000),
+          })
+        } catch (error) {
+          send(400, { ok: false, error: String((error && error.message) || error) })
+        }
+      },
+    }), 'getnote: merge route')
+
+    // 14) ID 表：GET /plugins/getnote/ids
+    //
+    // 纯本地扫描镜像，重建「名字 → id」表，并报名字/ID 错位。
+    // 为何要做：插件里很多关联靠名字字符串，用户改个名字就静默失效且不报错。
+    // 实测已抓到一组：标签「AI」对应两个 id。
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/getnote/ids',
+      handler: async (req, res) => {
+        const send = (code, obj) => {
+          res.writeHead(code, { 'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store' })
+          res.end(JSON.stringify(obj))
+        }
+        if (req.method !== 'GET') return send(405, { ok: false, error: '只支持 GET' })
+        try {
+          const out = await runGn(config, resolveCreds(), ['ids', '--json'], undefined, 120000)
+          let data = null
+          try { data = JSON.parse(String(out.output || '')) } catch { data = null }
+          // gn.py ids --json 把结果包在 report 里（另外带 ok / path）。
+          // 这里拆开：界面只关心表本身，不要让前端记住这层包装。
+          const report = (data && data.report) || data || null
+          send(200, { ok: !!out.ok, data: report,
+            output: report ? '' : String(out.output || '').slice(0, 40000) })
+        } catch (error) {
+          send(400, { ok: false, error: String((error && error.message) || error) })
+        }
+      },
+    }), 'getnote: ids route')
+
+    // 15) 工作内容提纯包：GET /plugins/getnote/brief?days=&top=
+    //
+    // 给 AI Agent 读的：待办、主要来源、自己记的主题、最近动态。
+    // 纯本地不耗配额 —— 所以可以随时拉，不会因为限速/断网卡住。
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/getnote/brief',
+      handler: async (req, res) => {
+        const send = (code, obj) => {
+          res.writeHead(code, { 'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store' })
+          res.end(JSON.stringify(obj))
+        }
+        if (req.method !== 'GET') return send(405, { ok: false, error: '只支持 GET' })
+        try {
+          const url = new URL(req.url || '/', 'http://127.0.0.1')
+          const argv = ['agent-brief', '--json']
+          const days = parseInt(url.searchParams.get('days') || '0', 10)
+          if (days > 0) argv.push('--days', String(days))
+          const top = parseInt(url.searchParams.get('top') || '12', 10)
+          if (top > 0) argv.push('--top', String(Math.min(top, 50)))
+          const recent = parseInt(url.searchParams.get('recent') || '10', 10)
+          if (recent > 0) argv.push('--recent', String(Math.min(recent, 50)))
+          const out = await runGn(config, resolveCreds(), argv, undefined, 120000)
+          let data = null
+          try { data = JSON.parse(String(out.output || '')) } catch { data = null }
+          send(200, { ok: !!out.ok, data, output: data ? '' : String(out.output || '').slice(0, 40000) })
+        } catch (error) {
+          send(400, { ok: false, error: String((error && error.message) || error) })
+        }
+      },
+    }), 'getnote: brief route')
+
+    // 15.5) 账号归属盘点：GET /plugins/getnote/personas?into=current
+    //
+    // 纯本地统计，不调 API、不写平台。返回「我/孩子/老婆/共用/未知」各多少篇，
+    // 以及判不出来的清单——那份清单要人看，所以不自动猜。
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/getnote/personas',
+      handler: async (req, res) => {
+        const send = (code, obj) => {
+          res.writeHead(code, { 'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store' })
+          res.end(JSON.stringify(obj))
+        }
+        if (req.method !== 'GET') return send(405, { ok: false, error: '只支持 GET' })
+        try {
+          const url = new URL(req.url || '/', 'http://127.0.0.1')
+          const into = (url.searchParams.get('into') || 'current').trim() || 'current'
+          // 扫 4321 个 md 实测 ~2 秒，给足余量
+          const out = await runGn(config, resolveCreds(),
+            ['personas', '--into', into, '--json'], undefined, 180000)
+          let data = null
+          try { data = JSON.parse(String(out.output || '')) } catch { data = null }
+          if (!out.ok && !data) {
+            return send(400, { ok: false,
+              error: (String(out.output || '') + String(out.error || '')).slice(0, 400) })
+          }
+          send(200, { ok: !!out.ok, data })
+        } catch (error) {
+          send(400, { ok: false, error: String((error && error.message) || error) })
+        }
+      },
+    }), 'getnote: personas route')
+
+    // 16) 本地检索：GET /plugins/getnote/find?q=&kb=&type=&limit=
+    //
+    // 纯本地 sqlite 索引，不联网、不耗配额。检索是最频繁的动作，
+    // 每次都走云端 recall 既慢又费钱，而且它上限 10 条、不能按库过滤。
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/getnote/find',
+      handler: async (req, res) => {
+        const send = (code, obj) => {
+          res.writeHead(code, { 'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store' })
+          res.end(JSON.stringify(obj))
+        }
+        if (req.method !== 'GET') return send(405, { ok: false, error: '只支持 GET' })
+        try {
+          const url = new URL(req.url || '/', 'http://127.0.0.1')
+          const q = (url.searchParams.get('q') || '').trim()
+          if (!q) return send(400, { ok: false, error: '要给查询词 q' })
+          const argv = ['find', q, '--json']
+          const kb = (url.searchParams.get('kb') || '').trim()
+          if (kb) argv.push('--kb', kb)
+          const type = (url.searchParams.get('type') || '').trim()
+          if (type) argv.push('--type', type)
+          // 按人过滤：一个账号里混着三个人，不分开搜出来的东西没法用。
+          const owner = (url.searchParams.get('owner') || '').trim()
+          if (owner) argv.push('--owner', owner)
+          const limit = parseInt(url.searchParams.get('limit') || '10', 10)
+          argv.push('--limit', String(Math.min(Math.max(limit, 1), 100)))
+
+          const out = await runGn(config, resolveCreds(), argv, undefined, 60000)
+          let data = null
+          try { data = JSON.parse(String(out.output || '')) } catch { data = null }
+          // 没建索引时 gn.py 返回退出码 2 并提示先跑 index —— 把它翻成人话
+          if (!out.ok && !data) {
+            const txt = String(out.output || '') + String(out.error || '')
+            if (txt.includes('还没有索引')) {
+              return send(409, { ok: false, error: '还没有建索引', needIndex: true,
+                hint: '先点「建索引」，或跑 gn.py index' })
+            }
+            return send(400, { ok: false, error: txt.slice(0, 400) })
+          }
+          send(200, { ok: !!out.ok, data, output: data ? '' : String(out.output || '').slice(0, 20000) })
+        } catch (error) {
+          send(400, { ok: false, error: String((error && error.message) || error) })
+        }
+      },
+    }), 'getnote: find route')
+
+    // 17) 建索引：POST /plugins/getnote/index
+    //
+    // 只写本地 dataDir/state/search.db，不发任何写请求到平台。
+    // 所以不需要 confirm 闸门 —— 它不是「改线上数据」的操作。
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/getnote/index',
+      handler: async (req, res) => {
+        const send = (code, obj) => {
+          res.writeHead(code, { 'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store' })
+          res.end(JSON.stringify(obj))
+        }
+        if (req.method !== 'POST') return send(405, { ok: false, error: '只支持 POST' })
+        try {
+          // 建 4321 篇实测 39 秒，留足余量
+          const out = await runGn(config, resolveCreds(), ['index'], undefined, 300000)
+          send(200, { ok: !!out.ok, code: out.code,
+            output: String(out.output || '').slice(0, 20000),
+            error: out.ok ? '' : String(out.error || '').slice(0, 400) })
+        } catch (error) {
+          send(400, { ok: false, error: String((error && error.message) || error) })
+        }
+      },
+    }), 'getnote: index route')
+
+    // 18) 按库发布：POST /plugins/getnote/publish
+    //
+    // 只写本地目录，不发写请求到平台，不需要 confirm。
+    // 但会生成文件，所以要求显式传 kb（防止空参数建出一堆垃圾目录）。
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/getnote/publish',
+      handler: async (req, res) => {
+        const send = (code, obj) => {
+          res.writeHead(code, { 'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store' })
+          res.end(JSON.stringify(obj))
+        }
+        if (req.method !== 'POST') return send(405, { ok: false, error: '只支持 POST' })
+        let raw = ''
+        try {
+          for await (const chunk of req) {
+            raw += chunk
+            if (raw.length > 32 * 1024) throw new Error('请求体太大')
+          }
+          const body = JSON.parse(raw || '{}')
+          const kb = String(body.kb || '').trim()
+          if (!kb) return send(400, { ok: false, error: '要给知识库名 kb' })
+          const argv = ['publish', '--kb', kb]
+          if (body.out) argv.push('--out', String(body.out))
+          const out = await runGn(config, resolveCreds(), argv, undefined, 120000)
+          send(200, { ok: !!out.ok, code: out.code,
+            dir: path.join(cfg(config, 'dataDir', DEFAULT_DATA_DIR), 'publish',
+              String(kb).replace(/[\\/:*?"<>|]/g, '_')),
+            output: String(out.output || '').slice(0, 20000),
+            error: out.ok ? '' : String(out.error || '').slice(0, 400) })
+        } catch (error) {
+          send(400, { ok: false, error: String((error && error.message) || error) })
+        }
+      },
+    }), 'getnote: publish route')
     // 7) 执行日志：GET /plugins/getnote/log?lines=200
     //
     // 读 dataGetbrain/logs/<YYYYMMDD>.jsonl 的最后 N 条（审计日志，一行一个请求）。

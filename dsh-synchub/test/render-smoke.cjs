@@ -309,6 +309,33 @@ ok('main 两次渲染钩子序一致',
   c1.trail.join('|') === c2.trail.join('|'),
   'len ' + c1.trail.length + ' vs ' + c2.trail.length);
 
+const src0 = code;
+console.log('\nE0. 代码仓库编辑卡（可在设置里增删任意仓库）');
+ok('源码里有代码仓库编辑表（form.codeRepos 可增删）',
+  /Array\.isArray\(form\.codeRepos\)/.test(src0),
+  '找不到 codeRepos 的编辑入口');
+ok('代码仓库表有「增加一个仓库」按钮',
+  /增加一个仓库/.test(src0), '没有添加按钮，用户无法自己加第三个仓库');
+ok('代码仓库表有「移除」按钮（不删磁盘）',
+  /不会删磁盘上的仓库/.test(src0), '移除语义必须说清，否则用户以为会删仓库');
+ok('代码仓库卡没被挂载会是死代码',
+  /^\s+repoCard,$/m.test(src0), 'repoCard 定义了但没渲染（本会话已踩过一次）');
+ok('设置页有定时自动提交开关', /codeRepoAutoEnabled/.test(src0));
+ok('设置页有定时间隔输入', /codeRepoAutoMinutes/.test(src0));
+
+console.log('\nE1. 打开侧边栏不强制刷新（20 分钟缓存 + 上次检查时间）');
+ok('有跨挂载缓存（模块级，卸载不丢）', /const PANEL_CACHE = \{/.test(src0),
+  '缓存必须在组件外，否则卸载即丢，下次打开照样要等');
+ok('缓存 TTL 是 20 分钟', /PANEL_TTL_MS = 20 \* 60 \* 1000/.test(src0));
+ok('首帧用缓存初始化（不是 null）',
+  /useState\(\(\) => PANEL_CACHE\.own\)/.test(src0),
+  '首帧若为 null 就会显示「正在读取」，等于没省那一次等待');
+ok('刷新结果回写缓存', /panelCacheStore\(/.test(src0));
+ok('头部时间说明新鲜度（不只是「检查于」）',
+  /checkedAtText\(/.test(src0), '要告诉用户这个数新不新');
+ok('时间文案含「结果」与分钟数', /分钟内沿用|正在后台更新/.test(src0));
+ok('没有时间时不说谎', /尚未检查/.test(src0));
+
 console.log('\nE. 源码级护栏（防止同类逗号/调用错误再引入）');
 const src = code;
 /* 曾经的 bug：`e('div', {...}, …)` 后面漏逗号，下一行开头的 `(cond ? …)` 就被当作

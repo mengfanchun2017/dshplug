@@ -34,7 +34,7 @@ const execFileAsync = promisify(execFile);
 
 const name = 'dsh-synchub';
 const inject = ['webServer'];
-const VERSION = '0.6.0';
+const VERSION = '0.7.0';
 /* 分支不能写死。远端仓库可能是 master（GitHub 旧默认）也可能是 main，
    写死一个就会在已有仓库上推出一个**平行的空历史分支**。
    优先级：config.channels[ch].branch → 远端 HEAD 指向的分支 → DEFAULT_BRANCH。 */
@@ -1429,6 +1429,12 @@ async function codeRepoState(repo) {
   if (r && r.ok && r.out) out.remote = r.out;
   if (lg.ok && lg.out) out.lastCommit = lg.out;
 
+  /* 「没有远端」不是「已同步」（ADR-026 同型，第三次踩）。
+     dw-base 就是这种情况：本地提交齐全、0 未提交、0 领先 0 落后，
+     但因为从没配 origin，这个 0 毫无意义 —— 远端根本不存在。
+     前端必须据此画「未连远端」而不是 ✓。 */
+  if (!out.remote) out.remoteMissing = true;
+
   return out;
 }
 
@@ -1994,6 +2000,276 @@ async function purgeVerify(id) {
   return { ok: true, id, clean, checks, remainingRefs: ref.paths, workspaceError: ref.error || null };
 }
 
+/* ──────────────────────────────────────────────────────────────────────────────
+   会话迁移：把一个会话从 A 工作区搬到 B 工作区（跨机器改名/改路径后的必修课）
+
+   为什么需要它：
+     用户把 C:\dsh\base 改名成 C:\dsh\dw-base 后，旧工作区的登记条目消失了，
+     但 sessions\--C-dsh-base--\ 下的会话正文还在。于是侧边栏把这些会话显示成
+     「未分组」—— 数据没丢，是「归属」丢了。
+
+     DSH 里会话归属有两处，必须一起改，缺一处就半残：
+       ① workspace.json  tables.workspaces[wsId].sessionIds   ← 侧边栏按这个分组
+       ② sessions\<组目录>\<会话id>\                          ← 正文按这个存
+
+     `--C-dsh-base--` 这种组目录名是**路径编码**：盘符和分隔符都换成 `-`。
+     迁移 = 正文搬目录 + workspace.json 里从一个 sessionIds 移到另一个。
+
+   与 purge 的相同纪律（ADR-004）：
+     · 先全量备份到回滚点，再由用户 confirm 才动手；
+     · 目标已存在同 id 会话时**拒绝**，不覆盖；
+     · 会话仍在写入（30 秒内 / 未结束 turn）时拒绝，避免搬走正在写的数据；
+     · 只用 workspace.json 作为归属权威，不猜。
+   ────────────────────────────────────────────────────────────────────────────── */
+
+/** 把工作区绝对路径编码成 sessions 下的组目录名（DSH 的实际规则）。
+ *  实测：C:\dsh\base → `--C-dsh-base--`
+ *  规则：`--` + 路径里 `:` `\` `/` 全换成 `-` + `--`。 */
+function encodeWorkspaceGroup(wsPath) {
+  if (!wsPath || typeof wsPath !== 'string') return null;
+  const body = wsPath.replace(/^[A-Za-z]:/, m => m[0]) /* 保留盘符字母 */
+    .replace(/[:\\/]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return `--${body}--`;
+}
+
+/** 反解组目录名（仅在需要提示用户时用，不做权威判断）。 */
+function decodeWorkspaceGroup(name) {
+  const m = /^--(.+)--$/.exec(name || '');
+  if (!m) return null;
+  return m[1];
+}
+
+/** 读 workspace.json 的 workspaces 表：{ [id]: {path,title,sessionIds,...} } */
+async function readWorkspaceDoc() {
+  const file = path.join(DSH_HOME, 'storages', 'workspace.json');
+  let doc;
+  try { doc = JSON.parse(await fsp.readFile(file, 'utf8')); }
+  catch (e) { return { ok: false, file, error: `workspace.json 无法解析：${e.message}` }; }
+  const table = (doc && doc.tables && doc.tables.workspaces) || {};
+  return { ok: true, file, doc, table };
+}
+
+/** 只读预演：说清「现在在哪、要搬到哪、会动哪些文件」。 */
+async function sessionMigratePreview(id, toName) {
+  if (!bareSessionId(id)) return { ok: false, error: '缺少合法的 sessionId' };
+  const dirs = await findSessionDirs(id);
+  if (!dirs.length) return { ok: false, error: '找不到这个会话的正文目录（可能已被删除）' };
+
+  const ws = await readWorkspaceDoc();
+  if (!ws.ok) return { ok: false, error: ws.error };
+
+  /* 当前归属：在哪个 workspace 的 sessionIds 里 */
+  const ids = sessionIdForms(id);
+  const from = [];
+  const to = [];
+  for (const [wsId, rec] of Object.entries(ws.table)) {
+    if (!rec || !Array.isArray(rec.sessionIds)) continue;
+    if (rec.sessionIds.some(s => ids.has(s))) from.push({ wsId, path: rec.path, title: rec.title });
+  }
+  for (const [wsId, rec] of Object.entries(ws.table)) {
+    if (!rec) continue;
+    if (String(rec.title || '').toLowerCase() === String(toName || '').toLowerCase()
+      || String(rec.path || '') === String(toName || '')) {
+      to.push({ wsId, path: rec.path, title: rec.title });
+    }
+  }
+  if (to.length !== 1) {
+    return {
+      ok: false,
+      error: to.length ? `目标工作区名不唯一：命中 ${to.length} 个` : `找不到名为「${toName}」的工作区（先在 DSH 里打开它一次，让它被登记）`,
+      from,
+    };
+  }
+
+  const target = to[0];
+  const targetGroup = path.join(DSH_HOME, 'sessions', encodeWorkspaceGroup(target.path));
+  const already = fs.existsSync(path.join(targetGroup, path.basename(dirs[0])));
+  const quiet = await assertSessionQuiet(id, dirs);
+
+  return {
+    ok: true,
+    id,
+    from,
+    to: target,
+    fromDir: dirs[0],
+    toDir: path.join(targetGroup, path.basename(dirs[0])),
+    targetGroup,
+    alreadyThere: already,
+    quiet: !quiet,
+    quietReason: quiet || null,
+    projcache: projCacheFile(id),
+    steps: [
+      '备份 workspace.json + 会话正文目录到回滚点',
+      `正文目录搬到 ${encodeWorkspaceGroup(target.path)}`,
+      `workspace.json 里从 ${from.map(f => f.title).join('/') || '（未分组）'} 的 sessionIds 移到 ${target.title}`,
+      'projcache 里的 cwd 不改（它是缓存，DSH 会自愈）',
+    ],
+    needsConfirm: true,
+  };
+}
+
+/** 执行迁移。必须带 confirm='MOVE'。 */
+async function sessionMigrateExecute(id, toName, confirm) {
+  if (confirm !== 'MOVE') return { ok: false, error: "需要二次确认：请求体带 confirm:'MOVE'" };
+  const pre = await sessionMigratePreview(id, toName);
+  if (!pre.ok) return pre;
+  if (!pre.quiet) return { ok: false, error: `会话仍在使用中：${pre.quietReason}` };
+  if (pre.alreadyThere) return { ok: false, error: '目标位置已有同 id 会话，拒绝覆盖' };
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const rollbackDir = path.join(BACKUP_ROOT, `move-${stamp}-${bareSessionId(id)}`);
+  const result = { ok: true, id, to: pre.to, from: pre.from, moved: false, rollbackDir, wrote: [] };
+
+  /* ① 回滚点：workspace.json 与正文目录都留一份，逐字节复制。 */
+  await fsp.mkdir(path.join(rollbackDir, 'storages'), { recursive: true });
+  await fsp.copyFile(path.join(DSH_HOME, 'storages', 'workspace.json'),
+    path.join(rollbackDir, 'storages', 'workspace.json'));
+  result.wrote.push('storages/workspace.json');
+
+  const bodyDest = path.join(rollbackDir, 'session-body', path.basename(pre.fromDir));
+  await fsp.cp(pre.fromDir, bodyDest, { recursive: true });
+  result.wrote.push('session-body/' + path.basename(pre.fromDir));
+
+  /* ② 搬正文目录：先复制到目标组，成功后再删源。
+     直接 rename 跨盘/跨组都可能失败；复制-校验-删除最稳，且中途失败源还在。 */
+  await fsp.mkdir(pre.targetGroup, { recursive: true });
+  await fsp.cp(pre.fromDir, pre.toDir, { recursive: true });
+  const srcSize = await dirSize(pre.fromDir);
+  const dstSize = await dirSize(pre.toDir);
+  if (srcSize.bytes !== dstSize.bytes || srcSize.files !== dstSize.files) {
+    return { ok: false, error: `复制校验失败（源 ${srcSize.files} 文件/${srcSize.bytes}B，目标 ${dstSize.files}/${dstSize.bytes}）；源目录已保留，未做任何删除`, rollbackDir };
+  }
+  await fsp.rm(pre.fromDir, { recursive: true, force: true });
+  result.moved = true;
+
+  /* ③ 改 workspace.json 的归属：从旧工作区移除、加进目标工作区。
+     用 walkSessionRefs 的一般化思路只碰 sessionIds 数组，其余字段一律不动。 */
+  const ids = sessionIdForms(id);
+  const ws = await readWorkspaceDoc();
+  if (!ws.ok) return { ok: false, error: ws.error, rollbackDir, moved: true };
+  let touched = 0;
+  for (const [wsId, rec] of Object.entries(ws.table)) {
+    if (!rec || !Array.isArray(rec.sessionIds)) continue;
+    const before = rec.sessionIds.length;
+    rec.sessionIds = rec.sessionIds.filter(s => {
+      /* 目标工作区保留，其他工作区一律剔除（同一会话不该同时挂在两处）。 */
+      if (wsId === pre.to.wsId) return true;
+      return !ids.has(s);
+    });
+    if (rec.sessionIds.length !== before) touched++;
+    if (wsId === pre.to.wsId && !rec.sessionIds.some(s => ids.has(s))) {
+      rec.sessionIds.push(id.startsWith('session-') ? id : `session-${bareSessionId(id)}`);
+      touched++;
+    }
+  }
+  rec_updatedAt(ws.doc, pre.to.wsId);
+  const tmp = ws.file + '.tmp-' + process.pid;
+  await fsp.writeFile(tmp, JSON.stringify(ws.doc, null, 2), 'utf8');
+  await fsp.rename(tmp, ws.file);
+  result.workspaceTouched = touched;
+
+  return { ...result, verify: await sessionMigrateVerify(id, pre.to.wsId) };
+}
+
+/** 附注：更新目标工作区的 updatedAt（其它字段一律不动）。 */
+function rec_updatedAt(doc, wsId) {
+  const t = doc && doc.tables && doc.tables.workspaces && doc.tables.workspaces[wsId];
+  if (t) t.updatedAt = new Date().toISOString();
+}
+
+/** 验收：正文在新组、workspace.json 只挂在目标、projcache 还在。 */
+async function sessionMigrateVerify(id, toWsId) {
+  const dirs = await findSessionDirs(id);
+  const ws = await readWorkspaceDoc();
+  const ids = sessionIdForms(id);
+  const owners = [];
+  if (ws.ok) {
+    for (const [wsId, rec] of Object.entries(ws.table)) {
+      if (rec && Array.isArray(rec.sessionIds) && rec.sessionIds.some(s => ids.has(s))) owners.push({ wsId, title: rec.title });
+    }
+  }
+  const expect = ws.ok && ws.table[toWsId] ? ws.table[toWsId].path : null;
+  const want = expect ? path.join(DSH_HOME, 'sessions', encodeWorkspaceGroup(expect)) : null;
+  const inRightGroup = Boolean(want && dirs.some(d => path.dirname(d) === path.normalize(want)));
+  const onlyTarget = owners.length === 1 && owners[0].wsId === toWsId;
+  return {
+    ok: inRightGroup && onlyTarget && dirs.length === 1,
+    physicalDirs: dirs,
+    expectedGroup: want,
+    inRightGroup,
+    owners,
+    onlyTarget,
+    projcachePresent: fs.existsSync(projCacheFile(id)),
+    checks: { inRightGroup, onlyTarget, singleCopy: dirs.length === 1 },
+  };
+}
+
+/** 批量迁移：把某个旧组目录下所有「未分组」会话一次搬到目标工作区。
+ *
+ *  场景：工作区改名后，旧组目录 `--C-dsh-base--` 里躺着一堆正文，
+ *  workspace.json 里一个都没登记 —— 逐个迁移要敲 9 次 id，且漏一个就少一个。
+ *
+ *  安全边界（比单个迁移更保守）：
+ *    · 只搬**未登记**的（已属于别的工作区绝不动，避免误搬正在用的）；
+ *    · 某个会话仍在使用中 → 跳过并报告，不整批失败；
+ *    · 目标已有同 id → 跳过；
+ *    · 全部走同一个回滚点，出问题一次全退。
+ */
+async function sessionMigrateGroup(fromGroup, toName, confirm) {
+  if (confirm !== 'MOVE') return { ok: false, error: "需要二次确认：请求体带 confirm:'MOVE'" };
+  const src = path.join(DSH_HOME, 'sessions', fromGroup);
+  if (!fs.existsSync(src)) return { ok: false, error: '组目录不存在：' + fromGroup };
+
+  const entries = (await fsp.readdir(src, { withFileTypes: true }))
+    .filter(e => e.isDirectory() && /^session-/.test(e.name))
+    .map(e => e.name);
+  if (!entries.length) return { ok: false, error: '该组目录下没有会话' };
+
+  const ws = await readWorkspaceDoc();
+  if (!ws.ok) return { ok: false, error: ws.error };
+  const registered = new Set();
+  for (const rec of Object.values(ws.table)) {
+    if (rec && Array.isArray(rec.sessionIds)) rec.sessionIds.forEach(s => registered.add(s));
+  }
+
+  const todo = entries.filter(n => !registered.has(n));
+  const alreadyGrouped = entries.filter(n => registered.has(n));
+  if (!todo.length) {
+    return { ok: false, error: '该组下的会话都已在某个工作区里登记，没有「未分组」的', alreadyGrouped };
+  }
+
+  const done = [];
+  const skipped = [];
+  for (const id of todo) {
+    const r = await sessionMigrateExecute(id, toName, 'MOVE');
+    if (r.ok) done.push({ id, to: r.to && r.to.title, rollbackDir: r.rollbackDir, verify: r.verify && r.verify.ok });
+    else skipped.push({ id, reason: r.error || '未知原因' });
+  }
+
+  /* 全搬完后，旧组若已空就删掉 —— 空目录留在 sessions 下会让侧边栏出现一个
+     名字眼熟、点进去什么都没有的幽灵工作区。不空则保留并报告剩余。 */
+  let groupRemoved = false;
+  let groupRemaining = 0;
+  try {
+    const left = (await fsp.readdir(src)).filter(n => !n.startsWith('.'));
+    groupRemaining = left.length;
+    if (!left.length) { await fsp.rm(src, { recursive: true, force: true }); groupRemoved = true; }
+  } catch { /* 删不掉不算失败：留个空目录无害，只是不好看 */ }
+
+  return {
+    ok: done.length > 0,
+    fromGroup,
+    to: toName,
+    moved: done.length,
+    skipped: skipped.length,
+    done,
+    skippedDetail: skipped,
+    alreadyGrouped,
+    groupRemoved,
+    groupRemaining,
+  };
+}
 /* ------------------------------------- ADR-006 人工蒸馏会话文档 sessionNote
  * compact 摘要是「给模型继续用的上下文」，不是给人看的决策记录，且写在 zstd
  * 多帧日志里（ADR-004）。按 ADR-006：不自动导出，只给模板 + 人工确认闸门，
@@ -2966,6 +3242,66 @@ function routesFor() {
     },
     {
       kind: 'exact',
+      path: '/api/dsh-synchub/session-move',
+      handler: async (req, res) => {
+        try {
+          const url = new URL(req.url || '/', 'http://127.0.0.1');
+          const id = url.searchParams.get('id') || '';
+          const body = req.method === 'POST' ? await readBody(req).catch(() => ({})) : {};
+          if (req.method === 'POST') {
+            // 二次确认闸门：confirm 必须逐字是 'MOVE'，默认（任何不等）都不动文件。
+            const r = await sessionMigrateExecute(body.id || id, body.to || url.searchParams.get('to'), body.confirm);
+            return json(res, r.ok === false ? 400 : 200, r);
+          }
+          return json(res, 200, await sessionMigratePreview(id, url.searchParams.get('to')));
+        } catch (e) {
+          return json(res, 500, { ok: false, error: String(e.message || e) });
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/api/dsh-synchub/session-move/help',
+      handler: async (_req, res) => json(res, 200, {
+        ok: true,
+        why: '工作区改名/改路径后，旧组的会话会变成「未分组」。数据没丢，是归属丢了 —— 需要同时改正文目录和 workspace.json。',
+        how: [
+          'GET  /api/dsh-synchub/session-move?id=<sessionId>&to=<工作区名>     # 预览：现在在哪、要搬到哪、动哪些文件',
+          "POST /api/dsh-synchub/session-move {id, to, confirm:'MOVE'}          # 执行迁移",
+          'GET  /api/dsh-synchub/session-move?id=<id>&to=<名>&verify=1          # 验收',
+          "POST /api/dsh-synchub/session-move/group {from, to, confirm:'MOVE'}  # 批量：只搬未分组的"
+        ],
+        notes: [
+          'to 可以是工作区标题（title），也可以是它的绝对路径；两者都认。',
+          '目标工作区必须已在 DSH 里登记过（打开它一次即可），否则找不到归属。',
+          '先写回滚点到 <state>/backups/move-<时间>-<会话id>/，含 workspace.json 与会话正文。',
+          '复制后逐文件校验字节数与文件数，不一致就中止并保留源目录。',
+          '会话仍在写入（30 秒内有活动 / 有未结束 turn）时拒绝迁移。',
+        ],
+      }),
+    },
+    {
+      kind: 'exact',
+      path: '/api/dsh-synchub/session-move/group',
+      handler: async (req, res) => {
+        try {
+          const url = new URL(req.url || '/', 'http://127.0.0.1');
+          const body = req.method === 'POST' ? await readBody(req).catch(() => ({})) : {};
+          /* 批量只走 POST：GET 拿不到 from/to 就容易误触发，代价是搬错一批会话。
+             这里不给 GET 预览，宁可让调用方先逐个 session-move 预览。 */
+          if (req.method !== 'POST') {
+            return json(res, 405, { ok: false, error: '批量迁移只接受 POST（避免误触发）' });
+          }
+          const r = await sessionMigrateGroup(
+            body.from || '', body.to || '', body.confirm);
+          return json(res, r.ok === false ? 400 : 200, r);
+        } catch (e) {
+          return json(res, 500, { ok: false, error: String(e.message || e) });
+        }
+      },
+    },
+    {
+      kind: 'exact',
       path: '/api/dsh-synchub/purge-session/help',
       handler: async (_req, res) => json(res, 200, {
         ok: true,
@@ -3120,4 +3456,4 @@ async function codeRepoAutoTick(ctx) {
 export { name, inject, apply };
 export const VERSION_INFO = VERSION;
 // 供离线 smoke 测试用（node --check 查不出逻辑错，必须真跑一遍）。
-export const __test = { codeRepoList, codeRepoState, codeReposPayload, syncCodeRepo, syncAllCodeRepos, divergeInfo, resolveKeepLocal, resolveKeepRemote, stampTrailer, purgePreview, purgeExecute, purgeVerify, sessionIdForms, walkSessionRefs, bareSessionId, sessionNoteTemplate, sessionNotePreview, sessionNoteWrite, resolveNotePath, stateInfo, installInfo, idleStandard, mergeConfig, normalizeRemoteToHttps, repoFacts, normalizeWorkspaceMap, realWorkspaces, workspaceReport, selfCheck, channelState, readConfig, statusPayload, preflightReport: selfCheck };
+export const __test = { codeRepoList, codeRepoState, codeReposPayload, syncCodeRepo, syncAllCodeRepos, divergeInfo, resolveKeepLocal, resolveKeepRemote, stampTrailer, purgePreview, purgeExecute, purgeVerify, sessionIdForms, walkSessionRefs, bareSessionId, sessionNoteTemplate, sessionNotePreview, sessionNoteWrite, resolveNotePath, sessionMigrateGroup, sessionMigratePreview, sessionMigrateExecute, sessionMigrateVerify, encodeWorkspaceGroup, decodeWorkspaceGroup, stateInfo, installInfo, idleStandard, mergeConfig, normalizeRemoteToHttps, repoFacts, normalizeWorkspaceMap, realWorkspaces, workspaceReport, selfCheck, channelState, readConfig, statusPayload, preflightReport: selfCheck };

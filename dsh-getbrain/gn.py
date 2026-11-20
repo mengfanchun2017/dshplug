@@ -25,13 +25,14 @@ import json
 import os
 import re
 import socket
+import sqlite3
 import sys
 import time
 import zipfile
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -1076,7 +1077,7 @@ def cmd_topics(args):
 def _parse_md_head(path):
     """从镜像 Markdown 头部抽出分类所需的几个字段（不解析全文）。"""
     out = {"note_id": None, "type": None, "topics": [], "topic_ids": {},
-           "tags": [], "source": None, "title": None, "url": None}
+           "tags": [], "tag_pairs": [], "source": None, "title": None, "url": None}
     try:
         txt = path.read_text(encoding="utf-8", errors="replace")[:4096]
     except OSError:
@@ -1099,7 +1100,14 @@ def _parse_md_head(path):
                 out["topic_ids"][nm] = tid
     m = re.search(r"^- 标签: (.+)$", txt, re.M)
     if m and m.group(1).strip() not in ("None", "[]", ""):
-        out["tags"] = re.findall(r"'name': '([^']+)'", m.group(1))
+        raw_tags = m.group(1)
+        out["tags"] = re.findall(r"'name': '([^']+)'", raw_tags)
+        # 标签 id 也要留着：同名不同 id 时，光凭名字会把两条不同的标签当成一个。
+        # 实测存在这种情况（标签「AI」有 36117013 / 36111209 两个 id）。
+        # 用「对列表」而不是 dict：同一条笔记里可能挂着两个同名不同 id 的标签，
+        # 用 dict 会把其中一个悄悄吃掉（实测标签「AI」就有两个 id）。
+        out["tag_pairs"] = [(tid, nm) for tid, nm in
+                            re.findall(r"'id': '([^']*)', 'name': '([^']+)'", raw_tags) if tid and nm]
     m = re.search(r"^- 来源: (.+)$", txt, re.M)
     if m:
         out["source"] = m.group(1).strip()
@@ -1153,6 +1161,419 @@ def _book_of(head):
     m = re.match(r"^《([^》]+)》", art)
     return m.group(1) if m else None
 
+# ── 账号归属（persona）：一个账号，三个人 ─────────────────────────
+#
+# 这个 Get笔记 账号不是「一个人的知识库」，是三个人共用一个账号：
+#   · 我    —— AI 平台 / 算力 / 大模型 / 国航数字化 / 飞书 / 知识管理
+#   · 孩子  —— 高考 / 强基计划 / 志愿填报 / 院校专业 / 击剑训练 / 大学新生课
+#   · 老婆  —— 民航服务质量管理 / 客服投诉 / 国航客服中心例会 / 暑运
+# 再加 4053 篇（94%）课程与书本摘录——那是**家里一起在读**的东西，不属于某一个人。
+#
+# 所以「多人使用」指的是：这个账号里混着三个人的内容，
+# **AI 必须先分清是谁的**。不是多人协作编辑（那件事本插件不做，见 ROADMAP §4.3）。
+#
+# 分不清的代价是具体的：不提纯，Agent 会把「孩子的志愿填报」算成我的工作方向，
+# 把「老婆的客服例会」当成我的部门会议，然后拿一堆别人的事给我出主意。
+#
+# 判定只用本地镜像，不调 API。三种信号加权：
+#   1) 知识库归属 +12 —— 人手动把笔记放进某个库，是最可靠的意图信号
+#   2) 标题关键词 +5/个（最多算 3 个）—— 标题是作者自己起的，噪声最低
+#   3) 正文关键词 +1/个（最多算 5 个）—— 正文长，单个词的说服力要压低
+# 分数不够就判「未知」，不硬猜：宁可让人来指一下，也不要给 Agent 一个错的归属。
+#
+# 为什么不能只用关键词（实测）：269 篇自己记的笔记，纯关键词只能判出
+# 我 67 / 孩子 81 / 老婆 20，还有 97 篇判不出来（36%）、4 篇两边都像。
+# 所以知识库信号是主力，关键词只是补充，且必须允许人按 note_id 直接钉死。
+
+OWNER_ME = "我"
+OWNER_KID = "孩子"
+OWNER_SPOUSE = "老婆"
+OWNER_SHARED = "共用"
+OWNER_UNKNOWN = "未知"
+OWNERS = (OWNER_ME, OWNER_KID, OWNER_SPOUSE, OWNER_SHARED, OWNER_UNKNOWN)
+
+# 「自己记的」类型：录音、会议、内部记录、本地录音、手记、图片文字、录音卡。
+# 与摘录（得到课程/电子书，type 为 ref / link / class_audio 等）相对。
+# 只有这批带行动项和工作方向，摘录是阅读记录。
+OWN_TYPES = {"audio", "meeting", "internal_record", "local_audio",
+             "plain_text", "img_text", "recorder_audio", "recorder_flash_audio"}
+
+# 知识库 → 归属。默认值是从实测内容归纳出来的，不是猜的：
+#   susan 16 篇全是「民航服务质量 / 投诉处理 / 客服中心例会」→ 老婆
+#   fencing 7 篇全是击剑训练记录、university 9 篇全是强基与志愿、chinese 2 篇高考语文 → 孩子
+#   aisnip 16 篇企业 AI 落地、working 9 篇国航数字化研讨、projectu 1 篇游戏开发 → 我
+#   family 4 篇家庭支出与升学混放 → 共用
+# 用户可以在 <dataDir>/state/personas.json 里改，不用改代码。
+OWNER_KB_DEFAULT = {
+    "susan": OWNER_SPOUSE,
+    "fencing": OWNER_KID,
+    "university": OWNER_KID,
+    "chinese": OWNER_KID,
+    "nemomeng的知识库": OWNER_KID,
+    "aisnip": OWNER_ME,
+    "working": OWNER_ME,
+    "icosa": OWNER_ME,
+    "projectu": OWNER_ME,
+    "family": OWNER_SHARED,
+}
+
+# 关键词表。刻意避开会串台的词：
+#   · 不用「国航」——我的国航数字化和老婆的国航客服中心都含它
+#   · 不用「客服」——老婆的客服投诉和我的智能客服案例都含它
+#   · 不用「训练」——孩子的击剑训练和大模型训练都含它
+# 串台的代价是错归属，比判不出来更糟，所以宁可窄。
+OWNER_KEYWORDS = {
+    OWNER_SPOUSE: ("民航", "暑运", "旅客", "民航法", "服务质量", "客服中心",
+                   "投诉处理", "服务协同", "航班", "例会", "服务质量管理"),
+    OWNER_KID: ("高考", "强基", "志愿", "填报", "院校", "高二", "高三",
+                "作文", "提分", "班主任", "家长会", "击剑", "教练",
+                "分数线", "专业选择", "新生", "军训",
+                # 孩子上大学之后的课堂与实验。这批是实测里最大的一块未知：
+                # 15 条 recorder_audio 全是大学课堂录音，标题里没有「高考」这类词，
+                # 光靠升学关键词一条都命不中。
+                "格斗", "篮球", "训练记录", "课堂", "点名", "高等数学",
+                "英语听力", "英语课", "写作课", "辩论", "院士", "讲座",
+                "实验", "抑菌", "大肠杆菌", "细菌", "菌", "生物科学",
+                "化学", "高数", "学术", "论文", "专业课", "大学",
+                "祥森", "孩子成长", "大学生"),
+    OWNER_ME: ("AI", "大模型", "算力", "智能体", "飞书", "知识管理",
+               "数字化", "架构", "数据治理", "信管部", "云网安", "综保部",
+               "项目管控", "知识库", "语料", "推理",
+               # 我自己的技术/建设类笔记。同样在实测未知里占一大块：
+               # 「服务器采购」「文档处理自动化」「OKR 工作记录小应用」
+               # 这些明显是我在做的事，但没有任何升学或民航关键词。
+               "服务器", "采购", "部署", "编程", "扣子", "CLI", "API",
+               "数据库", "Agent", "提示词", "迁移", "锁屏", "自动化",
+               "小应用", "产品开发", "功能测试", "爬虫", "向量",
+               "Minor U", "Project U", "OpenClaw", "memory"),
+}
+
+PERSONA_KB_WEIGHT = 12
+PERSONA_TITLE_WEIGHT = 5
+PERSONA_TITLE_CAP = 3
+PERSONA_BODY_WEIGHT = 1
+PERSONA_BODY_CAP = 5
+PERSONA_MIN_SCORE = 5
+
+# 泛词：出现在标题里也**不足以单独定案**的词。
+#
+# 为什么需要这份清单：标题命中一个词就 +5，正好等于阈值，所以一个词就能定案。
+# 实测这样定案的有 19 篇，其中两类是错的：
+#   · 「实验」→ 孩子，但那篇是《AB实验：科学归因与增长的利器》，是技术书不是孩子的实验课
+#   · 「论文」→ 孩子，但那篇《一页纸的诺贝尔奖论文》是「我」自己写的读书笔记
+# 这些词描述的是**话题**，不是**人**。话题词谁都会用，所以它不能单独当身份证据。
+# 注意：按整词比对，所以「训练记录」不会因为「记录」在表里而被误伤。
+# 判定逻辑版本。**改了 _owner_of 的规则就要 +1**。
+#
+# 为什么需要它：索引按「配置 mtime」判断要不要重算归属。但改代码不会动配置文件，
+# 于是「修好了判定规则」之后索引纹丝不动，界面上还是旧的错归属——
+# 比没修更糟，因为人会以为修好了。实测踩过：把泛词闸门加上之后 index 报「未变 4321」。
+PERSONA_LOGIC_VERSION = 2
+
+PERSONA_WEAK_WORDS = frozenset((
+    "实验", "论文", "大学", "学术", "课堂", "讲座", "专业课", "辩论",
+    "报告", "分析", "总结", "记录", "思考", "反思", "训练", "课程",
+    "专业", "学习", "考试", "竞赛", "成绩", "老师", "学校", "知识",
+    "项目", "方案", "设计", "方法", "问题", "工作",
+))
+
+
+def _persona_path():
+    return DATA_DIR / "state" / "personas.json"
+
+
+def _persona_conf():
+    """归属配置：内置默认 + 用户覆盖（<dataDir>/state/personas.json）。
+
+    文件可选。坏文件不让它把整个命令带崩——退回默认，归属判错还能改，
+    崩了用户就什么都拿不到。
+    可覆盖三块：
+      kb       知识库名 → 归属
+      keywords 归属 → 关键词数组
+      notes    note_id → 归属（手动钉死，优先级最高）
+    """
+    conf = {
+        "kb": dict(OWNER_KB_DEFAULT),
+        "keywords": {k: list(v) for k, v in OWNER_KEYWORDS.items()},
+        "notes": {},
+    }
+    p = _persona_path()
+    if not p.exists():
+        return conf
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return conf
+    if not isinstance(raw, dict):
+        return conf
+    if isinstance(raw.get("kb"), dict):
+        for k, v in raw["kb"].items():
+            if str(v) in OWNERS:
+                conf["kb"][str(k)] = str(v)
+    if isinstance(raw.get("keywords"), dict):
+        for k, v in raw["keywords"].items():
+            if str(k) in OWNERS and isinstance(v, list):
+                conf["keywords"][str(k)] = [str(x) for x in v if str(x)]
+    if isinstance(raw.get("notes"), dict):
+        for k, v in raw["notes"].items():
+            if str(v) in OWNERS:
+                conf["notes"][str(k)] = str(v)
+    return conf
+
+
+
+def _persona_body(txt):
+    """判归属用的正文：剥掉我们自己写的包装层，只留原文。
+
+    镜像 md 的结构是：
+        # 标题
+        - note_id: ... / - 类型: ... / - 知识库: ... / - 标签: ...   ← 元信息
+        ## 原文（全文字）
+        <笔记原文>                        ← 只有这段能用来判归属
+        ## AI 总结
+        <我们生成的总结>                  ← 也不能算
+
+    不剥的话「知识库」「AI」这些词会出现在每一篇里，所有笔记都被判成「我」。
+    """
+    if not txt:
+        return ""
+    marker = "## 原文（全文字）"
+    i = txt.find(marker)
+    body = txt[i + len(marker):] if i >= 0 else txt
+    cut = body.find("\n## AI 总结")
+    if cut >= 0:
+        body = body[:cut]
+    # 图片与链接必须整段去掉，实测踩到：笔记里的图片 URL 长这样
+    #   ...&OSSAccessKeyId=LTAI5tADzX65bw95o2FyzDTU&Signature=...
+    # 里面含「AId」，用子串匹配判关键词「AI」时**每一张带图的笔记都命中**，
+    # 于是「正文含 AI」出现在一堆讲酸奶、石榴、酱香拿铁的随笔里。
+    # URL 是机器产物，不代表作者说了什么，判归属时不该参与。
+    body = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", body)
+    body = re.sub(r"<img[^>]*>", " ", body, flags=re.I)
+    body = re.sub(r"https?://\S+", " ", body)
+    return body
+
+
+# 空白与测试笔记：标题或正文说明「这条没有内容」。
+# 为什么单独拎出来：135 篇「未知」里有 20 篇是空白录音、`t1`/`t2`、
+# 「测试笔记」这类。把它们混在「需要你指一下」的清单里，等于让人花时间去
+# 处理一堆垃圾，真正该指的 30 篇会被淹掉。界面要回答「我要不要管」，
+# 这批的答案是「不用管」。
+_BLANK_TITLE_RE = re.compile(
+    r"^(无内容.*|无具体内容.*|空白.*|空语音.*|测试笔记|test.*|t\d+|1|\s*)$", re.I)
+
+
+def _is_blank_note(head, body):
+    """这条是不是空白/测试笔记（没有可归属的内容）。"""
+    title = (head.get("title") or "").strip()
+    if _BLANK_TITLE_RE.match(title):
+        return True
+    plain = re.sub(r"\s+", "", body or "")
+    return len(plain) < 15
+
+def _owner_of(head, text, conf=None):
+    """判一条笔记归谁。返回 (owner, score, why)。
+
+    why 是中文理由，给人和 Agent 看「凭什么这么判」——
+    没有理由的归属等于猜，用户没法复核，也就没法纠正。
+    """
+    conf = conf if conf is not None else _persona_conf()
+    nid = str(head.get("note_id") or "")
+    pin = (conf.get("notes") or {}).get(nid)
+    if pin in OWNERS:
+        return pin, 999, ["手动指定"]
+
+    score = {OWNER_ME: 0, OWNER_KID: 0, OWNER_SPOUSE: 0}
+    why = {OWNER_ME: [], OWNER_KID: [], OWNER_SPOUSE: []}
+
+    for kb in (head.get("topics") or []):
+        o = (conf.get("kb") or {}).get(kb)
+        if o in score:
+            score[o] += PERSONA_KB_WEIGHT
+            why[o].append("知识库「" + kb + "」")
+
+    title = head.get("title") or ""
+    # 调用方可能传整篇文件，也可能传已剥好的正文；这里统一再剥一次，
+    # 让「传错」不会静默变成「所有笔记都判成同一个人」。
+    body = _persona_body(text or "")
+    def _hit(word, text):
+        """关键词命中判断。纯 ASCII 词要按词边界，不能子串。
+
+        中文没有分词边界，子串就是正确做法；但 ASCII 词子串会撞：
+        「AI」命中「AId」「AIs」，「SQL」命中「MySQL」。
+        实测 URL 里的 OSSAccessKeyId 让「AI」命中了每一条带图笔记。
+        """
+        if not word or not text:
+            return False
+        if word.isascii():
+            return re.search(r"(?<![A-Za-z0-9])" + re.escape(word) +
+                             r"(?![A-Za-z0-9])", text, re.I) is not None
+        return word in text
+
+    for o, kws in (conf.get("keywords") or {}).items():
+        if o not in score:
+            continue
+        hit_t = [w for w in kws if _hit(w, title)][:PERSONA_TITLE_CAP]
+        for w in hit_t:
+            score[o] += PERSONA_TITLE_WEIGHT
+            why[o].append("标题含「" + w + "」")
+        rest = [w for w in kws if not _hit(w, title) and _hit(w, body)][:PERSONA_BODY_CAP]
+        for w in rest:
+            score[o] += PERSONA_BODY_WEIGHT
+            why[o].append("正文含「" + w + "」")
+
+    ranked = sorted(score.items(), key=lambda kv: -kv[1])
+    top_o, top_s = ranked[0]
+    second_s = ranked[1][1]
+
+    # —— 两条「不足以定案」的闸门 ——
+    #
+    # 闸门一（泛词）：唯一的证据是一个标题泛词。话题词不能当身份证据，
+    #   否则《AB实验》被判给孩子、《一页纸的诺贝尔奖论文》被判给孩子（实为我写的）。
+    #
+    # 闸门二（摘录）：摘录是全家一起读的语料，标题里的词是**书的主题**，不是谁的标记。
+    #   实测「数字化」让 171 篇得到课程摘录被判成「我」——那不是我的工作内容。
+    #   摘录要定案，必须有知识库这种人为信号，或两个以上独立词。
+    only_why = why[top_o]
+    solo_weak = (len(only_why) == 1 and only_why[0].startswith("标题含「")
+                 and only_why[0][4:-1] in PERSONA_WEAK_WORDS)
+    is_excerpt = (head.get("type") or "") not in OWN_TYPES
+    kb_hit = any(w.startswith("知识库「") for w in only_why)
+    title_hits = sum(1 for w in only_why if w.startswith("标题含「"))
+
+    if top_s >= PERSONA_MIN_SCORE and top_s > second_s:
+        if solo_weak:
+            pass  # 落到下面的兜底：泛词不足以定案
+        elif is_excerpt and not kb_hit and title_hits < 2:
+            pass  # 摘录仅凭单条标题词不定案，交给「共用」
+        else:
+            return top_o, top_s, only_why
+    if top_s >= PERSONA_MIN_SCORE and top_s == second_s:
+        # 两个人都像，说明这几条关键词本身就串台。交给人，别硬指。
+        return OWNER_UNKNOWN, top_s, ["两边分数相同，无法判定"]
+
+    # 分数不够：摘录大概率是全家一起读的，判「共用」；自己记的判「未知」等人来指。
+    if (head.get("type") or "") in OWN_TYPES:
+        return OWNER_UNKNOWN, top_s, why[top_o] or ["本地信号不足"]
+    return OWNER_SHARED, top_s, ["摘录，无明确归属"]
+
+def cmd_personas(args):
+    """按人统计：这个账号里哪些内容是谁的（纯本地，不调 API）。
+
+    这是「一个账号三个人」那个现实的入口命令。
+    不做的事：不写回平台、不改笔记、不给「未知」硬塞一个猜测。
+    做的事：把 269 篇自己记的按人拆开，把判不出来的挑出来让人指。
+    """
+    base = DATA_DIR / (getattr(args, "into", "") or "current")
+    if not base.is_dir():
+        print(f"❌ 镜像目录不存在：{base}\n   先跑：gn.py download --into current",
+              file=sys.stderr)
+        return 2
+
+    conf = _persona_conf()
+    rows = []
+    for f in sorted(base.glob("*.md")):
+        h = _parse_md_head(f)
+        if not h.get("note_id"):
+            continue
+        try:
+            txt = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        owner, score, why = _owner_of(h, txt, conf)
+        blank = _is_blank_note(h, _persona_body(txt))
+        rows.append({
+            "note_id": h["note_id"],
+            "title": h.get("title") or "",
+            "type": h.get("type") or "",
+            "owner": owner,
+            "score": score,
+            "why": why,
+            "kbs": h.get("topics") or [],
+            "own": (h.get("type") or "") in OWN_TYPES,
+            "blank": blank,
+        })
+
+    total = len(rows)
+    by_owner = {o: 0 for o in OWNERS}
+    by_owner_own = {o: 0 for o in OWNERS}
+    for r in rows:
+        by_owner[r["owner"]] = by_owner.get(r["owner"], 0) + 1
+        if r["own"]:
+            by_owner_own[r["owner"]] = by_owner_own.get(r["owner"], 0) + 1
+
+    own_rows = [r for r in rows if r["own"]]
+    # 「未知」分两堆：空白/测试笔记（不用管）和真判不出来的（要人指一下）。
+    # 混在一起会让人以为有 98 件事要处理，其实其中 20 多件是空白录音。
+    unknown_all = [r for r in own_rows if r["owner"] == OWNER_UNKNOWN]
+    blank_rows = [r for r in unknown_all if r["blank"]]
+    unknown = [r for r in unknown_all if not r["blank"]]
+
+    # 每个人命中的知识库，用来看「这个人的内容主要堆在哪个库」
+    kb_by_owner = {}
+    for r in own_rows:
+        if r["owner"] == OWNER_UNKNOWN:
+            continue
+        for kb in r["kbs"]:
+            d = kb_by_owner.setdefault(r["owner"], {})
+            d[kb] = d.get(kb, 0) + 1
+
+    out = {
+        "ok": True,
+        "generated_at": now_iso(),
+        "dir": str(base),
+        "notes_total": total,
+        "own_total": len(own_rows),
+        "by_owner": by_owner,
+        "by_owner_own": by_owner_own,
+        "kb_by_owner": {k: sorted(v.items(), key=lambda x: -x[1])
+                        for k, v in kb_by_owner.items()},
+        "unknown_own": [{"note_id": r["note_id"], "title": r["title"][:70],
+                         "type": r["type"], "why": r["why"]} for r in unknown],
+        "blank_own": {"count": len(blank_rows),
+                      "note": "空白/测试笔记，没有可归属的内容，不用管"},
+        "conf_path": str(_persona_path()),
+        "hint": ("判不出来的会留在「未知」里，不硬猜。"
+                 "想指定某一条，把它写进 " + str(_persona_path()) +
+                 ' 的 {"notes": {"<note_id>": "<归属>"}}。'),
+    }
+
+    if args.json:
+        print(jdump(out))
+        return 0
+
+    print("=" * 72)
+    print(f"账号归属盘点  ·  {out['generated_at']}")
+    print(f"镜像 {total} 篇｜自己记的 {len(own_rows)} 篇｜摘录 {total - len(own_rows)} 篇")
+    print("=" * 72)
+    print("\n【全部笔记按归属】")
+    for o in OWNERS:
+        n = by_owner.get(o, 0)
+        pct = (n * 100.0 / total) if total else 0
+        print(f"  {o:<4} {n:>5} 篇  {pct:>5.1f}%   其中自己记的 {by_owner_own.get(o, 0):>3} 篇")
+    print("\n【自己记的按人拆开】—— 只有这批带工作方向和待办")
+    for o in (OWNER_ME, OWNER_KID, OWNER_SPOUSE, OWNER_SHARED, OWNER_UNKNOWN):
+        n = by_owner_own.get(o, 0)
+        if not n:
+            continue
+        kbs = list((kb_by_owner.get(o) or {}).items())
+        kbs.sort(key=lambda x: -x[1])
+        kb_s = "｜".join(f"{k}({c})" for k, c in kbs[:6]) if kbs else "（没有知识库）"
+        print(f"  {o:<4} {n:>4} 篇   {kb_s}")
+    if blank_rows:
+        print(f"\n【空白/测试笔记 {len(blank_rows)} 篇】—— 不用管（没有内容可归属）")
+    if unknown:
+        print(f"\n【判不出来的 {len(unknown)} 篇】—— 需要你指一下（不自动猜）")
+        for r in unknown[:15]:
+            print(f"  · [{r['type']:<10}] {r['title'][:52]}")
+            print(f"      {r['note_id']}   {'；'.join(r['why'][:3])}")
+        if len(unknown) > 15:
+            print(f"  … 还有 {len(unknown) - 15} 篇，用 --json 看全部")
+    print(f"\n归属配置：{out['conf_path']}（可改知识库归属/关键词/单条指定）")
+    return 0
+
+
+
 def cmd_kb_scopes(args):
     """把「哪些是真知识库、哪些是得到电子书书架」写成缓存文件。
 
@@ -1192,13 +1613,972 @@ def cmd_kb_scopes(args):
                 break
             page += 1
 
-    STATE.mkdir(parents=True, exist_ok=True)
     path = STATE / "kb_scopes.json"
     path.write_text(jdump({"generated_at": now_iso(), "topics": out}), encoding="utf-8")
     own = sum(1 for v in out.values() if v["scope"] == "DEFAULT")
     shelf = len(out) - own
     print(f"已写入 {path}")
     print(f"  自建知识库 {own} 个｜电子书书架 {shelf} 个｜合计 {len(out)}")
+    return 0
+
+
+def cmd_ids(args):
+    """建/刷新唯一 ID 表（名字 → id 的对照表），并查“名字变了 ID 没跟上”。
+
+    为什么需要：插件内部很多地方靠**名字字符串**做关联（计划文件、撤销记录、
+    拖拽目标）。名字是用户可改的，一改所有映射静默失效、**而且不会报错**，
+    只会变成「找不到」。这类 bug 最难查。所以要把名字到 ID 的对应关系
+    沉淀成一张表，并提供一致性检查。
+
+    数据来源全部是本地镜像（不联网）：
+      - 知识库：md 头部的 `- 知识库: [{'id': ..., 'name': ...}]`
+      - 标签  ：md 头部的 `- 标签: [...]`
+      - 目录/书：从标题推出（没有权威 id，只做展示用，不参与关联）
+      - 笔记  ：文件名 + note_id
+    """
+    base = (DATA_DIR / getattr(args, "into", "")) if getattr(args, "into", "") else (DATA_DIR / "current")
+    if not base.is_dir():
+        print(f"❌ 镜像目录不存在：{base}", file=sys.stderr)
+        return 2
+
+    kbs, tags = {}, {}
+    note_title = {}          # note_id → 标题（用于查「同标题不同 id」）
+    scan = 0
+    for f in sorted(base.glob("*.md")):
+        h = _parse_md_head(f)
+        nid = h.get("note_id")
+        if not nid:
+            continue
+        scan += 1
+        note_title[nid] = h.get("title") or ""
+        # 知识库：id 是权威的，名字只做显示
+        for nm, tid in (h.get("topic_ids") or {}).items():
+            if not tid:
+                continue
+            rec = kbs.setdefault(tid, {"id": tid, "name": nm, "names": [], "count": 0})
+            rec["count"] += 1
+            if nm not in rec["names"]:
+                rec["names"].append(nm)
+            if nm != rec["name"]:
+                rec["name"] = nm       # 取最近一次见到的名字（镜像是最新的）
+        # 标签：md 里带 id，但 _parse_md_head 只抽了名字，这里再抓一次 id
+        # 标签：直接用 _parse_md_head 已经解好的 tag_ids，
+        # 不要再 read_text 一次（4321 个文件读两遍白耗 30 秒）。
+        for tid, nm in (h.get("tag_pairs") or []):
+            if not tid:
+                continue
+            rec = tags.setdefault(tid, {"id": tid, "name": nm, "names": [], "count": 0})
+            rec["count"] += 1
+            if nm not in rec["names"]:
+                rec["names"].append(nm)
+            if nm != rec["name"]:
+                rec["name"] = nm
+
+    payload = {
+        "generated_at": now_iso(),
+        "source_dir": str(base),
+        "notes_scanned": scan,
+        "kbs": kbs,
+        "tags": tags,
+    }
+    out = STATE / "ids.json"
+    STATE.mkdir(parents=True, exist_ok=True)
+    out.write_text(jdump(payload), encoding="utf-8")
+
+    # ── 一致性检查 ────────────────────────────────────────────────
+    # 「名字变了但 ID 没跟上」的典型表现：同一个 id 在历史镜像里见过多个名字。
+    drift = []
+    for kind, table in (("知识库", kbs), ("标签", tags)):
+        for tid, rec in table.items():
+            if len(rec["names"]) > 1:
+                drift.append({"kind": kind, "id": tid, "names": rec["names"],
+                              "count": rec["count"]})
+
+    # 重名：多个 id 叫同一个名字（比「同一 id 多名」更常见，也更危险：
+    # 按名字选目标时会选错一个）
+    dup = []
+    for kind, table in (("知识库", kbs), ("标签", tags)):
+        byname = {}
+        for tid, rec in table.items():
+            byname.setdefault(rec["name"], []).append(tid)
+        for nm, tids in byname.items():
+            if len(tids) > 1:
+                dup.append({"kind": kind, "name": nm, "ids": tids,
+                            "count": sum(table[t]["count"] for t in tids)})
+
+    # 知识库名与标签名重复（结构性冗余，实测 110/122）
+    kbnames = {r["name"] for r in kbs.values()}
+    tagnames = {r["name"] for r in tags.values()}
+    overlap = sorted(kbnames & tagnames)
+
+    report = {
+        "kbs": len(kbs), "tags": len(tags), "notes_scanned": scan,
+        "id_renamed": drift, "same_name_multi_id": dup,
+        "kb_tag_overlap": overlap, "kb_tag_overlap_count": len(overlap),
+    }
+    (STATE / "ids-report.json").write_text(jdump(report), encoding="utf-8")
+
+    if getattr(args, "json", False):
+        print(jdump({"ok": True, "path": str(out), "report": report}))
+        return 0
+
+    print(f"✅ ID 表已写入 {out}")
+    print(f"   扫描镜像 {scan} 篇｜知识库 {len(kbs)} 个｜标签 {len(tags)} 个")
+    if drift:
+        print(f"\n⚠ 同一个 ID 见过多个名字（{len(drift)} 处）——按名字做关联的地方会失效：")
+        for d in drift[:10]:
+            print(f"   [{d['kind']}] {d['id']}: {' / '.join(d['names'])}（{d['count']} 篇）")
+    if dup:
+        print(f"\n⚠ 同名不同 ID（{len(dup)} 组）——按名字选目标会选错：")
+        for d in dup[:10]:
+            print(f"   [{d['kind']}] 「{d['name']}」→ {', '.join(d['ids'])}（{d['count']} 篇）")
+    if overlap:
+        print(f"\nℹ 知识库名与标签名重复 {len(overlap)} 个（结构性冗余，不一定是错）：")
+        for nm in overlap[:8]:
+            print(f"   「{nm}」")
+        if len(overlap) > 8:
+            print(f"   …其余 {len(overlap) - 8} 个见 ids-report.json")
+    if not (drift or dup):
+        print("\n✅ 未发现名字/ID 错位（每个 id 只有一个名字，每个名字只对应一个 id）")
+    return 0
+
+
+# 载物「待办」小节的标题。会议是 📋，课堂是 📝，两个都收。
+# 为什么只认标题、不全文搜「待办」：实测普通正文里这个词出现得很多（「讨论待办事项」），
+# 全搜会把一堆不是行动项的话当成任务。只认 AI 总结里的小节。
+TODO_HEAD_RE = re.compile(r"^#{3,4}\s*(?:📋|📝)?\s*待办事项\s*$", re.M)
+
+
+def _extract_todos(txt):
+    """从一篇笔记的 AI 总结里抽出待办条目（纯列表行）。
+
+    没待办就返回 []。返回空不代表「没有待办」，也可能只是这篇没写，
+    所以调用方会自己看总篇数，不会把空当成「全部清完了」。
+    """
+    m = TODO_HEAD_RE.search(txt)
+    if not m:
+        return []
+    tail = txt[m.end():]
+    # 遇到下一个同级或更高级标题就停（不要吸进「金句精选」之类）
+    stop = re.search(r"^#{2,4}\s", tail, re.M)
+    if stop:
+        tail = tail[:stop.start()]
+    items = []
+    for line in tail.splitlines():
+        s = line.strip()
+        if s.startswith(("- ", "* ", "• ")):
+            item = s[2:].strip()
+            if item and not item.startswith("无明确"):
+                items.append(item)
+    return items
+
+
+def cmd_agent_brief(args):
+    """给 AI 读的「我最近在干什么」提纯包（纯本地，不耗配额）。
+
+    跟 summary / inventory 的区别：那两个是给**人**看结构，
+    这个给 **Agent** 看内容：它需要知道用户的主要工作方向、
+    已形成的结论、以及一堆没闭合的待办。
+
+    数据源只用本地镜像，不调 API，所以随时可跑、不会因为
+    限速或断网而卡住。
+    """
+    base = DATA_DIR / (args.into or "current")
+    if not base.is_dir():
+        raise ApiError(f"镜像目录不存在：{base}（先跑一次 download）")
+
+    days = int(args.days or 0)
+    cutoff = None
+    if days > 0:
+        cutoff = datetime.now() - timedelta(days=days)
+
+    notes = []
+    for f in sorted(base.glob("*.md")):
+        h = _parse_md_head(f)
+        if not h.get("note_id"):
+            continue
+        try:
+            txt = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        # 「创建: 2025-02-27 22:06:21」
+        m = re.search(r"- 创建: (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})", txt)
+        created = None
+        if m:
+            try:
+                created = datetime.strptime(m.group(1) + " " + m.group(2),
+                                            "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                created = None
+        if cutoff and created and created < cutoff:
+            continue
+        h["_txt"] = txt
+        h["_created"] = created
+        notes.append(h)
+
+    if not notes:
+        print(json.dumps({"ok": False, "error": "镜像里没找到笔记", "dir": str(base)},
+                         ensure_ascii=False))
+        return 1
+
+    # —— 分类：只按「自己记的」与「别人的内容」分两块 ——
+    # 实测 4321 篇里 4053 篇是课程/书本摘录，只有 269 篇是用户自己的
+    # （会议、录音、手记）。把摘录也当成「工作内容」会得出「用户在学 200 门课」
+    # 这种结论——那不是工作方向，是阅读记录。
+    # OWN_TYPES 已提到模块级（归属判定也要用），这里不再重复定义。
+    own = [h for h in notes if (h.get("type") or "") in OWN_TYPES]
+    excerpts = [h for h in notes if h not in own]
+
+    # —— 待办：只从自己记的那批里抽（摘录没有行动项）——
+    # 每条都带 owner。理由：实测 431 条待办里，「孩子的高考志愿填报」和
+    # 「老婆的投诉处理」占了大半。不标归属，Agent 会把它们全当成
+    # 「用户要做的事」，然后拿别人孩子的志愿表给用户排优先级。
+    persona_conf = _persona_conf()
+    todos = []
+    for h in own:
+        h_owner, _s, _w = _owner_of(h, h.get("_txt") or "", persona_conf)
+        for it in _extract_todos(h["_txt"]):
+            todos.append({
+                "text": it,
+                "note_id": h["note_id"],
+                "title": h.get("title") or "",
+                "type": h.get("type"),
+                "owner": h_owner,
+                "created": h["_created"].strftime("%Y-%m-%d") if h["_created"] else None,
+            })
+
+    # —— 工作内容聚合：按来源（课程/专栏/书）数数，看时间落在哪里 ——
+    by_source = {}
+    for h in notes:
+        src = _course_of(h)
+        rec = by_source.setdefault(src, {"name": src, "count": 0, "own": 0,
+                                        "first": None, "last": None})
+        rec["count"] += 1
+        if h.get("type") in OWN_TYPES:
+            rec["own"] += 1
+        d = h["_created"]
+        if d:
+            s = d.strftime("%Y-%m-%d")
+            if not rec["first"] or s < rec["first"]:
+                rec["first"] = s
+            if not rec["last"] or s > rec["last"]:
+                rec["last"] = s
+    top_sources = sorted(by_source.values(), key=lambda r: -r["count"])[: args.top]
+
+    # —— 最近动态：按创建时间倒序，只给自己的记录 ——
+    own_sorted = sorted([h for h in own if h["_created"]],
+                        key=lambda h: h["_created"], reverse=True)
+    recent = [{
+        "note_id": h["note_id"],
+        "title": h.get("title") or "",
+        "type": h.get("type"),
+        "created": h["_created"].strftime("%Y-%m-%d %H:%M"),
+        "todos": len(_extract_todos(h["_txt"])),
+    } for h in own_sorted[: args.recent]]
+
+    # —— 自己记录的主题分布 ——
+    # 标签与知识库分开数：同一名字可能在两边都出现（实测 110 个名字重复），
+    # 合起来数会把两个不同的东西加在一起。
+    own_tags, own_kbs = {}, {}
+    n_no_tag, n_no_kb = 0, 0
+    for h in own:
+        # 复用 _content_tags：它已经负责剔除载体标签（「录音笔记」「会议记录」
+        # 说的是「怎么记的」不是「讲什么」）和「得到」这个非主题标签。
+        # 不要在这里重写一遍过滤——两处规则一旦分叉，数字就会对不上。
+        keep = _content_tags(h)
+        if not keep:
+            n_no_tag += 1
+        for t in keep:
+            own_tags[t] = own_tags.get(t, 0) + 1
+        kbs = [k for k in (h.get("topics") or []) if k]
+        if not kbs:
+            n_no_kb += 1
+        for k in kbs:
+            own_kbs[k] = own_kbs.get(k, 0) + 1
+    own_topics = {
+        "tags": [{"name": k, "count": v} for k, v in
+                 sorted(own_tags.items(), key=lambda x: -x[1])[: args.top]],
+        "kbs": [{"name": k, "count": v} for k, v in
+                sorted(own_kbs.items(), key=lambda x: -x[1])[: args.top]],
+        # 两边都空才算「没归」。用过滤后的 tag 计数：
+        # 只挂「得到」的笔记，看起来有标签，实际没有主题信息。
+        "untagged": sum(1 for h in own
+                        if not _content_tags(h) and not (h.get("topics") or [])),
+        "no_content_tag": n_no_tag,
+        "no_kb": n_no_kb,
+    }
+    # —— 按人拆开：这是「一个账号三个人」在提纯包里的落点 ——
+    # 不提纯的话，Agent 会把「孩子的志愿填报」当成我的工作方向，
+    # 拿别人的事给我出主意。所以这里必须分人给，而且理由要能复核。
+    by_owner = {}
+    for h in own:
+        ow, oscore, owhy = _owner_of(h, h.get("_txt") or "", persona_conf)
+        rec = by_owner.setdefault(ow, {"owner": ow, "count": 0, "todos": 0,
+                                       "kbs": {}, "why_samples": []})
+        rec["count"] += 1
+        rec["todos"] += len(_extract_todos(h["_txt"]))
+        for kb in (h.get("topics") or []):
+            rec["kbs"][kb] = rec["kbs"].get(kb, 0) + 1
+        if len(rec["why_samples"]) < 3 and owhy:
+            rec["why_samples"].append({"title": (h.get("title") or "")[:40],
+                                       "why": owhy[:3]})
+    by_owner_out = []
+    for ow in OWNERS:
+        rec = by_owner.get(ow)
+        if not rec:
+            continue
+        by_owner_out.append({
+            "owner": ow,
+            "count": rec["count"],
+            "todos": rec["todos"],
+            "kbs": [{"name": k, "count": v} for k, v in
+                    sorted(rec["kbs"].items(), key=lambda x: -x[1])[:8]],
+            "why_samples": rec["why_samples"],
+        })
+
+    brief = {
+        "ok": True,
+        "generated_at": now_iso(),
+        "scope": {"dir": str(base), "days": days or None,
+                  "notes_total": len(notes), "own": len(own),
+                  "excerpts": len(excerpts)},
+        "todos_total": len(todos),
+        # 待办按人汇总。放在顶级是因为 Agent 最先读的就是这个层级：
+        # 「我有 165 条待办」和「我+孩子+老婆一共 431 条」是完全不同的工作量。
+        "todos_by_owner": {o: sum(1 for t in todos if t["owner"] == o) for o in OWNERS},
+        "todos": todos[: args.top_todos],
+        "work_sources": top_sources,
+        "recent_own_records": recent,
+        "type_counts": {t: sum(1 for h in notes if h.get("type") == t)
+                        for t in sorted({h.get("type") for h in notes})},
+        # 自己记的那批按「标签 + 知识库」聚合。
+        # 为什么要单独一块：上面 work_sources 是按来源数，头部全是被摘录的课程
+        # （「万维钢·精英日课6 926 篇」），自己的计数是 0，看不出工作方向。
+        # 只有把自己记的抽出来单独数，才能回答「我在忙什么」。
+        "own_topics": own_topics,
+        # 自己记的按人拆开。顺序固定为 我/孩子/老婆/共用/未知，
+        # 让 Agent 读的时候位置稳定，不用靠名字猜哪块是谁。
+        "by_owner": by_owner_out,
+        "reading_hint": (
+            "这份提纯包只含本地镜像里的结构信息，不含全文。"
+            "想深入某个主题，请用 context-pack 取那一条的上下文。"
+        ),
+    }
+
+    if args.json:
+        print(jdump(brief))
+    else:
+        s = brief["scope"]
+        print("=" * 72)
+        print(f"工作内容提纯包  ·  {brief['generated_at']}")
+        if days:
+            print(f"范围：最近 {days} 天")
+        print(f"笔记 {s['notes_total']} 篇｜自己记的 {s['own']}｜摘录 {s['excerpts']}")
+        print("=" * 72)
+        print(f"\n【没合上的待办】{brief['todos_total']} 条")
+        tbo = brief["todos_by_owner"]
+        nz = [f"{o} {n}" for o, n in tbo.items() if n]
+        if nz:
+            # 一行分清「这些待办里有多少真是我的事」。
+            # 只报总数会让人以为 431 条都要自己干。
+            print("  按人：" + "｜".join(nz))
+        if not brief["todos"]:
+            print("  (没有被结构化的待办；注意这不等于事情都做完了)")
+        for t in brief["todos"]:
+            print(f"  · [{t['created'] or '?'}][{t.get('owner') or '?'}] {t['text'][:70]}")
+            print(f"      ← {t['title'][:50]}  ({t['note_id']})")
+        print(f"\n【时间主要花在】前 {len(top_sources)} 个来源")
+        for r in top_sources:
+            print(f"  · {r['name'][:40]:<40} {r['count']:>5} 篇"
+                  f"  自己的 {r['own']:>3}"
+                  f"  {r['first'] or '?'} ~ {r['last'] or '?'}")
+        print(f"\n【自己记的主题】好标签 {len(own_topics['tags'])} 个｜"
+              f"知识库 {len(own_topics['kbs'])} 个｜两边都没归的 {own_topics['untagged']} 篇")
+        # 「没主题标签」与「没知识库」分开说：它们是两个不同的缺口，
+        # 合并成一句「未归 N 篇」会让人以为是同一批笔记。
+        if own_topics["no_content_tag"]:
+            print(f"  · 没有主题标签（只有「得到」或载体标签）的：{own_topics['no_content_tag']} 篇")
+        if own_topics["no_kb"]:
+            print(f"  · 没进任何知识库的：{own_topics['no_kb']} 篇")
+        if own_topics["tags"]:
+            print("  标签：" + "｜".join(f"{t['name']}({t['count']})"
+                                       for t in own_topics["tags"][:12]))
+        if own_topics["kbs"]:
+            print("  知识库：" + "｜".join(f"{k['name'][:16]}({k['count']})"
+                                         for k in own_topics["kbs"][:8]))
+        if not own_topics["tags"] and not own_topics["kbs"]:
+            print("  (自己的记录全部未分类——这也是 AI 看不懂你在忙什么的原因)")
+        # 按人一块。不打印这块的话，下面「最近自己记的」会把三个人的事
+        # 混成一个列表，读的人分不清哪条是自己的。
+        if by_owner_out:
+            print("\n【自己记的：按人拆开】—— 同一个账号，三个人")
+            for r in by_owner_out:
+                kb_s = ("｜".join(f"{k['name']}({k['count']})" for k in r["kbs"][:5])
+                        if r["kbs"] else "（没有知识库）")
+                td = f"，未闭合待办 {r['todos']} 条" if r["todos"] else ""
+                print(f"  {r['owner']:<4} {r['count']:>4} 篇{td}")
+                print(f"       {kb_s}")
+                if r["owner"] == OWNER_UNKNOWN and r["why_samples"]:
+                    s = r["why_samples"][0]
+                    print(f"       例：{s['title']}  ← {'；'.join(s['why'])}")
+        print(f"\n【最近自己记的】{len(recent)} 条")
+        for r in recent:
+            extra = f"  [{r['todos']} 待办]" if r["todos"] else ""
+            print(f"  · {r['created']}  {r['title'][:44]:<44} {r['type']}{extra}")
+        print()
+    return 0
+
+
+    # ── 本地全文检索 ───────────────────────────────────────────────
+    #
+    # 为什么自己做索引，不用官方 recall：
+    #   1) recall 是云端语义 Top-K，上限 10 条，且空结果不证明没有；
+    #      想「把 4321 篇当知识库查」根本不够用。
+    #   2) recall 要联网、吃配额。检索是最频繁的动作，不该每次都花钱。
+    #   3) 官方没有按知识库过滤的参数，而「在某个库里找」正是最常用的问法。
+    #
+    # 分词方案（踩过坑）：
+    #   · unicode61 把一整串中文当一个 token → 搜「高考」命中 0。
+    #   · trigram 要求查询 ≥3 字 → 「高考」「填报」这种两字词全废，
+    #     而两字词恰恰是中文里最常见的。
+    #   · 所以自己切**相邻二元组**（bigram）再交给 FTS5：
+    #     「志愿填报」→ 志愿 愿填 填报，两字词照样命中。
+    #     代价是索引体积变大（约 2 倍原文），但 18MB 的库无所谓。
+    #
+    # 边界要写清楚：这是**字面检索**，不是语义检索。
+    # 搜「高考」不会命中「升学考试」，除非正文里真的出现过「高考」。
+
+# ── 静态导出用的样式与脚本（模块级，独立的两个常量）──
+#
+# 为什么不写进 html 模板函数里：这两个字符串很长，内嵌会淹没逻辑；
+# 而且它们是「产物」的一部分，改它们不需要动导出流程。
+# 都是纯内联的，不引任何外部 CDN —— 拿到目录的人可能在内网、断网。
+
+PUBLISH_CSS = """
+:root{--fg:#1a1a1a;--muted:#6b7280;--bd:#e5e7eb;--bg:#fff;--soft:#f9fafb;--acc:#2563eb}
+@media(prefers-color-scheme:dark){:root{--fg:#e5e7eb;--muted:#9ca3af;--bd:#374151;
+--bg:#111827;--soft:#1f2937;--acc:#60a5fa}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:15px/1.75 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+.wrap{max-width:820px;margin:0 auto;padding:32px 20px 80px}
+a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
+h1{font-size:26px;line-height:1.3;margin:0 0 10px}
+.meta{color:var(--muted);font-size:13px;margin-bottom:24px}
+.body{white-space:pre-wrap;word-break:break-word}
+.nav{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:22px;font-size:14px}
+.item{padding:14px 0;border-bottom:1px solid var(--bd)}
+.item:last-child{border-bottom:none}
+.item h3{margin:0 0 4px;font-size:15px;font-weight:600}
+.item p{margin:0;color:var(--muted);font-size:13px}
+.tags{color:var(--muted);font-size:12px;margin-top:5px}
+#q{width:100%;padding:10px 12px;font-size:15px;border:1px solid var(--bd);
+border-radius:8px;background:var(--soft);color:var(--fg)}
+#q:focus{outline:2px solid var(--acc);outline-offset:1px}
+#hint{color:var(--muted);font-size:12.5px;margin:10px 0 16px}
+mark{background:#fde68a;color:#000;padding:0 1px;border-radius:2px}
+.empty{color:var(--muted);padding:20px 0}
+"""
+
+PUBLISH_JS = """
+(function(){
+  var box=document.getElementById('q'),list=document.getElementById('list'),
+      hint=document.getElementById('hint');
+  if(!box||!list||!DATA)return;
+  function esc(s){return String(s).replace(/[&<>"]/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+  function hl(t,q){
+    if(!q)return esc(t);
+    var i=t.toLowerCase().indexOf(q.toLowerCase());
+    if(i<0)return esc(t);
+    return esc(t.slice(0,i))+'<mark>'+esc(t.slice(i,i+q.length))+'</mark>'+
+      esc(t.slice(i+q.length));
+  }
+  function render(q){
+    q=(q||'').trim();
+    var hits=DATA;
+    if(q){
+      var lq=q.toLowerCase();
+      hits=DATA.filter(function(d){
+        return d.t.toLowerCase().indexOf(lq)>=0||d.b.toLowerCase().indexOf(lq)>=0;});
+    }
+    hint.textContent=q?('找到 '+hits.length+' 篇'):('共 '+DATA.length+' 篇');
+    if(!hits.length){list.innerHTML='<p class="empty">没有匹配的笔记。</p>';return;}
+    list.innerHTML=hits.slice(0,300).map(function(d){
+      var snip='';
+      if(q){
+        var i=d.b.toLowerCase().indexOf(q.toLowerCase());
+        if(i>=0)snip=d.b.slice(Math.max(0,i-40),i+q.length+90);
+      }
+      if(!snip)snip=d.b.slice(0,120);
+      return '<div class="item"><h3><a href="'+d.f+'">'+hl(d.t,q)+'</a></h3>'+
+        '<p>'+hl(snip,q)+'…</p>'+
+        (d.g?'<div class="tags">'+esc(d.g)+'</div>':'')+'</div>';}).join('');
+  }
+  box.addEventListener('input',function(){render(box.value);});
+  render('');
+})();
+"""
+
+
+CJK_RUN = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]+|[A-Za-z0-9]+")
+
+
+def _index_tokens(text):
+    """把一段文字切成 FTS5 能用的 token 串。
+
+    中文切相邻二元组，英文数字按词小写。单字成词（如「书」「光」）保留单字。
+    """
+    out = []
+    for seg in CJK_RUN.findall(text or ""):
+        if seg[0].isascii():
+            out.append(seg.lower())
+        elif len(seg) == 1:
+            out.append(seg)
+        else:
+            out.extend(seg[i:i + 2] for i in range(len(seg) - 1))
+    return " ".join(out)
+
+
+def _index_path():
+    return DATA_DIR / "state" / "search.db"
+
+
+def _open_index(create=False):
+    p = _index_path()
+    if not create and not p.exists():
+        return None
+    p.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(p))
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _split_md(path):
+    """把镜像 md 拆成「头部元信息」与「正文」。
+
+    正文优先取 `## 原文（全文字）` 之后；没有这一段就退回整篇。
+    这样检索命中的是课程原文，而不是我们自己写的那几行元信息。
+    """
+    try:
+        txt = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    head = _parse_md_head(path)
+    if not head.get("note_id"):
+        return None
+    marker = "## 原文（全文字）"
+    idx = txt.find(marker)
+    body = txt[idx + len(marker):] if idx >= 0 else txt
+    # 正文后面会再跟一段 `## AI 总结`，它是我们自己的包装层，不是原文。
+    # 不截掉的话搜「总结」会命中全部 4321 篇，把真正相关的结果全冲掉。
+    cut = body.find("\n## AI 总结")
+    if cut >= 0:
+        body = body[:cut]
+    return {"head": head, "body": body.strip()}
+
+
+def _make_snippet(body, q, width=90):
+    """在原文里找查询词出现的位置，截一段带上下文的摘录。
+
+    为什么要自己做而不用 FTS5 的 snippet()：
+    snippet() 只能作用在**被索引的列**上，而那一列存的是二元组 token，
+    截出来会是「志愿 愿填 填报」这种碎片，没法给人看。
+    所以原文另存在 meta.body 里，摘录从原文取。
+    """
+    if not body:
+        return ""
+    flat = re.sub(r"\s+", " ", body)
+    words = [w for w in re.split(r"\s+", (q or "").strip()) if w]
+    pos = -1
+    for w in words:
+        pos = flat.find(w)
+        if pos >= 0:
+            break
+    if pos < 0:
+        return flat[:width] + ("…" if len(flat) > width else "")
+    start = max(0, pos - width // 3)
+    end = min(len(flat), start + width)
+    return ("…" if start > 0 else "") + flat[start:end] + ("…" if end < len(flat) else "")
+
+
+def _html_escape(s):
+    return (str(s or "").replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
+
+def _slug(title, note_id, used):
+    """把标题变成安全的文件名。
+
+    中文可以留在文件名里（现代浏览器都支持），但要挡掉路径分隔符和控制字符，
+    还要处理重名（实测有同名笔记）。
+    """
+    base = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "", str(title or ""))[:50].strip()
+    base = re.sub(r"\s+", "-", base) or str(note_id)
+    name, n = base, 2
+    while name in used:
+        name = f"{base}-{n}"
+        n += 1
+    used.add(name)
+    return name + ".html"
+
+def _page(title, body, extra_head=""):
+    return ("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+            f"<title>{_html_escape(title)}</title>"
+            f"<style>{PUBLISH_CSS}</style>{extra_head}"
+            "</head><body><div class=\"wrap\">"
+            f"{body}</div></body></html>")
+
+
+def cmd_publish(args):
+    """把一个知识库导出成可发布的静态站点（纯本地）。
+
+    产出的目录可以直接丢到静态服务器 / 内网共享盘 / 打包发人。
+    不带凭据、不连网、只含标题/标签/正文，不含任何私有字段。
+    """
+    base = DATA_DIR / (getattr(args, "into", "") or "current")
+    if not base.is_dir():
+        print(f"❌ 镜像目录不存在：{base}", file=sys.stderr)
+        return 2
+
+    want = (args.kb or "").strip()
+    if not want:
+        print("❌ 要给一个知识库名（--kb）。先跑 `gn.py inventory` 看有哪些库。",
+              file=sys.stderr)
+        return 2
+
+    picked = []
+    all_kbs = {}
+    for f in sorted(base.glob("*.md")):
+        h = _parse_md_head(f)
+        if not h.get("note_id"):
+            continue
+        kbs = h.get("topics") or []
+        for k in kbs:
+            all_kbs[k] = all_kbs.get(k, 0) + 1
+        if not any(want in k for k in kbs):
+            continue
+        parts = _split_md(f)
+        if not parts:
+            continue
+        picked.append({"head": h, "body": parts["body"]})
+
+    if not picked:
+        print(f"❌ 知识库「{want}」下没有笔记（名字要能对上 topics 里的库名）",
+              file=sys.stderr)
+        near = [k for k in all_kbs if want[:2] and want[:2] in k]
+        if near:
+            print("   你是不是想找：" + "、".join(
+                f"{k}({all_kbs[k]})" for k in
+                sorted(near, key=lambda x: -all_kbs[x])[:6]), file=sys.stderr)
+        return 2
+
+    out = Path(args.out) if args.out else DATA_DIR / "publish" / re.sub(
+        r'[\\/:*?"<>|]', "_", want)
+    out.mkdir(parents=True, exist_ok=True)
+
+    used = set()
+    index_items, search_data = [], []
+    for rec in picked:
+        h = rec["head"]
+        title = h.get("title") or h["note_id"]
+        fname = _slug(title, h["note_id"], used)
+        tags = h.get("tags") or []
+        created = (h.get("created") or "")[:10]
+
+        sub = " · ".join(x for x in (
+            created,
+            ("标签: " + "、".join(tags)) if tags else "") if x)
+        body_html = (f'<div class="nav"><a href="index.html">← 返回目录</a>'
+                     f'<a href="search.html">搜索</a></div>'
+                     f"<h1>{_html_escape(title)}</h1>"
+                     f'<div class="meta">{_html_escape(sub)}</div>'
+                     f'<div class="body">{_html_escape(rec["body"])}</div>')
+        (out / fname).write_text(_page(title, body_html), encoding="utf-8")
+
+        index_items.append(
+            f'<div class="item"><h3><a href="{fname}">{_html_escape(title)}</a></h3>'
+            f'<div class="tags">{_html_escape(sub)}</div></div>')
+        search_data.append({
+            "t": title, "f": fname, "g": "、".join(tags),
+            "b": re.sub(r"\s+", " ", rec["body"])[:800],
+        })
+
+    nav = '<div class="nav"><a href="search.html">搜索</a></div>'
+    idx_body = (f"{nav}<h1>{_html_escape(want)}</h1>"
+                f'<div class="meta">共 {len(picked)} 篇 · '
+                f'导出于 {now_iso()[:10]}</div>'
+                + "".join(index_items))
+    (out / "index.html").write_text(_page(want, idx_body), encoding="utf-8")
+
+    # 搜索页：数据内联成 JSON，纯前端匹配，不需要任何服务端。
+    # 为什么不单独放 .js：整个目录要能双击 index.html 就用，
+    # file:// 下外链 js 在某些浏览器会被 CORS 挡住。
+    data_js = "var DATA=" + json.dumps(search_data, ensure_ascii=False) + ";"
+    s_body = (f'<div class="nav"><a href="index.html">← 返回目录</a></div>'
+              f"<h1>搜索 · {_html_escape(want)}</h1>"
+              '<input id="q" placeholder="输入关键词…" autocomplete="off">'
+              '<div id="hint"></div><div id="list"></div>')
+    (out / "search.html").write_text(
+        _page(f"搜索 · {want}", s_body,
+              f"<script>{data_js}</script><script>{PUBLISH_JS}</script>"),
+        encoding="utf-8")
+
+    size = sum(f.stat().st_size for f in out.rglob("*") if f.is_file()) / 1024
+    print(f"[publish] 已导出到：{out}")
+    print(f"[publish] {len(picked)} 篇 · {len(used)} 个页面 · {size:.0f} KB")
+    print("[publish] 打开 index.html 阅读；search.html 是纯前端搜索。")
+    print("[publish] 整个目录可直接打包/U 盘/内网共享，不依赖网络与凭据。")
+    return 0
+
+
+def cmd_index(args):
+    """建/刷新本地全文索引（纯本地，不调 API、不耗配额）。
+
+    幂等：重复跑只会更新变过的那些文件（按 note_id + 文件修改时间判断）。
+    """
+    base = DATA_DIR / (getattr(args, "into", "") or "current")
+    if not base.is_dir():
+        print(f"❌ 镜像目录不存在：{base}\n   先跑：gn.py download --into current",
+              file=sys.stderr)
+        return 2
+
+    files = sorted(base.glob("*.md"))
+    if not files:
+        print(f"❌ {base} 里没有 md 文件", file=sys.stderr)
+        return 2
+
+    conn = _open_index(create=True)
+    conn.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS notes USING fts5(
+            note_id UNINDEXED, title, body, tags, kbs,
+            tokenize='unicode61'
+        )
+    """)
+    # meta.body 存**原文**，只用于生成摘录，不参与检索。
+    # 不存的话摘录只能从 token 列取，出来是碎片。
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS meta(
+            note_id TEXT PRIMARY KEY, mtime REAL, title TEXT,
+            tags TEXT, kbs TEXT, created TEXT, type TEXT, body TEXT,
+            owner TEXT
+        )
+    """)
+    # 老索引没有 owner 列：增量升级，不重建（重建 4321 篇要 39 秒，改个列不值当）。
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(meta)")}
+    if "owner" not in cols:
+        conn.execute("ALTER TABLE meta ADD COLUMN owner TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS meta_created ON meta(created)")
+    # 键值小表：存归属配置的 mtime，用来判断「配置改过没有」。
+    # 只靠 md 的 mtime 判断是错的——改 personas.json 不会碰任何 md 文件。
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value TEXT)
+    """)
+    conn.commit()
+
+    # 归属配置只读一次：每篇都读文件会把 4321 次 IO 加到建索引里。
+    persona_conf = _persona_conf()
+    known = {r["note_id"]: r["mtime"] for r in conn.execute("SELECT note_id, mtime FROM meta")}
+    # 老索引升级后 owner 是 NULL：这些必须重算，否则按人过滤一条都搜不到，
+    # 而且不会报错——最坏的那种失败。
+    need_owner = {r["note_id"] for r in conn.execute(
+        "SELECT note_id FROM meta WHERE owner IS NULL OR owner = ''")}
+
+    # 归属配置改过 → 全部重算 owner。
+    # 不这么做的话，「把某条从『未知』指成『老婆』」之后索引纹丝不动，
+    # 而界面上看不出任何异常，只会觉得「指了没用」。
+    cfg_sig = "logic" + str(PERSONA_LOGIC_VERSION) + "|mtime"
+    try:
+        if _persona_path().exists():
+            cfg_sig += _persona_path().stat().st_mtime.__str__()
+        else:
+            cfg_sig += "none"
+    except OSError:
+        cfg_sig += "err"
+    row = conn.execute("SELECT value FROM kv WHERE key = 'persona_sig'").fetchone()
+    prev_sig = row["value"] if row else ""
+    if cfg_sig != prev_sig:
+        # 配置改了，或判定逻辑的版本变了 —— 两种都要全部重算。
+        need_owner = set(known.keys())
+    added = updated = skipped = failed = owner_filled = 0
+
+    for f in files:
+        try:
+            mt = f.stat().st_mtime
+        except OSError:
+            failed += 1
+            continue
+        parts = _split_md(f)
+        if not parts:
+            failed += 1
+            continue
+        h, body = parts["head"], parts["body"]
+        nid = h["note_id"]
+        if nid in known and abs(known[nid] - mt) < 0.5 and nid not in need_owner:
+            skipped += 1
+            continue
+
+        title = h.get("title") or ""
+        tags = ", ".join(h.get("tags") or [])
+        kbs = ", ".join(h.get("topics") or [])
+
+        # 只补归属、正文没变的笔记：不重写 FTS 行。
+        # 重写会让 FTS5 留下废弃段，实测把库从 42 MB 撑到 58 MB。
+        only_owner = (nid in known and abs(known[nid] - mt) < 0.5
+                      and nid in need_owner)
+        if not only_owner:
+            conn.execute("DELETE FROM notes WHERE note_id = ?", (nid,))
+            conn.execute(
+                "INSERT INTO notes(note_id, title, body, tags, kbs) VALUES (?,?,?,?,?)",
+                (nid, title, _index_tokens(body), _index_tokens(tags), _index_tokens(kbs)),
+            )
+        owner, _oscore, _owhy = _owner_of(h, body, persona_conf)
+        conn.execute(
+            "INSERT OR REPLACE INTO meta(note_id, mtime, title, tags, kbs,"
+            " created, type, body, owner) VALUES (?,?,?,?,?,?,?,?,?)",
+            (nid, mt, title, tags, kbs, h.get("created") or "",
+             h.get("type") or "", body[:4000], owner),
+        )
+        if nid in known:
+            updated += 1
+        else:
+            added += 1
+        if only_owner:
+            owner_filled += 1
+
+    # 镜像里已经没有的笔记，索引里也要清掉，否则会搜出不存在的东西。
+    # 文件名是「<id>_<标题>.md」，不能直接拿 note_id 拼路径判断。
+    on_disk = set()
+    for f in files:
+        p2 = _parse_md_head(f)
+        if p2.get("note_id"):
+            on_disk.add(p2["note_id"])
+    live = {r["note_id"] for r in conn.execute("SELECT note_id FROM meta")}
+    gone = [n for n in live if n not in on_disk]
+    for n in gone:
+        conn.execute("DELETE FROM notes WHERE note_id = ?", (n,))
+        conn.execute("DELETE FROM meta WHERE note_id = ?", (n,))
+
+    conn.commit()
+    conn.execute("INSERT OR REPLACE INTO kv(key, value) VALUES('persona_sig', ?)",
+                 (cfg_sig,))
+    conn.commit()
+
+    if owner_filled:
+        # 补归属会产生页面空洞。整理分两步，缺一步都收不回来（实测 57.3 MB）：
+        #   1) FTS5 rebuild —— VACUUM 管不到 FTS5 的影子表，必须先让它自己重建
+        #   2) VACUUM        —— 再把普通表与影子表留下的空洞压掉
+        # 实测 rebuild 1.3 秒 + vacuum 0.4 秒，从 57.3 MB 收到 41.6 MB。
+        # 只在真的补过归属时做，平时 index 不该为了整洁每次全库重写。
+        conn.execute("INSERT INTO notes(notes) VALUES('rebuild')")
+        conn.commit()
+        conn.execute("VACUUM")
+        conn.commit()
+    total = conn.execute("SELECT COUNT(*) c FROM meta").fetchone()["c"]
+    size = _index_path().stat().st_size / 1024 / 1024
+    conn.close()
+
+    print(f"[index] 已建索引：{_index_path()}")
+    line = (f"[index] 新增 {added}｜更新 {updated}｜未变 {skipped}｜失败 {failed}｜"
+            f"清理失效 {len(gone)}")
+    if owner_filled:
+        line += f"｜补归属 {owner_filled}"
+    print(line)
+    print(f"[index] 索引内共 {total} 篇，占用 {size:.1f} MB")
+    if failed:
+        print(f"  ⚠ 有 {failed} 个文件读不出来（坏文件或权限问题），已跳过", file=sys.stderr)
+    print("  提示：这是字面检索，不是语义检索。搜「高考」不会命中「升学考试」。")
+    return 0
+
+
+def _fts_query(q):
+    """把用户输入拼成 FTS5 查询串。
+
+    多个词是 **AND**（都出现才算命中），因为检索的目标是缩小范围。
+    每个词内部再切 bigram 并用引号包起来，避免被当成 FTS 语法。
+    """
+    parts = []
+    for word in re.split(r"\s+", (q or "").strip()):
+        if not word:
+            continue
+        t = _index_tokens(word)
+        if t:
+            parts.append(f'"{t}"')
+    return " AND ".join(parts)
+
+
+def cmd_find(args):
+    """检索本地索引（纯本地）。"""
+    conn = _open_index()
+    if conn is None:
+        print("❌ 还没有索引。先跑：gn.py index", file=sys.stderr)
+        return 2
+    q = (args.query or "").strip()
+    if not q:
+        print("❌ 要给一个查询词", file=sys.stderr)
+        return 2
+    fq = _fts_query(q)
+    if not fq:
+        print("❌ 查询词里没有可检索的字符", file=sys.stderr)
+        return 2
+
+    where, params = ["notes MATCH ?"], [fq]
+    if args.kb:
+        # 知识库过滤作用在 meta 上；用子查询是因为 FTS 表上直接拼普通 WHERE 容易冲突
+        where.append("note_id IN (SELECT note_id FROM meta WHERE kbs LIKE ?)")
+        params.append(f"%{args.kb}%")
+    if args.type:
+        where.append("note_id IN (SELECT note_id FROM meta WHERE type = ?)")
+        params.append(args.type)
+    if getattr(args, "owner", ""):
+        # 按人过滤。这是「一个账号三个人」的直接后果：
+        # 搜「强基」时如果不过滤，出来的多半是孩子的志愿填报，
+        # 而我真正想问的是我自己的工作——两者混在一个结果列表里没法用。
+        where.append("note_id IN (SELECT note_id FROM meta WHERE owner = ?)")
+        params.append(args.owner)
+
+    # bm25 权重：标题命中比正文命中重要得多
+    sql = ("SELECT note_id, title, rank FROM notes WHERE " + " AND ".join(where) +
+           " ORDER BY bm25(notes, 0.0, 8.0, 1.0, 1.0, 1.0) LIMIT ?")
+    params.append(args.limit)
+
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    except sqlite3.OperationalError as e:
+        print(f"❌ 查询语法有问题：{e}\n   查询串：{fq}", file=sys.stderr)
+        return 2
+
+    hits = []
+    for r in rows:
+        m = conn.execute("SELECT body, kbs, created, type, owner FROM meta WHERE note_id = ?",
+                         (r["note_id"],)).fetchone()
+        hits.append({
+            "note_id": r["note_id"],
+            "title": r["title"],
+            "snippet": _make_snippet(m["body"] if m else "", q),
+            "kb": (m["kbs"] if m else "") or "",
+            "created": (m["created"] if m else "") or "",
+            "type": (m["type"] if m else "") or "",
+            "owner": (m["owner"] if m else "") or "",
+        })
+
+    if args.json:
+        print(jdump({"ok": True, "query": q, "fts": fq, "count": len(hits), "hits": hits}))
+        conn.close()
+        return 0
+
+    print(f"「{q}」命中 {len(hits)} 条（最多显示 {args.limit}）")
+    for i, r in enumerate(hits, 1):
+        meta_line = "  ".join(x for x in (r["created"][:10], r["owner"], r["type"],
+                                          ("[" + r["kb"] + "]") if r["kb"] else "") if x)
+        print(f"\n{i}. {r['title'][:60]}")
+        print(f"   {r['snippet'][:170]}")
+        if meta_line:
+            print(f"   {meta_line}")
+        print(f"   https://www.biji.com/note/{r['note_id']}")
+    if not hits:
+        print("\n  没有命中。这是字面检索——试试更短的关键词，或确认镜像里有这个词。")
+    conn.close()
     return 0
 
 
@@ -1881,6 +3261,145 @@ def cmd_note_update(args):
     r = c.note_update(args.note_id, title=args.title, content=args.content, tags=args.tags)
     if not print_dry(r, "note/update"):
         print(jdump(r))
+    return 0
+
+
+def _note_body(c, note_id):
+    """拿一条笔记的正文与标题。detail 的返回是 {"note": {...}}，不是 {"data": ...}。"""
+    d = c.detail(sid(note_id))
+    if not isinstance(d, dict):
+        raise RuntimeError(f"note/detail 返回非对象：{note_id}")
+    note = d.get("note") or d.get("data") or d.get("result") or d
+    if not isinstance(note, dict):
+        raise RuntimeError(f"note/detail 结构难以识别：{note_id}")
+    body = (note.get("content") or note.get("ref_content") or "").strip()
+    title = (note.get("display_title") or note.get("title") or "").strip()
+    url = note.get("note_url") or ""
+    return {"note_id": str(note_id), "title": title, "body": body, "url": url,
+            "raw": note}
+
+
+def cmd_merge(args):
+    """把多条笔记的正文合并成**一条新笔记**（不删旧的，删旧另开一步）。
+
+    为什么这么设计：
+      · 平台没有「合并」接口，只能读旧正文 → 写新笔记。
+      · 新笔记的 note_id 由服务端重新分配，**所有指向旧 id 的引用都会断**。
+        所以不能假装这是可逆操作，默认只做「内容合并」，**绝不自动删旧**。
+      · 旧笔记的正文在合成后仍然在线上，用户可以自己去核验、再决定要不要删。
+
+    两道闸门：
+      1) 不带 --apply 只输出预览与将创建的完整正文（可先看再跑）。
+      2) --apply 时必须显式 --i-understand-new-id（承认会得到新 id）。
+    """
+    ids = [str(x).strip() for x in (args.note_ids or []) if str(x).strip()]
+    if len(ids) < 2:
+        print("❌ 合并至少要两条笔记（一次只能读、不能只拼一条）。", file=sys.stderr)
+        return 2
+    if len(ids) > 50:
+        print("❌ 一次最多 50 条。多请分批（一次拼出十多万字的笔记没法读）。", file=sys.stderr)
+        return 2
+
+    c = make_client(args)
+    parts, missing, titles = [], [], []
+    for nid in ids:
+        try:
+            n = _note_body(c, nid)
+        except Exception as exc:  # noqa: BLE001
+            missing.append((nid, str(exc)))
+            continue
+        if not n["body"]:
+            missing.append((nid, "正文为空，不拿它凑数"))
+            continue
+        titles.append(n["title"] or nid)
+        parts.append((n, n["body"]))
+
+    if missing:
+        for nid, why in missing:
+            print(f"❌ {nid}: {why}", file=sys.stderr)
+        print("   合并要求每条都有正文；缺一条就停下，不静默跳过。", file=sys.stderr)
+        return 3
+    if len(parts) < 2:
+        print("❌ 可用正文不足两条，无法合并。", file=sys.stderr)
+        return 3
+
+    # 默认标题：不要拿前三条标题去拼。实测那会把正文首句截进标题里
+    # （「# 研究的方法 2023年9月…」），又长又难认。
+    # 改成「合并 N 篇 · 第一篇的干净标题」，人能一眼看出这是什么。
+    if args.title:
+        title = args.title
+    else:
+        first = (titles[0] or "").strip().lstrip("#").strip()
+        if len(first) > 30:
+            first = first[:30] + "…"
+        title = f"合并 {len(titles)} 篇 · {first or '未命名'}"
+
+    # 正文拼接：每段前面写清来源（id + 原标题 + 链接），
+    # 否则半年后看到一串没有出处的文字，等于把信息归了个零。
+    chunks = []
+    for n, body in parts:
+        head = f"## 来源：{n['title'] or n['note_id']}"
+        meta = f"- note_id: `{n['note_id']}`"
+        if n["url"]:
+            meta += f"\n- 原始链接: {n['url']}"
+        chunks.append(head + "\n\n" + meta + "\n\n" + body)
+    sep = "\n\n---\n\n"
+    content = "\n\n".join(chunks) if args.style == "sections" else sep.join(chunks)
+
+    print("=" * 72)
+    print(f"合并预览：{len(parts)} 条 → 1 条新笔记")
+    print(f"  新标题：{title}")
+    print(f"  正文长度：{len(content):,} 字符")
+    print("  参与合并：")
+    for n, body in parts:
+        print(f"    · {n['note_id']}  {n['title'][:40]:<40}  {len(body):>7,} 字")
+    print("  旧笔记：**全部保留**（本命令不删任何东西）")
+    print("=" * 72)
+
+    if not args.apply:
+        if args.show:
+            print("\n—— 将创建的正文（前 2000 字）——\n")
+            print(content[:2000])
+            if len(content) > 2000:
+                print(f"\n…（共 {len(content):,} 字，其余省略）")
+        print("\n[DRY-RUN] 未写入。确认后加 --apply --i-understand-new-id 才会真的建。")
+        return 0
+
+    if not args.i_understand_new_id:
+        print("❌ 拒绝执行：合并会创建一个**全新的 note_id**，旧引用全部断开。", file=sys.stderr)
+        print("   确认你接受这一点，再加 --i-understand-new-id。", file=sys.stderr)
+        return 3
+
+    _mutate_guard(args, c,
+                  "⚠️ 高危：建新笔记（新 id），旧笔记保留但不会被自动删除。")
+
+    r = c.note_save(title, content, args.tags, args.topic_id)
+    if not print_dry(r, "note/save(merge)"):
+        print(jdump(r))
+        new_id = ""
+        if isinstance(r, dict):
+            for k in ("note_id", "id"):
+                if r.get(k):
+                    new_id = str(r[k])
+                    break
+            if not new_id and isinstance(r.get("data"), dict):
+                new_id = str(r["data"].get("note_id") or r["data"].get("id") or "")
+        print(f"\n✅ 已建新笔记：{new_id or '(接口未返回 id，去 App 里看)'}")
+        print(f"   合并了 {len(parts)} 条：{', '.join(n['note_id'] for n, _ in parts)}")
+        print("   旧笔记仍在线上。要删旧请逐条走 note-delete（会先存 trash/）。")
+        # 把「合并来源」落本地一份，方便以后回溯这条新笔记是从哪来
+        try:
+            log = STATE / f"merge-{stamp()}.json"
+            STATE.mkdir(parents=True, exist_ok=True)
+            log.write_text(jdump({
+                "at": now_iso(), "new_note_id": new_id, "title": title,
+                "sources": [{"note_id": n["note_id"], "title": n["title"], "url": n["url"]}
+                            for n, _ in parts],
+                "content_len": len(content),
+            }), encoding="utf-8")
+            print(f"   来源记录：{log}")
+        except OSError:
+            pass
     return 0
 
 
@@ -2580,6 +4099,54 @@ def build_parser():
     iv.add_argument("--summary", action="store_true", help="不输出每条笔记的 id/文件名（体积小，给界面用）")
     iv.set_defaults(func=cmd_inventory)
 
+    # 唯一 ID 表：把「名字 → id」沉淀下来，并查名字/ID 错位。
+    # 动机：插件里很多关联靠名字字符串，用户改个名字就静默失效且不报错。
+    ids = sub.add_parser("ids", help="建/刷新唯一 ID 表（名字→id），并检查名字与 ID 是否错位（纯本地）")
+    ids.add_argument("--into", default="current", help="镜像子目录（相对数据目录），默认 current")
+    ids.add_argument("--json", action="store_true", help="输出 JSON（给界面/脚本用）")
+    ids.set_defaults(func=cmd_ids)
+
+    # 面向 AI 的工作内容提纯：它要的是「你在干什么、还有什么没做完」，
+    # 不是 4321 条笔记的目录树。
+    # 账号归属：一个账号里混着三个人的内容，先分清是谁的，再谈分类。
+    pe = sub.add_parser("personas",
+                        help="按人盘点这个账号里的内容（我/孩子/老婆/共用/未知；纯本地）")
+    pe.add_argument("--into", default="current", help="镜像子目录，默认 current")
+    pe.add_argument("--json", action="store_true", help="输出 JSON（给界面/Agent 用）")
+    pe.set_defaults(func=cmd_personas)
+
+    ab = sub.add_parser("agent-brief",
+                        help="给 AI Agent 读的工作内容提纯包（待办/主要来源/最近动态；纯本地）")
+    ab.add_argument("--into", default="current", help="镜像子目录（相对数据目录），默认 current")
+    ab.add_argument("--days", type=int, default=0, help="只看最近 N 天（默认全部）")
+    ab.add_argument("--top", type=int, default=12, help="主要来源取前几个（默认 12）")
+    ab.add_argument("--recent", type=int, default=10, help="最近自己记的取几条（默认 10）")
+    ab.add_argument("--top-todos", type=int, default=40, help="待办最多列几条（默认 40）")
+    ab.add_argument("--json", action="store_true", help="输出 JSON（给 Agent/脚本用）")
+    ab.set_defaults(func=cmd_agent_brief)
+
+    # 本地全文检索：检索是最频繁的动作，不该每次都联网花配额。
+    ix = sub.add_parser("index", help="建/刷新本地全文索引（纯本地，sqlite FTS5）")
+    ix.add_argument("--into", default="current", help="镜像子目录，默认 current")
+    ix.set_defaults(func=cmd_index)
+
+    fd = sub.add_parser("find", help="检索本地全文索引（纯本地，字面检索）")
+    fd.add_argument("query", help="查询词；多个词用空格分隔（都要命中）")
+    fd.add_argument("--kb", default="", help="只在这个知识库里找（名字包含即可）")
+    fd.add_argument("--type", default="", help="只找这种类型（如 meeting / plain_text）")
+    fd.add_argument("--owner", default="",
+                    help="只找这个人的：我 / 孩子 / 老婆 / 共用 / 未知")
+    fd.add_argument("--limit", type=int, default=10, help="最多返回几条，默认 10")
+    fd.add_argument("--json", action="store_true", help="输出 JSON")
+    fd.set_defaults(func=cmd_find)
+
+    # 按知识库发布：导出一个自包含的静态站点，别人拿到就能读能搜。
+    pb = sub.add_parser("publish", help="把一个知识库导出成静态站点（纯本地，可发布）")
+    pb.add_argument("--kb", required=True, help="知识库名（包含匹配，先跑 inventory 看）")
+    pb.add_argument("--out", default="", help="输出目录，默认 <dataDir>/publish/<库名>")
+    pb.add_argument("--into", default="current", help="镜像子目录，默认 current")
+    pb.set_defaults(func=cmd_publish)
+
     # 把界面选的层级路径解析成真实 note_id（不调 API）
     # —— 发芽：官方只有只读查询端点（/resource/note/sprout），实测 POST 为 404 ——
     # 所以生成本身不在本脚本里，而是由 DSH 的 AI 侧做（见 SKILL.md · 发芽）。
@@ -2660,6 +4227,19 @@ def build_parser():
     ns.add_argument("--topic-id")
     add_write(ns)
     ns.set_defaults(func=cmd_note_save)
+
+    mg = sub.add_parser("merge", help="把多条笔记合并成一条新笔记（不删旧的；新 id 会断旧引用）")
+    mg.add_argument("note_ids", nargs="+", metavar="NOTE_ID", help="要合并的 note_id（至少 2 个）")
+    mg.add_argument("--title", help="新笔记标题（默认按来源自动起名）")
+    mg.add_argument("--tags", nargs="*", help="给新笔记打标签（可选）")
+    mg.add_argument("--topic-id", help="新笔记直接放进某个知识库（可选）")
+    mg.add_argument("--style", choices=["sections", "divider"], default="sections",
+                    help="拼接风格：sections=每段带来源小节；divider=只用分隔线")
+    mg.add_argument("--show", action="store_true", help="干跑时打印将创建的正文前 2000 字")
+    mg.add_argument("--i-understand-new-id", action="store_true",
+                    help="确认已知会得到全新 note_id、旧引用会断")
+    add_write(mg)
+    mg.set_defaults(func=cmd_merge)
 
     nu = sub.add_parser("note-update", help="改笔记（⚠️ --tags 为替换覆盖）")
     nu.add_argument("--note-id", required=True)
