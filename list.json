@@ -1,18 +1,18 @@
 {
   "schema": 1,
-  "updated": "2026-11-19",
+  "updated": "2026-11-21",
   "note": "本机自研插件清单。install.ps1 按此表决定装哪些；plugpush.ps1 按此表决定推哪些。新增插件时加一条即可。",
   "plugins": [
     {
       "name": "dsh-synchub",
       "dir": "dsh-synchub",
-      "version": "0.6.0",
-      "description": "同步中心：会话/工作区/附件/技能/配置层 → 各自私有 Git 仓库；同步面分级 + 危险目录守卫 + 环境切换检测 + 一键同步",
+      "version": "0.8.0",
+      "description": "同步中心：会话/工作区/附件/技能/配置层 → 各自私有 Git 仓库；同步面分级 + 危险目录守卫 + 环境切换检测 + 一键同步；代码仓库多仓管理与会话体检修复（目录改名后自动检查并修复归属错位）",
       "installedOn": [
         "FRANCIS-HOME-I7"
       ],
       "status": "active",
-      "note": "0.6.0（2026-11-18）：双机工作流完善（ADR-029/030）。① 主按钮改「立即同步」＝/sync（拉取ff-only→应用→暂存→提交→推送一口气），旧的提交并推送/拉取并应用降为次按钮；用户要的「等20分钟再同步」不需要做——手动同步本来就不走空闲闸门。② 分叉（两台各自推过，ahead>0&&behind>0）产品化：channelState/divergeInfo 计算 diverged，面板出现「分叉处理（二选一）」卡——以本机为准（覆盖云：stage+commit+push --force-with-lease）或以远端为准（覆盖本机：reset --hard origin + applyPayload）；覆盖前把被覆盖一侧提交哈希（前50条）备份到 backups/diverge-<ts>/；可先「看两边的提交」预览再决定；mode 无默认值，不传 400。刻意不做三方合并：会话是 append-heavy JSONL/zstd，文本合并产出不可读（ADR-014 同源证据）。新增路由 /diverge /diverge/resolve（共20条）；新增 test/diverge-smoke.cjs（路由注册/非法mode 400/初始态无仓库安全跳过/无remote降级/源码护栏）；render-smoke +4 条（主按钮/二选一卡/分叉结论/拉取禁用提示）。BOOTSTRAP 0.4 表改为「自己每台机器都推荐 B 路径（git pull 即升级）」+ Q5 新增 git clone + install.ps1 三步推荐。上一版 0.5.9：侧边栏重做成仪表盘 + 修致命性能缺陷（/status?fast=1 不访网 10562ms→593ms、fetch 8s 缓存存 Promise、own=null 不再误报「还缺两个仓库地址」）。上一版 0.5.8：假绿修复（dirty 语义 + branchOf 硬写 main），删旧 snapshots/，两仓库分支统一 main。"
+      "note": "0.8.0（2026-11-21）：会话体检与修复（ADR-034）。根因是一对指针同时错位——工作区目录改名/移动/重新添加后，DSH 为新路径新建 workspaceId，而会话正文仍在 sessions/<旧编码路径>/、sessionIds 仍挂在旧记录上；只修一半最坑（只改登记不搬目录 = 侧边栏有但点进去空白；只搬目录不改登记 = 文件在但永不显示）。新增 lib/sessiondoctor.js 独立引擎 + GET/POST /api/dsh-synchub/session-doctor（共27条路由），认出9类问题：orphan-group-relocatable（目录改名，可改指）/ orphan-group-recoverable（目录在但登记丢）/ dangling-ref / duplicate-ref / unregistered-live / group-mismatch / orphan-group-dead / empty-group / workspace-path-missing（只报告不自动修）。安全边界：只读扫描绝不写盘（smoke 切函数体断言无 writeFile/rm/cp/mkdir）；执行需 confirm:'REPAIR'，先备份 workspace.json 到 backups/doctor-<ts>/；搬目录一律复制→逐文件+字节校验→删源；30 秒内有改动的会话拒绝搬；subagent 会话（origin=subagent / 有 parentSession）不参与任何判断，避免狼来了；改指必须由调用方在 targets 里显式给 wsId，工具绝不猜。只解 zstd 首帧拿 header（本机 session-7e2afa3c 是 933 帧拼接），counts.broken 只表示找不到正文或首帧读不出，不表示内容损坏。判据一律正向编码比对，不做反向解码（路径里的 - 与分隔符 - 无法区分，deepseek-harness 会被拆成两级）。新增 test/sessiondoctor-smoke.cjs（17 断言，含干净现场不许瞎报、无 confirm 必须拒绝且零写入、subagent 不误报、回滚点必须存执行前原文）；render-smoke 增 E0b 段 7 断言（卡片已挂载 / 不自动扫描 / 两步式 / confirm 逐字 / 改指带 targets / 文案说数据没丢 / 提示重启）。实测真实 ~/.dsh：14 组 104 目录 → 13 条 finding（7 warn + 6 info）、0 error，与手工审计一致。修 bom 级 bug：workspace.json 不存在时旧码当成解析失败，新机器体检会直接失败（现按 ENOENT 视为合法初始态）。注意：新增 hook 一律追加到 Panel 末尾，render-smoke 按位置注入 useState，插中间会让后面每项错位。上一版 0.7.0：改名与大仓库友好版（ADR-031/032/033）——session-move 单条+批量迁移、代码仓库卡四态区分（修假绿第三次）、侧边栏 20 分钟模块级缓存；设置页可增删任意 git 仓库。上一版 0.6.0（2026-11-18）：双机工作流完善（ADR-029/030）。① 主按钮改「立即同步」＝/sync（拉取ff-only→应用→暂存→提交→推送一口气），旧的提交并推送/拉取并应用降为次按钮；用户要的「等20分钟再同步」不需要做——手动同步本来就不走空闲闸门。② 分叉（两台各自推过，ahead>0&&behind>0）产品化：channelState/divergeInfo 计算 diverged，面板出现「分叉处理（二选一）」卡——以本机为准（覆盖云：stage+commit+push --force-with-lease）或以远端为准（覆盖本机：reset --hard origin + applyPayload）；覆盖前把被覆盖一侧提交哈希（前50条）备份到 backups/diverge-<ts>/；可先「看两边的提交」预览再决定；mode 无默认值，不传 400。刻意不做三方合并：会话是 append-heavy JSONL/zstd，文本合并产出不可读（ADR-014 同源证据）。新增路由 /diverge /diverge/resolve（共20条）；新增 test/diverge-smoke.cjs（路由注册/非法mode 400/初始态无仓库安全跳过/无remote降级/源码护栏）；render-smoke +4 条（主按钮/二选一卡/分叉结论/拉取禁用提示）。BOOTSTRAP 0.4 表改为「自己每台机器都推荐 B 路径（git pull 即升级）」+ Q5 新增 git clone + install.ps1 三步推荐。上一版 0.5.9：侧边栏重做成仪表盘 + 修致命性能缺陷（/status?fast=1 不访网 10562ms→593ms、fetch 8s 缓存存 Promise、own=null 不再误报「还缺两个仓库地址」）。上一版 0.5.8：假绿修复（dirty 语义 + branchOf 硬写 main），删旧 snapshots/，两仓库分支统一 main。"
     },
     {
       "name": "dsh-pixel",

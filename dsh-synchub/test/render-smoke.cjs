@@ -323,6 +323,120 @@ ok('代码仓库卡没被挂载会是死代码',
 ok('设置页有定时自动提交开关', /codeRepoAutoEnabled/.test(src0));
 ok('设置页有定时间隔输入', /codeRepoAutoMinutes/.test(src0));
 
+console.log('\nE0b. 会话体检卡（ADR-034：目录改名后自动检查修复）');
+ok('体检卡被真正挂载，不是死代码', /^\s+doctorCard,$/m.test(src0),
+  'doctorCard 定义了但没渲染');
+ok('体检卡默认不自动扫描（首屏不付磁盘往返）',
+  !/useEffect\(\(\) => \{[^}]*doDoctorScan/.test(src0),
+  '体检不应在 useEffect 里自动跑，100+ 目录逐个解首帧很贵');
+ok('体检先只读扫描、再让用户选动作',
+  /\/session-doctor/.test(src0) && /confirm: 'REPAIR'/.test(src0),
+  '扫描与执行必须是两步，不能一个按钮直接改 workspace.json');
+ok('执行时 confirm 逐字为 REPAIR',
+  /const body = \{ confirm: 'REPAIR' \}/.test(src0),
+  'confirm 写错就永远执行不了');
+ok('改指必须带 targets（不让前端猜目标）',
+  /body\.targets = targets/.test(src0) && /\{ \[act0\.id\]: wsId \}/.test(src0),
+  'relocate 不带 targets 会被后端拒绝');
+ok('体检卡文案说清「数据没丢」而不是只报错误',
+  /这不是数据丢了/.test(src0),
+  '用户最怕丢数据，必须先回答这个问题');
+ok('改完提示要重启 DSH 才刷新归属',
+  /重启 DSH 才按新分组显示/.test(src0),
+  '不说明就会让人以为没修好');
+
+/* E0c — 体检卡的真渲染。
+   E0b 那 7 条全是源码正则，查不出渲染期才求值的错误（历史上就因此白屏过两次）。
+   本人真跑三种状态：未扫描 / 扫完有发现 / 接口报错。
+   注意 Panel 的 state 是「按位置」注入的，index 0~17 先用 undefined 占位，
+   doctor 在 18、doctorBusy 19、doctorErr 20、doctorPick 21。 */
+const doctorFixture = {
+  ok: true,
+  at: Date.now(),
+  dshHome: 'C:\\Users\\x\\.dsh',
+  counts: { workspaces: 2, groups: 3, sessionDirs: 9, topLevel: 8, subagent: 1, broken: 0,
+    registered: 4, archived: 0, workspaceFileMissing: false },
+  summary: { error: 0, warn: 2, info: 1, fixable: 0, needsChoice: 3, total: 3 },
+  findings: [
+    { code: 'orphan-group-relocatable', severity: 'warn',
+      title: '组 --C-dsh-old-- 的 1 个会话可改指到一个现存工作区',
+      detail: '原目录已不存在，典型原因是目录被改名了。',
+      fixable: true, actionId: 'relocate:--C-dsh-old--' },
+    { code: 'dangling-ref', severity: 'warn',
+      title: '1 条登记指向已删除的会话',
+      detail: '清引用即可，不碰任何正文文件。',
+      fixable: true, actionId: 'drop:abc' },
+    { code: 'empty-group', severity: 'info',
+      title: '空组 --C-dsh-gone--', detail: '改名后留下的空壳。',
+      fixable: true, actionId: 'rmdir:--C-dsh-gone--' },
+  ],
+  actions: [
+    { id: 'relocate:--C-dsh-old--', kind: 'relocate-group', code: 'orphan-group-relocatable',
+      safe: false, label: '把 1 个会话改指到「dw-plugin」（可改选）',
+      payload: { group: '--C-dsh-old--', ids: ['session-a'], candidates: [
+        { wsId: 'ws-1', title: 'dw-plugin', path: 'C:\\dsh\\dw-plugin', score: 0 },
+        { wsId: 'ws-2', title: 'dw-base', path: 'C:\\dsh\\dw-base', score: 0 }] } },
+    { id: 'drop:abc', kind: 'drop-ref', code: 'dangling-ref',
+      safe: true, label: '清掉悬空引用', payload: { sessionId: 'abc', wsIds: ['ws-1'] } },
+    { id: 'rmdir:--C-dsh-gone--', kind: 'rmdir', code: 'empty-group',
+      safe: true, label: '删掉空组', payload: { group: '--C-dsh-gone--' } },
+  ],
+};
+/* baseArgs 已填 index 0~15（own…notePreview）。
+   后面依次是 repos=16、divergeData=17、doctor=18、doctorBusy=19、doctorErr=20、doctorPick=21。
+   repos/divergeData 显式传 null（与其 useState 初值一致），否则 undefined 会把初始化函数盖掉。 */
+const pad = (doctorVals) => [null, null, doctorVals[0], doctorVals[1], doctorVals[2], doctorVals[3]];
+const baseStatus = JSON.parse(JSON.stringify(STATUS));
+const baseArgs = [baseStatus, { ok: true, checks: [] }, MAP, '', '', '', [], null,
+  { ok: true, ready: true, headline: '可以同步' }, '', '', null, '', '', null, null];
+const renderPanel = (doctorVals) => renderTree(slots.main, baseArgs.concat(pad(doctorVals)));
+
+// ① 未扫描：必须只能说「尚未检查」，不能报错也不能声称正常。
+const d0 = renderPanel([null, '', '', {}]);
+ok('体检未扫描时渲染不抛错', !d0.threw, d0.threw && d0.threw.message);
+ok('体检未扫描显示「尚未检查」', !d0.threw && d0.text.indexOf('尚未检查') >= 0);
+ok('体检未扫描不谎称一切正常', !d0.threw && d0.text.indexOf('一切正常') < 0);
+ok('体检卡有扫描按钮', !d0.threw && d0.text.indexOf('开始检查') >= 0);
+
+// ② 扫完有发现：这是真正会求值 payload.candidates 的路径。
+const d1 = renderPanel([doctorFixture, '', '', {}]);
+ok('体检有发现时渲染不抛错', !d1.threw, d1.threw && d1.threw.message);
+ok('体检有发现时无子组件报错', d1.errors.length === 0, d1.errors.join('; '));
+ok('体检列出问题标题', !d1.threw && d1.text.indexOf('可改指到一个现存工作区') >= 0);
+ok('体检显示分级徽标', !d1.threw && d1.text.indexOf('有提醒') >= 0);
+ok('体检显示扫描统计', !d1.threw && d1.text.indexOf('个分组') >= 0);
+ok('可改指项渲染出候选下拉（真求值 candidates）',
+  !d1.threw && JSON.stringify(d1).length > 0 && d1.text.indexOf('dw-plugin（C:\\dsh\\dw-plugin）') >= 0,
+  '下拉没渲染出来，可能是 payload.candidates 求值出错');
+ok('安全项按钮不要求二次确认',
+  !d1.threw && d1.text.indexOf('清掉悬空引用') >= 0);
+ok('非安全项按钮文案带「确认并」',
+  !d1.threw && d1.text.indexOf('确认并把 1 个会话改指') >= 0);
+ok('有安全项时出现一键修复按钮',
+  !d1.threw && d1.text.indexOf('一键修安全项') >= 0);
+ok('体检卡说明回滚点', !d1.threw && d1.text.indexOf('回滚点') >= 0);
+
+// ③ 异常：错误必须显示成 alert，而不是静默。
+const d2 = renderPanel([null, '', '体检异常：boom', {}]);
+ok('体检报错时渲染不抛错', !d2.threw, d2.threw && d2.threw.message);
+ok('体检报错时显示错误文案', !d2.threw && d2.text.indexOf('体检异常：boom') >= 0);
+
+// ④ 干净现场：0 发现时必须给明确结论，不能只留一堆数字。
+const cleanDoc = JSON.parse(JSON.stringify(doctorFixture));
+cleanDoc.findings = []; cleanDoc.actions = [];
+cleanDoc.summary = { error: 0, warn: 0, info: 0, fixable: 0, needsChoice: 0, total: 0 };
+const d3 = renderPanel([cleanDoc, '', '', {}]);
+ok('体检无问题时给明确结论', !d3.threw && d3.text.indexOf('没有任何需要处理的问题') >= 0);
+ok('体检无问题时不显示一级修复按钮', !d3.threw && d3.text.indexOf('一键修安全项') < 0);
+
+/* ⑤ 缺字段不能崩：旧版宿主半不返回 candidates / summary 时必须降级。
+   这是「新版 client + 旧版 index」的真实升级态。 */
+const partialDoc = { ok: true, at: Date.now(), counts: {}, summary: {},
+  findings: [{ code: 'x', severity: 'warn', title: 'T', detail: 'D', actionId: 'a1' }],
+  actions: [{ id: 'a1', kind: 'relocate-group', safe: false, label: 'L', payload: {} }] };
+const d4 = renderPanel([partialDoc, '', '', {}]);
+ok('体检缺 candidates/summary 时不崩', !d4.threw, d4.threw && d4.threw.message);
+
 console.log('\nE1. 打开侧边栏不强制刷新（20 分钟缓存 + 上次检查时间）');
 ok('有跨挂载缓存（模块级，卸载不丢）', /const PANEL_CACHE = \{/.test(src0),
   '缓存必须在组件外，否则卸载即丢，下次打开照样要等');
@@ -352,6 +466,14 @@ ok('不存在 “…)) 换行后 (cond” 这种漏逗号形态',
   !/\)\)[ \t]*\n\s*\((status|form|map|check)\s*&&/.test(srcNoComments));
 ok('不存在 "}, 字面量)) 换行后 (cond" 这种漏逗号形态（同上，去注释后）',
   !/\}, '[^']*'\)\)[ \t]*\n\s*\((status|form|map|check)\s*&&/.test(srcNoComments));
+/* 体检卡把 payload.candidates 当数组取元素。旧版宿主半不给 payload 时
+   直接下标就是渲染期 TypeError → 整块侧边栏白屏（本文件本次真扫到过）。
+   只允许经 candsOf / firstCand 取，不允许裸下标。 */
+ok('体检卡不用裸 payload.candidates[0]（缺 payload 会渲染期崩溃）',
+  !/\.payload\.candidates\s*\[/.test(srcNoComments),
+  '请改用 candsOf(act) / firstCand(act)');
+ok('candsOf 对非数组 candidates 返回空数组',
+  /Array\.isArray\(p\.candidates\)\)\s*\?\s*p\.candidates\s*:\s*\[\]/.test(srcNoComments));
 ok('settings.section 标签为 Msynchub', /label: 'Msynchub'/.test(src));
 ok('侧栏标签为 Msynchub', /label: 'Msynchub'/.test(src));
 

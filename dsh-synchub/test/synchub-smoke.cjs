@@ -38,12 +38,12 @@ const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
     webServer: { register(def) { routes.push(def); return () => {}; } },
   };
   idx.apply(ctx, {});
-  assert.equal(routes.length, 25, '应注册 25 条路由（含 repos / session-move / session-move/group）');
+  assert.equal(routes.length, 27, '应注册 27 条路由（含 session-doctor）');
   const paths = routes.map(r => r.path);
   for (const p of [
     'config', 'status', 'state', 'install-info', 'self-check', 'workspaces', 'map', 'preflight', 'check', 'scan', 'stage',
     'pull', 'push', 'sync', 'auto', 'purge-session', 'purge-session/help', 'session-note', 'session-move', 'session-move/help', 'session-move/group',
-    'diverge', 'diverge/resolve', 'repos', 'repos/sync',
+    'diverge', 'diverge/resolve', 'repos', 'repos/sync', 'session-doctor', 'session-doctor/help',
   ]) {
     assert.ok(paths.includes('/api/dsh-synchub/' + p), '缺路由 ' + p);
   }

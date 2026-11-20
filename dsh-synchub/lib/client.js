@@ -1,4 +1,4 @@
-// Msynchub 浏览器半 v0.7.0：主面板（只读状态 + 手动同步）+ 设置面板。
+// Msynchub 浏览器半 v0.8.0：主面板（只读状态 + 手动同步 + 会话体检）+ 设置面板。
 // 与 chatsync / dsh-config-manager 同形态：window.__ModuleLoader__.load 包装 + Cordis 导出。
 //
 // v0.3.0 的界面职责变了：0.2.0 是「看别人状态」，现在是「管自己同步」。
@@ -399,6 +399,20 @@ function panelCacheStore(patch) {
      · 20 分钟以上 → 「14:32 的结果（已过 N 分钟，正在后台更新）」
      · 没有时间    → 「尚未检查」
    注意：这里只解释它，不改刷新行为（那由 PANEL_TTL_MS 与轮询控制）。 */
+
+/* 体检动作的 payload 在两种情况下不可靠：
+   ① 旧版宿主半（升级过程中新版 client + 旧版 index）根本不给 payload；
+   ② relocate 找不到候选工作区时 payload.candidates 为空。
+   直接写 act0.payload.candidates[0] 会抛 TypeError，而这是**渲染期**异常 →
+   整块侧边栏白屏，用户看不到任何提示。所以取值一律走 candsOf / firstCand 两个小函数。 */
+function candsOf(act) {
+  const p = act && act.payload;
+  return (p && Array.isArray(p.candidates)) ? p.candidates : [];
+}
+function firstCand(act) {
+  const cs = candsOf(act);
+  return cs.length ? cs[0] : null;
+}
 function checkedAtText(atMs) {
   if (!atMs) return '尚未检查';
   const t = new Date(atMs);
@@ -430,6 +444,9 @@ function checkedAtText(atMs) {
          旧 bug（setDraft 当字段 setter 用）也随之不存在了。回归断言看 smoke D 段。 */
       // 自检结论（宿主算好的一次性结论 + 引导）
       const [selfCheckData, setSelfCheck] = useState(null);
+      /* ADR-034 会话体检的 state 放在 Panel 的最后：本文件的 render-smoke
+         按「位置」注入 useState 返回值，把新 hook 插在中间会让后面每一项都错位。
+         新增 hook 一律追加到 Panel 末尾，不改已有下标。 */
       // ADR-005 受控会话删除：预览 → 输入 id 二次确认 → 执行 → 重启后验收。
       const [purgeId, setPurgeId] = useState('');
       const [purgeConfirm, setPurgeConfirm] = useState('');
@@ -579,6 +596,15 @@ function checkedAtText(atMs) {
          仪表盘的数字既算状态又算代码，用户看不出哪个该管。 */
       const [repos, setRepos] = useState(null);
       const [divergeData, setDivergeData] = useState(null);
+      /* ADR-034 会话体检：新增 hook 一律追加到 Panel 末尾，不改已有下标 ——
+         render-smoke 按位置注入 useState 返回值，插在中间会让后面每项都错位。
+         不进 PANEL_CACHE：体检要扫 100+ 个会话目录并逐个解首帧，比 status 贵得多。 */
+      const [doctor, setDoctor] = useState(null);
+      const [doctorBusy, setDoctorBusy] = useState('');
+      const [doctorErr, setDoctorErr] = useState('');
+      /* 改指时用户选中目标工作区：key 是 actionId，值是 wsId。
+         必须单独存，不能只靠下拉的 defaultValue —— 受控组件不回传就拿不到选择。 */
+      const [doctorPick, setDoctorPick] = useState({});
       const doDivergePreview = useCallback(async () => {
         setErr('');
         try { setDivergeData(await getJSON(`${API}/diverge`, undefined, 30000)); }
@@ -627,6 +653,43 @@ function checkedAtText(atMs) {
         await act('受控删除会话', () => post(`${API}/purge-session`, { id: purgeId.trim(), confirm: purgeConfirm.trim() }));
         setPurgeConfirm(''); setPurgePreview(null);
       }, [purgePreview, purgeConfirm, purgeId, act]);
+
+      /* ---------- ADR-034 会话体检 ----------
+         分两步：先只读扫描（便宜、不写盘），用户看完再决定执行哪些动作。
+         不自动跑「一键全修」：改指和重建登记都会动 workspace.json，
+         把选择权留给人是故意的 —— 猜错工作区比不修更麻烦。 */
+      const doDoctorScan = useCallback(async () => {
+        setDoctorBusy('扫描'); setDoctorErr('');
+        try {
+          const r = await getJSON(`${API}/session-doctor`, undefined, 60000);
+          if (r && r.ok) setDoctor(r);
+          else setDoctorErr((r && r.error) || '体检接口没有返回结论');
+        } catch (ex) {
+          setDoctorErr('体检异常：' + String((ex && ex.message) || ex));
+        }
+        setDoctorBusy('');
+      }, []);
+
+      const doDoctorApply = useCallback(async (ids, targets) => {
+        setDoctorBusy('修复'); setDoctorErr('');
+        try {
+          const body = { confirm: 'REPAIR' };
+          if (ids && ids.length) body.ids = ids;
+          if (targets) body.targets = targets;
+          const r = await post(`${API}/session-doctor`, body);
+          if (r && r.ok) {
+            setDoctor(null); // 让下一次渲染去重扫，拿最新结论
+            await doDoctorScan();
+            setOkMsg(`已执行 ${(r.applied || []).length} 项；回滚点在 ${r.backupDir || '（已略）'}`);
+            if (r.verify && r.verify.ok) setOkMsg('修复完成，复查已无待处理项。侧边栏归属要重启 DSH 后才刷新。');
+          } else {
+            setDoctorErr((r && r.error) || '修复没有执行');
+          }
+        } catch (ex) {
+          setDoctorErr('修复异常：' + String((ex && ex.message) || ex));
+        }
+        setDoctorBusy('');
+      }, [doDoctorScan]);
 
       const doNotePreview = useCallback(async () => {
         setErr(''); setNotePreview(null);
@@ -949,6 +1012,93 @@ function checkedAtText(atMs) {
           '「不同步」的目录只在这里列出来，永不进入仓库 —— 解释见设置面板的目录清单。',
           '危险项不统计大小（避免遍历几百 MB 的运行时目录）。')) : null;
 
+      /* ---------- ADR-034 会话体检卡 ----------
+         命名就按用户的词：他要的是「session 修复」。文案回答三件事：
+           ① 现在要不要管（徽标一句话）；② 不管会怎样；③ 点哪个按钮。
+         每条发现都带 actionId，按钮把 id 回传；改指额外给一个下拉选目标。 */
+      const doctorCard = e('div', { className: 'card' },
+        e('h3', null, '⑤ 会话体检与修复',
+          doctor
+            ? e('span', { className: doctor.summary.error ? 'red' : doctor.summary.warn ? 'warn' : 'good' },
+                doctor.summary.error ? '● 需要处理' : doctor.summary.warn ? '● 有提醒' : '● 一切正常')
+            : e('span', { className: 'muted' }, '尚未检查')),
+        e('div', { className: 'muted', style: { marginBottom: 8 } },
+          '目录改名/移动/重新添加工作区之后，会话会掉进「未分组」、或者侧边栏显示但点进去是空的。',
+          '这不是数据丢了 —— 是 workspace.json 的归属和 sessions/ 里的分组目录对不上。',
+          '这个卡片只读扫描先列问题，不自动修：涉及改归属时由你决定改成哪个。'),
+
+        e('div', { className: 'btns' },
+          e('button', { disabled: Boolean(doctorBusy), onClick: doDoctorScan },
+            doctorBusy === '扫描' ? '扫描中…' : (doctor ? '重新检查' : '开始检查（只读）')),
+          doctor && doctor.actions && doctor.actions.some(a => a.safe)
+            ? e('button', {
+                disabled: Boolean(doctorBusy),
+                onClick: () => doDoctorApply(doctor.actions.filter(a => a.safe).map(a => a.id)),
+              }, doctorBusy === '修复' ? '修复中…' : `一键修安全项（${doctor.actions.filter(a => a.safe).length}）`)
+            : null,
+          doctor && doctor.verify && !doctor.verify.ok
+            ? e('button', { disabled: Boolean(doctorBusy), onClick: doDoctorScan }, '复查')
+            : null),
+
+        doctorErr ? e('div', { className: 'alert red' }, doctorErr) : null,
+
+        doctor ? e('div', { className: 'note', style: { marginTop: 8 } },
+          e('div', null,
+            '扫了 ', doctor.counts.groups, ' 个分组 / ', doctor.counts.sessionDirs, ' 个会话目录：',
+            '顶层 ', doctor.counts.topLevel, '，subagent ', doctor.counts.subagent, '，',
+            '损坏 ', doctor.counts.broken, '；已登记 ', doctor.counts.registered, '，已归档 ', doctor.counts.archived),
+          doctor.counts.workspaceFileMissing
+            ? e('div', { className: 'warn' }, '注意：找不到 storages\\workspace.json —— 这是全新安装的正常状态，不是错误。')
+            : null,
+          e('div', { className: 'muted' }, '检查时间：', checkedAtText(doctor.at))) : null,
+
+        /* 没有发现问题时给一个明确结论，不要只留一堆数字让人自己判断。 */
+        doctor && doctor.findings.length === 0
+          ? e('div', { className: 'note good' },
+              '没有任何需要处理的问题。分组目录、登记表、归档列表三者是一致的。')
+          : null,
+
+        doctor && doctor.findings.length
+          ? e('div', { style: { marginTop: 10 } }, doctor.findings.map((f, i) => {
+              const act0 = f.actionId ? (doctor.actions || []).find(a => a.id === f.actionId) : null;
+              const tone = f.severity === 'error' ? 'red' : f.severity === 'warn' ? 'warn' : 'muted';
+              return e('div', { key: i, className: 'note', style: { marginBottom: 10 } },
+                e('div', { className: tone, style: { fontWeight: 600 } },
+                  f.severity === 'error' ? '✕ ' : f.severity === 'warn' ? '! ' : '· ', f.title),
+                e('div', { className: 'muted', style: { margin: '4px 0' } }, f.detail),
+                act0 ? e('div', { className: 'btns' },
+                  /* 改指要选目标：下拉列出候选，默认第一个，但默认值必须显式传回。 */
+                  act0.kind === 'relocate-group' && firstCand(act0)
+                    ? e('select', {
+                        value: (doctorPick[act0.id] || firstCand(act0).wsId || ''),
+                        onChange: ev => setDoctorPick(p => ({ ...p, [act0.id]: ev.target.value })),
+                        style: { marginRight: 6 },
+                      }, (candsOf(act0) || []).map(c =>
+                        e('option', { key: c.wsId, value: c.wsId }, `${c.title}（${c.path}）`)))
+                    : null,
+                  e('button', {
+                    disabled: Boolean(doctorBusy),
+                    onClick: () => {
+                      if (act0.kind === 'relocate-group') {
+                        const wsId = doctorPick[act0.id] || (firstCand(act0) && firstCand(act0).wsId);
+                        doDoctorApply([act0.id], { [act0.id]: wsId });
+                      } else {
+                        doDoctorApply([act0.id]);
+                      }
+                    },
+                  }, act0.safe ? act0.label : `确认并${act0.label}`),
+                  act0.safe ? null : e('span', { className: 'muted', style: { marginLeft: 6 } }, '（会动 workspace.json，已备份）')
+                ) : null);
+            }))
+          : null,
+
+        doctor ? e('div', { className: 'note' },
+          '回滚点：', e('span', { className: 'muted' }, '$DSH_HOME\\dsh-synchub\\backups\\doctor-<时间>\\'),
+          '，里面有执行前的 workspace.json。',
+          '搬目录一律「复制 → 逐字节校验 → 删源」，中途失败源目录还在。',
+          '正在写入（30 秒内有改动）的会话会被拒绝搬动。',
+          '改完归属后，侧边栏要重启 DSH 才按新分组显示。') : null);
+
       const purgeCard = e('div', { className: 'card' },
         e('h3', null, '④ 受控删除单个会话',
           e('span', { className: 'muted' }, '不可逆 · 默认二次确认')),
@@ -1049,6 +1199,10 @@ function checkedAtText(atMs) {
           /* 分叉卡必须紧跟仪表盘：它是唯一阻断性的事，其余都让位。 */
           divergeCard,
           connectCard,
+          /* ADR-034：会话体检放在自检之前 —— 它的结论最接近用户能感知的故障
+             （「会话不见了」「侧边栏空了」），而且是可点的。而且它不自动扫描，
+             首屏不会多一次磁盘往返。 */
+          doctorCard,
           selfCheckCard,
 
           /* 说明性内容折叠：不需要每次进来都看到，但它又必须可查。 */

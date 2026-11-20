@@ -5,6 +5,57 @@
 
 > **三份文档分工**：本 [`README.md`](./README.md)=怎么用；[`BOOTSTRAP.md`](./BOOTSTRAP.md)=怎么做（安装/验证/排错/迁移/命令行）；[`ADR.md`](./ADR.md)=为什么（决策+反面代价+已否决方案）。详细调研在 [`docs/`](./docs/)。
 
+0.8.0 是**会话体检与修复版**（ADR-034），正对你那句「目录改了名字，有时候完全不能工作」：
+
+侧边栏新增 **⑤ 会话体检与修复** 卡。它解决的是一个反复发作、但从来没被工具化的问题：
+**工作区目录改名/移动/重新添加之后，会话掉进「未分组」，或者侧边栏里看着在、点进去是空的。**
+
+根因是一对必须同时成立的指针：
+
+| 一半 | 位置 | 改名后变成 |
+|---|---|---|
+| 会话正文 | `$DSH_HOME/sessions/<编码后的工作区路径>/<sessionId>/` | 仍在**旧**路径的目录里 |
+| 归属登记 | `$DSH_HOME/storages/workspace.json` 的 `sessionIds` | 仍挂在**旧**工作区记录上 |
+
+DSH 在目录改名后会**新建**一个 `workspaceId` 指向新路径，旧记录变成死指针。**只修一半是最坑的**：
+只改登记不搬目录 → 侧边栏有了这条、点进去空白；只搬目录不改登记 → 文件在但永远不显示。
+
+所以这版的做法是：**先只读体检列出问题，再让你选修哪个，两半一起改。**
+
+体检能认出 9 类问题，按「你要不要管」分了级：
+
+| 问题 | 典型成因 | 怎么修 |
+|---|---|---|
+| `orphan-group-relocatable` 可改指 | **目录改名了**（旧路径已不存在） | 选一个现存工作区 → 搬正文 + 补登记 |
+| `orphan-group-recoverable` 可重建 | 目录还在，但工作区登记丢了 | 重建一条登记，或搬进已有工作区 |
+| `dangling-ref` 悬空引用 | 会话删了，登记没删 | 清引用（**安全**，不动任何正文文件） |
+| `duplicate-ref` 重复登记 | 删掉工作区又加回来 | 只保留一个归属 |
+| `unregistered-live` 未登记 | 正文就在有效组里，却没挂到任何工作区 | 补一条登记（**安全**，不搬目录） |
+| `group-mismatch` 分组错位 | 正文在 A 组，登记在 B 工作区 | 搬目录到 B 组 |
+| `orphan-group-dead` 无处可归 | 原目录彻底删了，对不上任何人 | 归档（**只隐藏，不删正文**） |
+| `empty-group` 空组 | 改名后留下的空壳 | 删空目录 |
+| `workspace-path-missing` | 工作区路径已消失 | **不自动修**，只报告（得你自己决定新建还是删） |
+
+安全边界（每一条都有测试盯）：
+
+- **只读扫描永不写盘**；执行前先把 `workspace.json` 备份到 `backups/doctor-<时间>/`。
+- **搬目录一律「复制 → 逐字节+逐文件校验 → 删源」**，中途失败源目录还在。
+- **30 秒内还在写入的会话拒绝搬**（不碰正在用的会话）。
+- **subagent 会话不参与判断** —— 它们本来就该藏在组目录里，不该出现在侧边栏；把它们当「未分组」是误报。
+- **改指必须你选目标**，工具绝不猜：猜错会把会话塞进错的工作区，比不修更麻烦。
+- 改完 `workspace.json` 要**重启 DSH** 才按新归属显示（会话正文是即时生效的）。
+
+新增 [`lib/sessiondoctor.js`](./lib/sessiondoctor.js)（独立引擎，不塞进 3500 行的 `index.js`）
+与 [`test/sessiondoctor-smoke.cjs`](./test/sessiondoctor-smoke.cjs)（17 条断言，含干净现场不许瞎报、
+无 `confirm` 必须拒绝且不写盘、subagent 不误报、回滚点里存的必须是执行前原文）；
+[`test/render-smoke.cjs`](./test/render-smoke.cjs) 新增 E0c 段 19 条**真渲染**断言
+（未扫描 / 有发现 / 报错 / 干净现场 / 缺字段五态）。
+
+> 这套渲染断言当场抓到一个会白屏的真 bug：`payload.candidates[0]` 在旧版宿主半
+> （升级中：新 client + 旧 index，压根不给 `payload`）时抛渲染期 TypeError，
+> 整块侧边栏白屏且无任何提示。已改为 `candsOf` / `firstCand` 安全取值，
+> 并加两条源码护栏。**变异测试过**：去掉 `Array.isArray` 保护，断言立即变红。
+
 0.7.0 是**改名与大仓库友好版**（ADR-031/032/033），解决三类"看起来好了其实没好"：
 
 ① **工作区改名后会话变「未分组」** → 新增 `session-move`（单条 + 批量）：
@@ -344,7 +395,7 @@ profileManifest   2 文件     1.4 KB   ← 不同步
 
 ## 8. API
 
-全部挂在 `/api/dsh-synchub/*`，只监听 loopback，复用与 chatsync 同源的 origin/跨站 guard。
+全部挂在 `/api/dsh-synchub/*`（共 **27 条**），只监听 loopback，复用与 chatsync 同源的 origin/跨站 guard。
 
 | 路由 | 作用 | 写本机？ |
 |---|---|---|
@@ -374,6 +425,9 @@ profileManifest   2 文件     1.4 KB   ← 不同步
 | `POST /session-move` `{id, to, confirm:'MOVE'}` | 迁移**执行**（备份 → 复制 → 校验 → 删源，同时改 workspace.json） | 是（搬本机会话目录） |
 | `GET /session-move?id=<id>&to=<工作区名>&verify=1` | 迁移后验收（目标处文件齐、归属已登记、源已清空） | 否 |
 | `POST /session-move/group` `{from, to, confirm:'MOVE'}` | **批量**迁移（只碰未登记会话；返回逐条结果，删空旧组目录） | 是（同上，多条） |
+| `GET /session-doctor` | **会话体检**（只读）：扫 `sessions/` 与 `workspace.json`，返回 `findings[]` + `actions[]`（ADR-034） | 否 |
+| `POST /session-doctor` `{ids?, targets?, confirm:'REPAIR'}` | 体检修复执行：不传 `ids` 只跑 `safe:true` 的；`relocate-group` 必须在 `targets` 里指定目标 `wsId` | 是（搬正文目录 + 改 workspace.json） |
+| `GET /session-doctor/help` | 体检接口自述：问题分类表 + 安全边界 + 用法 | 否 |
 
 > **受控删除单个会话**（0.5.0）：GUI 不提供删除，物理删 `.zstd` 会留下悬空引用（ADR-004 §4.4）。
 > 面板「④ 受控删除单个会话」卡走「预览 → 再输入一次 id → 删除」，执行时先全量备份到

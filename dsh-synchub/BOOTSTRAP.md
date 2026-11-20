@@ -175,19 +175,35 @@ git ls-remote https://github.com/<你>/dsh-config
 
 ```powershell
 $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
-& $node --check "C:\dsh\dshplug\dsh-synchub\lib\index.js"
-& $node --check "C:\dsh\dshplug\dsh-synchub\lib\client.js"
-& $node "C:\dsh\dshplug\dsh-synchub\test\render-smoke.cjs"       # 浏览器半渲染（首帧/有数据/钩子序）
-& $node "C:\dsh\dshplug\dsh-synchub\test\synchub-smoke.cjs"       # 综合：18 路由 + 三槽 + CSS + 新卡片
-& $node "C:\dsh\dshplug\dsh-synchub\test\purge-smoke.cjs"        # 受控删除
-& $node "C:\dsh\dshplug\dsh-synchub\test\sessionnote-smoke.cjs"  # 蒸馏文档
-& $node "C:\dsh\dshplug\dsh-synchub\test\state-smoke.cjs"        # 状态目录真实状态
-& $node "C:\dsh\dshplug\dsh-synchub\test\unsynced-smoke.cjs"     # 假绿回归：unsynced/pending/payloadMissing
-```
+$P = 'C:\dsh\dw-plugin\dsh-synchub'
+& $node --check "$P\lib\index.js"
+& $node --check "$P\lib\client.js"
+& $node --check "$P\lib\sessiondoctor.js"
 
-全绿标志：`ALL PASS` / `SYNCHUB_SMOKE_OK` / `PURGE_SMOKE_OK` / `SESSIONNOTE_SMOKE_OK` / `STATE_SMOKE_OK` / `UNSYNCED_SMOKE_OK`，各 exit 0。
-六份 smoke 用临时夹具，**不碰真实 DSH 会话数据、不发网络请求**
-（`unsynced-smoke` 会读真实仓库目录，但**只读**：不 stage、不 commit、不 push）。
+# 全部 10 份；任何一份非 0 就停
+Get-ChildItem "$P\test" -Filter *.cjs | Sort-Object Name | ForEach-Object {
+  & $node $_.FullName
+  if ($LASTEXITCODE -ne 0) { throw "FAIL $($_.Name)" }
+}
+```
+各套件自己的通过标志（`ALL PASS` / `SYNCHUB_SMOKE_OK` / … / `会话体检 smoke：17 通过 / 0 失败`）。
+全绿 = 10/10 套件 exit 0。
+
+| 套件 | 盯什么 |
+|---|---|
+| `render-smoke.cjs` | 浏览器半**真渲染**：首帧/有数据/报错/钩子序（含 E0b+E0c 体检卡 26 条） |
+| `synchub-smoke.cjs` | 27 路由注册 + 三槽 + CSS + 新卡片 |
+| `sessiondoctor-smoke.cjs` | 体检引擎：17 条，只读性/confirm 闸门/不误报 subagent/回滚点原文 |
+| `sessionmove-smoke.cjs` | 单条+批量迁移（含 14 个真实目录交叉验证） |
+| `purge-smoke.cjs` | 受控删除 |
+| `sessionnote-smoke.cjs` | 蒸馏文档 |
+| `state-smoke.cjs` | 状态目录真实状态 |
+| `unsynced-smoke.cjs` | 假绿回归：unsynced/pending/payloadMissing |
+| `diverge-smoke.cjs` | 分叉二选一 |
+| `repo-sync-smoke.cjs` | 代码仓库四态 |
+
+十份 smoke 用临时夹具，**不碰真实 DSH 会话数据、不发网络请求**
+（`unsynced-smoke` / `repo-sync-smoke` 会读真实仓库目录，但**只读**：不 stage、不 commit、不 push）。
 
 > **为什么必须有 `render-smoke`（2026-11-18 踩过）**：`node --check` 只查语法。
 > 当时工作区卡片里 `e('div',{...},…)` 后面漏了一个逗号，下一行的
@@ -209,7 +225,7 @@ $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\nod
 4. 配好远端后，面板「下一步」头卡给出正确的那一件事（该拉还是该推）。
 
 ---
-## 4. 0.5.x 新功能怎么用（命令行等价接口）
+## 4. 各版本新功能怎么用（命令行等价接口）
 
 ### 4.1 受控删除单个会话（ADR-013）
 
@@ -243,6 +259,93 @@ GET  /api/dsh-synchub/state     # 只读：初始化 / 两仓库 .git / 回滚�
 
 ---
 
+### 4.4 会话体检与修复（ADR-034，0.8.0）
+
+### 什么时候用它
+
+**只要动过工作区目录的名字或位置，就先跑一次体检。** 典型信号：
+
+- 侧边栏里出现「未分组」，但那些会话你明明在用；
+- 会话标题变成「未命名」；
+- 侧边栏里看得到某个会话，**点进去是空的**；
+- 把工作区删掉又加回来之后，多出一批会话。
+
+这几件事**都不是数据丢了**。会话正文（`sessions/**/session.v4.jsonl.zstd`）一直在磁盘上，
+坏掉的是它和 `workspace.json` 归属之间的对应关系。
+
+### 图形界面
+
+侧边栏 → **⑤ 会话体检与修复**：
+
+1. 点「开始检查（只读）」→ 列出分级问题（✕ 需要处理 / ! 有提醒 / · 可选）。
+2. 有 `safe:true` 的项时，会出现「一键修安全项（N）」。安全项 = 清悬空引用、补登记、搬错位目录、删空组。
+3. 「可改指」的项前面有下拉框：选目标工作区，再点按钮。**工具不会替你选。**
+4. 修完自动复查一遍，并告诉你还剩什么。
+
+### 命令行等价接口
+
+```powershell
+$API = 'http://127.0.0.1:<当前端口>/api/dsh-synchub'
+
+# ① 只读体检（永不写盘）
+Invoke-RestMethod "$API/session-doctor" -Headers @{'sec-fetch-site'='same-origin'} | ConvertTo-Json -Depth 6
+
+# ② 看接口自述（问题分类表 + 安全边界）
+Invoke-RestMethod "$API/session-doctor/help" -Headers @{'sec-fetch-site'='same-origin'} | ConvertTo-Json -Depth 4
+
+# ③ 只跑安全项
+Invoke-RestMethod "$API/session-doctor" -Method Post -ContentType 'application/json' `
+  -Headers @{'sec-fetch-site'='same-origin'} -Body '{"confirm":"REPAIR"}'
+
+# ④ 改指：把某个组的会话搬到指定工作区（wsId 从 ① 的 actions[].payload.candidates 里取）
+Invoke-RestMethod "$API/session-doctor" -Method Post -ContentType 'application/json' `
+  -Headers @{'sec-fetch-site'='same-origin'} `
+  -Body ('{"confirm":"REPAIR","ids":["relocate:' + $组名 + '"],"targets":{"relocate:' + $组名 + '":"' + $wsId + '"}}')
+```
+
+> 端口每次启动都变，从运行时上下文取，不要写死。
+> `POST` 不带 `confirm:"REPAIR"` 会被拒（400），这是故意的闸门。
+
+### 手动确认工作区 id
+
+`workspace.json` 里每个工作区都有 `id` / `path` / `title`：
+
+```powershell
+$ws = Get-Content "$env:USERPROFILE\.dsh\storages\workspace.json" -Raw | ConvertFrom-Json
+$ws.tables.workspaces.PSObject.Properties | ForEach-Object {
+  [pscustomobject]@{ id = $_.Name; title = $_.Value.title; path = $_.Value.path; sessions = $_.Value.sessionIds.Count }
+} | Format-Table -AutoSize
+```
+
+### 回滚
+
+每次执行都会先写回滚点：
+
+```
+$DSH_HOME\dsh-synchub\backups\doctor-<时间戳>\storages\workspace.json
+```
+
+出问题就把这个文件拷回去，再完全重启 DSH：
+
+```powershell
+$b = Get-ChildItem "$env:USERPROFILE\.dsh\dsh-synchub\backups" -Filter 'doctor-*' | Sort-Object Name | Select-Object -Last 1
+Copy-Item "$($b.FullName)\storages\workspace.json" "$env:USERPROFILE\.dsh\storages\workspace.json" -Force
+```
+
+搬动过的会话目录**没有自动回滚**（源已被校验后删除），但每条 finding 的 `evidence` 里都记了原组名，
+手工搬回即可：`Move-Item "$env:USERPROFILE\.dsh\sessions\<目标组>\<sessionId>" "$env:USERPROFILE\.dsh\sessions\<原组>\"`。
+
+### 体检不做什么（别指望它）
+
+| 不做 | 原因 |
+|---|---|
+| 不自动扫描（打开侧边栏不会跑） | 要遍历上百个会话目录并逐个解压首帧，比 `/status` 贵得多 |
+| 不修「工作区路径已不存在」 | 目录是该重建还是该删，只有你知道；它只报告 |
+| 不猜改指目标 | 猜错会把一整批会话塞进错的工作区，比不修更麻烦 |
+| 不动 subagent 会话 | 它们本来就藏在组目录里、本来就不该出现在侧边栏 |
+| 不检查会话内容是否损坏 | 只解首帧拿 header；`broken` 仅表示找不到正文文件或首帧读不出 |
+| 不重启 DSH | 改完 `workspace.json` 要你自己重启，侧边栏才按新归属显示 |
+
 ## 5. 排错表
 
 | 现象 | 原因 | 怎么办 |
@@ -257,6 +360,12 @@ GET  /api/dsh-synchub/state     # 只读：初始化 / 两仓库 .git / 回滚�
 | 推送被拒「behind-remote」 | 另一台推过、本机落后 | 先「拉取并应用」再推，永不 force |
 | 删除会话后列表还看得到 | 没重启，DSH 内存还持有旧会话 | 完全退出再打开，然后 `verify=1` 验收 |
 | 删除后同步镜像里还有 | purge 只删本机正文，不动 payload | 下次推送时显式 `prune` 才清远端 |
+| **会话掉进「未分组」/ 点了空白** | 工作区目录改名后，正文目录与 `workspace.json` 归属**两半都错位** | 侧边栏「⑤ 会话体检与修复」→ 开始检查；参见 §4.4 |
+| 工作区删了又加后会话变成新的 | 删/加会新建 `workspaceId`，旧记录变成死指针 | 同上；体检把这种情况报成 `duplicate-ref` |
+| 体检报了一堆「subagent 未登记」 | **不会** —— 旧版本（≤ 0.7.0）的误报；subagent 已排除 | 升级到 0.8.0 |
+| 体检说「可改指」但下拉里的工作区不对 | 旧路径已不存在，名字相似度只是排序建议 | 自己选对的那个；工具不猜目标 |
+| 修完侧边栏还是旧分组 | `workspace.json` 是宿主启动时读的 | **完全重启** DSH（刷页面不够） |
+| 体检执行报「正在写入」 | 30 秒内该会话还有改动 | 等会话静下来再修，或关掉那个会话 |
 
 ### 5.1 自己确认「配置到底生效了没」
 

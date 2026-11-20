@@ -34,7 +34,7 @@ const execFileAsync = promisify(execFile);
 
 const name = 'dsh-synchub';
 const inject = ['webServer'];
-const VERSION = '0.7.0';
+const VERSION = '0.8.0';
 /* 分支不能写死。远端仓库可能是 master（GitHub 旧默认）也可能是 main，
    写死一个就会在已有仓库上推出一个**平行的空历史分支**。
    优先级：config.channels[ch].branch → 远端 HEAD 指向的分支 → DEFAULT_BRANCH。 */
@@ -74,6 +74,10 @@ async function probeBranch(channel) {
 /* ------------------------------------------------------------------ 路径 */
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+/* ADR-034：会话体检与修复。为了不让 index.js 继续膨胀（已 3500+ 行）且好单测，
+   引擎放在兄弟模块里；它只拿 dshHome 做纯文件操作，不注册路由、不读配置。 */
+import { doctorScan as sessionDoctorScan, doctorApply as sessionDoctorApply } from './sessiondoctor.js';
 
 /** 宿主 profile 目录：从本文件往上找 node_modules 的父目录。 */
 function resolveProfileDir() {
@@ -3302,6 +3306,61 @@ function routesFor() {
     },
     {
       kind: 'exact',
+      path: '/api/dsh-synchub/session-doctor',
+      handler: async (req, res) => {
+        try {
+          if (req.method === 'POST') {
+            const body = await readBody(req).catch(() => ({}));
+            const r = await sessionDoctorApply({
+              dshHome: DSH_HOME,
+              backupRoot: BACKUP_ROOT,
+              ids: Array.isArray(body.ids) ? body.ids : null,
+              targets: body.targets && typeof body.targets === 'object' ? body.targets : null,
+              confirm: body.confirm,
+            });
+            return json(res, r.ok === false ? 400 : 200, r);
+          }
+          return json(res, 200, await sessionDoctorScan({ dshHome: DSH_HOME }));
+        } catch (e) {
+          return json(res, 500, { ok: false, error: String(e.message || e) });
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/api/dsh-synchub/session-doctor/help',
+      handler: async (_req, res) => json(res, 200, {
+        ok: true,
+        why: '工作区目录改名/移动/重加之后，会话会掉进「未分组」或变成幽灵组。数据没丢，是 workspace.json 的归属和 sessions/ 的分组目录对不上了。',
+        how: [
+          'GET  /api/dsh-synchub/session-doctor                          # 全量体检（只读），返回 findings + actions',
+          "POST /api/dsh-synchub/session-doctor {confirm:'REPAIR'}        # 执行全部安全动作",
+          "POST /api/dsh-synchub/session-doctor {ids:[...], confirm:'REPAIR'}   # 只执行指定动作",
+          "POST /api/dsh-synchub/session-doctor {ids:['relocate:...'], targets:{'relocate:...':'<wsId>'}, confirm:'REPAIR'}  # 改指到指定工作区",
+        ],
+        findings: {
+          'workspace-path-missing': '工作区登记指向的路径已不存在（改名/删除），不可自动修',
+          'dangling-ref': '登记了磁盘上不存在的会话，可安全清引用',
+          'duplicate-ref': '同一会话被登记进多个工作区，保留一个',
+          'orphan-group-recoverable': '组目录还在但登记丢了，可重建登记或搬进目标工作区',
+          'orphan-group-relocatable': '原工作目录已不存在（典型是改名了），可改指到现存工作区',
+          'orphan-group-dead': '对不上任何工作区时只能归档（只隐藏，不删正文）',
+          'unregistered-live': '会话就在有效组里却没登记，补一条即可',
+          'group-mismatch': '正文目录与归属工作区不一致，需要搬目录',
+          'empty-group': '空组目录，删掉无害',
+        },
+        notes: [
+          '只读扫描永不写盘；执行前先把 workspace.json 备份到 <state>/backups/doctor-<时间>/。',
+          '搬目录一律「复制 → 逐文件/字节校验 → 删源」，失败时源仍在。',
+          '30 秒内还在写入的会话拒绝搬动。',
+          'subagent 会话（origin=subagent 或有 parentSession）不参与判断：它们本来就该藏在组目录里。',
+          '改指（relocate-group）必须显式给 targets，工具不猜目标，猜错会把会话塞进错的工作区。',
+          '改完 workspace.json 后，侧边栏要重启 DSH（或重新载入窗口）才按新归属显示。',
+        ],
+      }),
+    },
+    {
+      kind: 'exact',
       path: '/api/dsh-synchub/purge-session/help',
       handler: async (_req, res) => json(res, 200, {
         ok: true,
@@ -3456,4 +3515,4 @@ async function codeRepoAutoTick(ctx) {
 export { name, inject, apply };
 export const VERSION_INFO = VERSION;
 // 供离线 smoke 测试用（node --check 查不出逻辑错，必须真跑一遍）。
-export const __test = { codeRepoList, codeRepoState, codeReposPayload, syncCodeRepo, syncAllCodeRepos, divergeInfo, resolveKeepLocal, resolveKeepRemote, stampTrailer, purgePreview, purgeExecute, purgeVerify, sessionIdForms, walkSessionRefs, bareSessionId, sessionNoteTemplate, sessionNotePreview, sessionNoteWrite, resolveNotePath, sessionMigrateGroup, sessionMigratePreview, sessionMigrateExecute, sessionMigrateVerify, encodeWorkspaceGroup, decodeWorkspaceGroup, stateInfo, installInfo, idleStandard, mergeConfig, normalizeRemoteToHttps, repoFacts, normalizeWorkspaceMap, realWorkspaces, workspaceReport, selfCheck, channelState, readConfig, statusPayload, preflightReport: selfCheck };
+export const __test = { codeRepoList, codeRepoState, codeReposPayload, syncCodeRepo, syncAllCodeRepos, divergeInfo, resolveKeepLocal, resolveKeepRemote, stampTrailer, purgePreview, purgeExecute, purgeVerify, sessionIdForms, walkSessionRefs, bareSessionId, sessionNoteTemplate, sessionNotePreview, sessionNoteWrite, resolveNotePath, sessionMigrateGroup, sessionMigratePreview, sessionMigrateExecute, sessionMigrateVerify, encodeWorkspaceGroup, decodeWorkspaceGroup, stateInfo, installInfo, idleStandard, mergeConfig, normalizeRemoteToHttps, repoFacts, normalizeWorkspaceMap, realWorkspaces, workspaceReport, selfCheck, channelState, readConfig, statusPayload, preflightReport: selfCheck, sessionDoctorScan, sessionDoctorApply };
