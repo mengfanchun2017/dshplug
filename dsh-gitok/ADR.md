@@ -737,3 +737,51 @@ smoke-route.mjs     → exit 1        （FAIL: 期望 200，实际 500）
 断言新文案与降级分支均正确；`C.*` 13/13、`S.*` 40 定义 14 引用均无未定义；
 `tools/smoke-route.mjs` 仍 `level=ok`，六项监控 `helper/creds/plaintext/sshkey/deps` 全 ok。
 新增的 `machine` 行正则 `^machine:[ \t]*(.*)$` 已用真实 PowerShell 输出对拍通过。
+
+---
+
+## ADR-015 · 分发走「公开 git 直装 + 社区索引」，不发布到 npm
+
+**结论（2026-11-20，v0.4.0）**：本插件的官方分发路径确定为
+`dsh plugin add github:mengfanchun2017/dshplug#path:/dsh-gitok`，
+并提 PR 收录进社区索引 `awesome-dsh-plugin`。**不**发布到 npm，`"private": true` 保留。
+
+**理由**：
+
+1. **git 路线在本插件上是零摩擦的**，因为三个前提天然成立：
+   - 纯 ESM，`lib/index.js` / `lib/client.js` 就是最终产物 → **不需要 `prepare` 构建**；
+   - 没有 `postinstall` → 不触发 pnpm 的脚本拦截，用户**不用改 `pnpm-workspace.yaml` 授权 `allowBuilds`**；
+   - `dependencies` / `peerDependencies` 全空 → 装完没有依赖树。
+
+   这是关键区别：**大多数插件不能 git 直装，就是因为要构建而用户默认拒绝跑脚本**。本插件不受此限。
+   实测：从 git 装下来 15 个文件、`files` 白名单生效、`dsh.bundle.patch` 在位、
+   `evaluatePluginCompatibility()` 返回「无未满足要求」。
+
+2. **仓库是 monorepo**，`dsh-gitok` 在子目录。`#path:/dsh-gitok` 已被实测支持
+   （`parseInstallSpec()` 解析为 `kind: git`，pnpm 真装成功）。
+
+3. **索引源自治是 DSH 的设计**：官方"不内置任何索引源"，所以"上架官方商店"这个动作不存在，
+   能做的只有（a）发布 npm、（b）加 `dsh-plugin` topic、（c）进社区 `format 1` 索引。
+   awesome-dsh-plugin 同时是人和机器（`dsh plugin market add`）都能读的索引，性价比最高。
+
+**反面代价（必须接受）**：
+
+- **用户拿到的是"最新 HEAD"，不是锁定的发布版**。git 装不带版本号保证，
+  上游一改（含破坏性改动）所有新装用户立即受影响。缓解：`engines.dsh` 卡住运行时不兼容。
+- **无法用 `node_modules` 缓存/离线镜像**，每次装都要能连上 GitHub（本机代理一断就 `schannel` 失败，实测过）。
+- **`"private": true` 留着**：不碍 git 装，但会把"将来发 npm"这条路堵上——这是有意的，避免误发。
+- **并非所有用户都从 git 装**：本机开发仍走 `install.ps1`（`link:` 热更新）。
+  **两套路径共存是长期维护成本**，必须把"适用范围"写清楚（已写入 BOOTSTRAP §1.1）。
+
+**已否决的替代方案**：
+
+| 方案 | 为何否决 |
+|---|---|
+| 发布到 npm（去掉 `private`） | 要处理 scope、版本发布流程、撤销记录；当前收益小（Discover 不是官方唯一入口） |
+| 拆成独立仓库（一插件一仓） | 会丢掉 `install.ps1`/`plugpush.ps1`/`list.json` 的本机多插件协同；monorepo 的 `#path:` 已被验证可行 |
+| 只靠 README 手装（`.tgz`） | 用户要自己解压放目录；无法随 DSH 的 `plugin add` 生态演进 |
+| 等"官方商店开放申请" | 不存在这个机制（源码级确认），等下去等于不推广 |
+
+**验收（v0.4.0）**：`node --check` 两文件通过；`tools/render-check.mjs` 全绿；
+`tools/smoke-route.mjs` `level=ok`；git 子目录安装实测成功；
+awesome 条目按对方 `validateEntries()` + `slugFor()` 逐条自检无 problem。

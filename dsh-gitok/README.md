@@ -105,6 +105,8 @@ Windows 的 git-credential-manager.exe（经 /mnt/c/... 由 interop 调用），
 - [4. 插件设计](#4-插件设计)
 - [5. 安全模型](#5-安全模型)
 - [6. 安装与开发](#6-安装与开发) → 完整命令见 [BOOTSTRAP.md](./BOOTSTRAP.md)
+  - [6.6 在另一台新 DSH 上安装（公开仓库路线）](#66-在另一台新-dsh-上安装公开仓库路线)
+  - [6.7 让这套认证在其他 Vibe Coding Agent 里生效](#67-让这套认证在其他-vibe-coding-agent-里生效)
 - [7. 待办与已知限制](#7-待办与已知限制)
 - [8. 踩坑记录](#8-踩坑记录)
 - [9. 换工作区继续开发](#9-换工作区继续开发交接清单)
@@ -441,10 +443,159 @@ $node = "$env:USERPROFILE\AppData\Local\Programs\DeepSeek Harness\resources\runt
 2. **加/改 `dsh.client` 后只重启不够** —— 必须先 `-Force` 重装。
 3. **`gitok_*` 不是命令** —— 在 PowerShell 里敲会报「无法识别为 cmdlet」，它只能由 AI 会话调用。
 
-> 别用 `dsh plugin add` —— 自研插件不在 npm，会去 registry 找然后 404。
+> **`dsh plugin add` 不是不能用，是分情况**（旧版这里写「一律别用」，只对当时的私有仓库成立）：
+> - 本机开发、代码还没 push、或要用 `link:` 热更新 → 用 `install.ps1`（**本机日常就是这个**）。
+> - 别人装机、代码已在公开仓库 → `dsh plugin add` 才是正道，见下面的 §6.6。
+> - 敲 `dsh plugin add dsh-gitok`（只有包名、没有仓库地址）会去 npm registry 找然后 404 —— 这条仍然成立。
 
 完整的开发循环、三层验证脚本、报错对照表 → `BOOTSTRAP.md`。
+
 ---
+
+## 6.6 在**另一台新 DSH** 上安装（公开仓库路线）
+
+上面 §6.2 的 `install.ps1` 只在本机（`C:\dsh\dshplug` 存在 + `list.json` 存在）成立。
+换一台机器、或者给别人的 DSH 装，走下面这条路。
+
+### 一行命令
+
+```powershell
+dsh plugin --profile desktop add github:mengfanchun2017/dshplug#path:/dsh-gitok
+```
+
+- `--profile desktop` 是本机 profile 名；CLI 用户一般用 `--profile web`，按自己的改。
+- `#path:/dsh-gitok` **不能省**：本仓库是 monorepo，`dsh-gitok` 在子目录里，
+  不带 `path:` 就指向仓库根，而根 `package.json` 不是插件（没有 `dsh.bundle`）。
+- 装完**完全退出 DSH 再打开**（宿主半必须重启才加载）。
+
+先确认版本满足：`dsh --version`。本插件要求 `engines.dsh: >=0.2.0-rc.1 <0.4.0-0`。
+
+### 为什么 git 路线在这里是安全的（三个前提都满足）
+
+git 安装取的是**源码，不是构建产物**，所以一般需要 `prepare` 脚本 + 用户授权 `allowBuilds`。
+本插件**不需要**，因为：
+
+| 前提 | 本插件情况 |
+|---|---|
+| 无需构建 | 纯 ESM JavaScript，`lib/index.js` / `lib/client.js` 就是最终产物，没有 tsc/rollup 环节 |
+| 无 `prepare` / `postinstall` | 所以不会触发 pnpm 的「脚本被阻止」拦截，也不需要往 `pnpm-workspace.yaml` 加 `allowBuilds` |
+| 无运行时依赖 | `dependencies` / `peerDependencies` 都是空，装完不会有依赖树要装 |
+
+实测：从 git 装下来拿到 15 个文件（`lib/`、`locale/`、`cordis.patch.yml`、`icon.svg`、三份文档、`tools/`），
+`files` 白名单生效，`dsh.bundle.patch` 在，DSH 自己的 `evaluatePluginCompatibility()` 返回「无未满足要求」。
+
+### 装完怎么验
+
+```powershell
+# 1) 依赖真的进去了（应看到 dsh-gitok + github:...#path:/dsh-gitok）
+Get-Content "$env:USERPROFILE\.dsh\profiles\desktop\package.json" | Select-String dsh-gitok
+
+# 2) 包内容完整（应列出 lib/index.js、lib/client.js、cordis.patch.yml）
+Get-ChildItem "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-gitok" -Recurse -File | Select-Object -Expand Name
+
+# 3) 重启后在会话里跑（工具由 AI 调用，不是在终端敲）
+gitok_doctor
+```
+
+界面入口：**设置 → Mgitok**。如果工具能用、但设置里没有这一栏，先看 [`BOOTSTRAP.md`](./BOOTSTRAP.md) §2.2
+（`exports` 缺 `./client`，或 `inject` 漏列 `locale`——两者都不报错）。
+
+### 内网 / 代理环境
+
+git 安装走 `git ls-remote` + `git clone`，**不读 pnpm 自己的 proxy 配置**，要单独给 git 配：
+
+```powershell
+git config --global http.proxy http://127.0.0.1:7897
+git config --global https.proxy http://127.0.0.1:7897
+```
+
+失败长相是 `ERR_PNPM_GIT_RESOLVE_FAILED` + `schannel: failed to receive handshake`，
+那是 TLS/网络问题，不是仓库问题（本机实测过：代理一断就是这个错）。
+
+### 卸载
+
+```powershell
+dsh plugin --profile desktop remove dsh-gitok
+```
+
+---
+
+## 6.7 让这套认证在**其他 Vibe Coding Agent** 里生效
+
+本节回答一个具体问题：**我在 DSH 里把 git 认证收敛好了，那 Claude Code / Codex / Cursor / Trae 里推代码怎么办？**
+
+一句话：**它们不需要装本插件，也不要装。** 插件只是「把凭据摆到位 + 能验收」的工具，
+真正生效的是**凭据放在哪**。凭据一旦进了 Windows 凭据管理器，任何能调 `git` 的 Agent 都自动受益。
+
+### 6.7.1 先分清两种 Agent
+
+| 类型 | 例子 | 能不能借用本插件的成果 |
+|---|---|---|
+| **跑在 Windows 上、能执行 Windows 程序** | Claude Code（原生 Windows 版）、Cursor、Trae、Codex CLI（Windows） | ✅ 能。它调 `git` → `git` 调 `git-credential-manager.exe` → 读 DPAPI。**零配置** |
+| **只能跑在 WSL / 容器里、或只能 bash** | 各种 Linux 沙箱里的 agent | ⚠️ 取决于 WSL interop（见 6.7.2）。纯 bash、不能 exec Windows 二进制的环境 **借不到**，这是硬边界 |
+
+**关键认知**：DPAPI 密文只能被「同一台机器的同一个 Windows 用户」解开。所以只要进程最终落在
+Windows 侧，就自动能用；一旦跑进 WSL 而且不能回跳，就必须靠 interop 去借。
+
+### 6.7.2 依赖链（按顺序，缺一环就断）
+
+Claude Code 这类在 WSL 里跑的 agent，要走通需要 **5 个前提依次成立**：
+
+**① Windows 侧有 GCM**
+```powershell
+git-credential-manager --version    # 期望 2.9.x
+```
+没有就装 Git for Windows（自带）或单独装 GCM。
+
+**② WSL interop 是开的**
+```bash
+cat /proc/sys/fs/binfmt_misc/WSLInterop    # 期望 enabled
+```
+没有就 `[wsl2]` 里加 `interop.enabled = true` 后 `wsl --shutdown`。
+
+**③ WSL 里的 git 把 helper 指向 **Windows 的** exe**（不是 WSL 里的同名程序）
+```bash
+git config --global credential.helper '/mnt/c/Program Files/Git/mingw64/bin/git-credential-manager.exe'
+```
+路径按本机实际改（MinGit 版在 `ucrt64\bin\`）。**GitHub 和 gist 是两个 URL，都要配**：
+```bash
+git config --global credential.'https://github.com'.helper '<上面同一个路径>'
+git config --global credential.'https://gist.github.com'.helper '<上面同一个路径>'
+```
+
+**④ WSL 里能连到代理**
+WSL 里的 `127.0.0.1` **不是** Windows 的 `127.0.0.1`。要么让 WSL 走 NAT 网关，要么把代理监听
+`0.0.0.0`，要么直接用 Windows 主机 IP。详见 [`docs/WSL-GIT-AUTH.md`](./docs/WSL-GIT-AUTH.md) 与
+下面 §8.6。
+
+**⑤ 验收通过后才删明文 PAT**
+**顺序不能反。** 先在 WSL 里跑通一次 `git ls-remote`，确认走的是 GCM 而不是残留 PAT，再
+`gh auth logout`。删早了会让 agent 直接失去推送能力。
+
+```bash
+# 验收：能列出 ref 且 GCM 有弹窗/无报错，才算通
+git ls-remote https://github.com/mengfanchun2017/dshplug.git HEAD
+```
+
+### 6.7.3 各 Agent 的具体做法
+
+| Agent | 做法 | 注意 |
+|---|---|---|
+| **Claude Code（Windows 原生版）** | 什么都不做 | 它继承 Windows 用户的凭据库 |
+| **Claude Code（WSL 内）** | 按上面 5 步配好 WSL 的 helper | 别配 WSL 里自己装的 GCM，那读不到宿主 DPAPI |
+| **Cursor / Trae** | 什么都不做 | 它们是 Windows GUI 进程，git 操作落 Windows 侧 |
+| **Codex CLI（Windows）** | 什么都不做 | 同上 |
+| **Codex CLI / 其他（容器里）** | 需要把凭据**显式注入**容器（如挂载或 env），DPAPI 借不到 | 这是架构边界，不是配置问题 |
+
+### 6.7.4 三条最容易踩的
+
+1. **不要在 WSL 里各装一份 GCM**。装了也不会读宿主凭据库，反而让 helper 指向错误目标，症状是「WSL 里一直在弹登录」。
+2. **`credential.helper` 多次写入是叠加，不是覆盖**。写错了要先删旧值（`git config --global --unset-all`），
+   否则旧 helper 还在链上，表现为「改了没生效」。详见 §8.1。
+3. **本插件不写任何凭据**。它只检查/触发登录/验收；明文永远只经 GCM，插件本身不接收、不存、不打印 token。
+
+---
+
 
 ## 7. 待办与已知限制
 
@@ -1094,7 +1245,7 @@ cd C:\dsh\dshplug; & git pull --ff-only
 | Windows 凭据 | ✅ GCM `wincredman`，`git:https://github.com`，用户 `mengfanchun2017` |
 | WSL `claude` | ⏸ **未改动**，仍用 gh helper + 明文 PAT（按用户要求保持原样） |
 | WSL `u26claude4` | ⏸ **未改动**，仍有空口令 SSH 私钥（待后续处理） |
-| 本插件 | ✅ `status: active`，已装进 `desktop`（v0.3.10，link-junction） |
+| 本插件 | ✅ `status: active`，已装进 `desktop`（v0.4.0，link-junction） |
 | 设置面板 | ✅ 代码已完成（宿主路由 + 浏览器半）；需重启 DSH 后在界面上确认 |
 ---
 
@@ -1104,7 +1255,9 @@ cd C:\dsh\dshplug; & git pull --ff-only
 
 - **README.md**（本文件）—— 现在怎么用
 - [`BOOTSTRAP.md`](./BOOTSTRAP.md) —— 怎么做（安装/验证/排错/迁移）
-- [`ADR.md`](./ADR.md) —— 为什么（七条决策 + 反面代价 + 已否决方案）
+- [`ADR.md`](./ADR.md) —— 为什么（十五条决策 + 反面代价 + 已否决方案；ADR-015 讲分发与推广选型）
+- [`docs/awesome-dsh-plugin-PR-guide.md`](docs/awesome-dsh-plugin-PR-guide.md) —— **发布与推广**：怎么把本插件收录进社区索引、在哪看审核结果、还要不要去别处申请
+- [`docs/awesome-dsh-plugin-entry.yml`](docs/awesome-dsh-plugin-entry.yml) —— 要提交的那个索引条目本身（已按对方校验器逐条验过）
 - [`docs/git-auth-audit-2026-11-12.md`](docs/git-auth-audit-2026-11-12.md) —— 原始盘点报告
 - [`docs/WSL-GIT-AUTH.md`](docs/WSL-GIT-AUTH.md) —— **WSL 里怎么让 git 用上 Windows 凭据**：手工步骤 + 可直接粘给 Vibe Coding Agent 自动配置的指令
 

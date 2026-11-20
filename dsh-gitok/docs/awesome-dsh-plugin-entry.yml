@@ -1,0 +1,6 @@
+url: https://github.com/mengfanchun2017/dshplug/tree/master/dsh-gitok
+name: mengfanchun2017/dshplug#dsh-gitok
+category: security
+description:
+  en: 'Git credential management for DSH: it inspects, logs in, verifies, lists and revokes git credentials, then consolidates them into the Windows Credential Manager (DPAPI-encrypted, unusable off the machine) so WSL borrows them over interop instead of storing a plaintext token. Nine gitok_* tools plus a settings panel with a four-state status model (ok/warn/error/unknown), six continuous monitors, and a five-step dependency chain for WSL interop. Pure ESM, no build step and no runtime dependencies.'
+  zh: 'DSH 的 git 认证一站式管理：检查 / 登录 / 验证 / 列出 / 撤销 git 凭据，把凭据统一收敛到 Windows 凭据管理器（DPAPI 加密、离开本机不可用），WSL 通过 interop 借用而不落盘明文 token。9 个 gitok_* 工具 + 一个设置面板，含四态状态模型（ok/warn/error/unknown）、六项持续监控、以及 WSL interop 的五步依赖链。纯 ESM，无构建步骤、无运行时依赖。'

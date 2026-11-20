@@ -59,7 +59,48 @@
 不加 `-Force` 时，脚本看到已是 `link-junction` 就认为「无需操作」，**不会更新元数据**。
 加了 `-Force` 会先 remove 再 add，所以顺序是「先重装、再重启」，不要反过来。
 
----
+### 1.1 上面那套的适用范围（先说清楚，免得搬走就失效）
+
+`install.ps1` 依赖三样**只在本机成立**的东西：
+
+1. 仓库在 `C:\dsh\dshplug`（里面有 `list.json`）；
+2. `link:` 会把**绝对路径**写进 profile 的 `package.json`；
+3. 本机是 Windows + 桌面版 DSH。
+
+换机器、或给别人的 DSH 装，不走 `install.ps1`，走下面 §1.2。
+
+### 1.2 新的 DSH 上安装（公开仓库路线，推荐给所有人）
+
+```powershell
+dsh plugin --profile desktop add github:mengfanchun2017/dshplug#path:/dsh-gitok
+```
+
+三个常见错误改法：
+
+| 症状 | 原因 | 改法 |
+|---|---|---|
+| `ERR_PNPM_ADDING_TO_ROOT` / 装到了奇怪位置 | 没给 `--profile` | 补上 `--profile desktop`（或 `web`） |
+| `没有 dsh.bundle` / 工具能跑但界面没有 | 漏了 `#path:` | 本仓库是 monorepo，必须 `#path:/dsh-gitok` |
+| `ERR_PNPM_GIT_RESOLVE_FAILED` + `schannel` / `TLS connect error` | git 没走代理（pnpm 的代理配置对 git 无效） | `git config --global http.proxy http://127.0.0.1:7897` 与 `https.proxy` 同值 |
+
+验证装对了没有：
+
+```powershell
+# A) 依赖声明里有一行 github:...#path:/dsh-gitok
+Get-Content "$env:USERPROFILE\.dsh\profiles\desktop\package.json" | Select-String dsh-gitok
+
+# B) 装下来的是 15 个文件（含 lib/、locale/、cordis.patch.yml、icon.svg、三份文档、tools/）
+Get-ChildItem "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-gitok" -Recurse -File |
+  Select-Object -Expand Name | Sort-Object
+```
+
+**为什么不需要 `prepare` / `allowBuilds`**：git 安装取源码而不是构建产物，一般确实需要构建步骤。
+本插件是纯 ESM JavaScript，没有构建、没有 `postinstall`、没有运行时依赖，所以 pnpm 不会拦脚本，
+用户也不用改 `pnpm-workspace.yaml`。实测装下来 15 个文件、`dsh.bundle.patch` 在位、
+DSH 的 `evaluatePluginCompatibility()` 返回「无未满足要求」。
+
+**什么时候仍然用 `install.ps1`**：在本机开发（要 `link:` 热更新、改完不重装）时。
+两条路线共存，不冲突。
 
 ## 2. 验证（三层，逐层加深）
 
@@ -785,6 +826,50 @@ git config --global --get-all 'credential.https://github.com.helper'
 
 > 上面这份说明是**自包含**的：Claude 不需要看本仓库任何文件就能执行。
 > 它刻意不包含任何 token，只告诉他去哪里借。
+
+#### 10.4.1 五个依赖前提（缺一个就会卡住，先逐项确认）
+
+给 agent 的那段话假定环境已经具备这些。实际排查时**按顺序验**，不要跳：
+
+| # | 前提 | 怎么验（在 WSL 里跑） | 不成立的表现 |
+|---|---|---|---|
+| ① | Windows 侧装了 GCM | `"/mnt/c/Program Files/MinGit/ucrt64/bin/git-credential-manager.exe" --version` | 报 No such file → agent 根本无法借到凭据 |
+| ② | WSL interop 开着 | `cat /proc/sys/fs/binfmt_misc/WSLInterop` = `enabled` | 执行 Windows exe 报 `Exec format error` |
+| ③ | helper 指向 **Windows 的** exe | `git config --get-all credential.https://github.com.helper` | 指向 `/usr/bin/git-credential-manager` → 读不到宿主 DPAPI |
+| ④ | WSL 能连代理 | `curl -x <代理> -sI https://github.com` | `ls-remote` 超时 / TLS 错误（§8.6） |
+| ⑤ | 只在 ④ 成功后删明文 | `ls ~/.git-credentials ~/.config/gh/hosts.yml` | 删早了 agent 直接失去推送能力，而且回不去 |
+
+**②为什么是硬边界**：DPAPI 密文只能用「同一台机器的同一个 Windows 用户」解开。
+WSL 里的 git 不靠 interop 就无法执行 Windows 二进制，也就永远读不到那份密文 ——
+这是架构决定的，不是配置问题。纯 bash 容器同理（容器里没有你的 DPAPI 主密钥）。
+
+#### 10.4.2 上面那段话漏了一个坑：gist 是另一个 URL
+
+`credential.https://github.com.helper` **不覆盖** `gist.github.com`。
+只配前者时，推普通仓库没问题，一旦涉及 gist 就回退到没认证。两个都要配：
+
+```bash
+git config --global --add credential.https://github.com.helper '<GCM 路径>'
+git config --global --add credential.https://gist.github.com.helper '<同一个路径>'
+```
+
+检查时两个都查：
+
+```bash
+git config --get-all credential.https://github.com.helper
+git config --get-all credential.https://gist.github.com.helper
+```
+
+#### 10.4.3 哪些 agent 根本不需要这套
+
+| agent 跑在哪 | 需要做什么 |
+|---|---|
+| Windows 原生（Claude Code / Cursor / Trae / Codex CLI 的 Windows 版） | **什么都不用做**。它们调 `git` → `git` 调 GCM → 读 DPAPI，链路天然通 |
+| WSL 里 | 按 10.4.1 的 ①→⑤ 配 |
+| 容器 / 远程 Linux | 借不到，必须**显式注入**凭据 |
+
+所以：**本插件不需要装到那些 agent 上**，也不应该装。它只是把凭据摆到位并能验收的工具；
+真正跨 agent 生效的是「凭据在 Windows 凭据管理器里」这个事实。
 
 ---
 
