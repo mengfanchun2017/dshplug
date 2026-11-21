@@ -36,7 +36,7 @@ export class CliMissingError extends Error {
   constructor(exePath) {
     super(
       `找不到 lark-cli.exe：${exePath}\n` +
-        '修复：在插件目录跑一次  .\\scripts\\fetch-lark-cli.ps1  （官方 SHA256 校验后自动补齐）',
+        '修复：调工具 lark_install（action="install"），或设置面板「lark-cli 本体 → 安装」（镜像下载 + SHA256 校验）',
     )
     this.name = 'CliMissingError'
   }
@@ -206,7 +206,9 @@ export class LarkService {
       try {
         child = spawn(exe, args, {
           env,
-          cwd: ap.dir,
+          // cwd 默认是账户配置目录（CLI 需要它找 config.json）；
+          // 只有 auth qrcode 这种“输出路径不能在配置目录里”的命令才需要换。
+          cwd: opts.cwd || ap.dir,
           windowsHide: true,
           stdio: ['ignore', outFd, errFd],
         })
@@ -273,7 +275,8 @@ export class LarkService {
       return { ok: false, exitCode: -1, kind: 'spawn-failed', error: { type: 'spawn', message: String(result.spawnError.message || result.spawnError) }, stdout, stderr: stderrClean, meta }
     }
     if (result.timeout) {
-      return { ok: false, exitCode: -1, kind: 'timeout', error: { type: 'timeout', message: `超过 ${timeoutMs}ms 未完成（可用 timeoutMs 调整；分页用 --page-limit）` }, stdout, stderr: stderrClean, meta }
+      // timedOut 单独给：调用方（loginFinish）靠它区分“超时等确认”与“真的报错”
+      return { ok: false, timedOut: true, exitCode: -1, kind: 'timeout', error: { type: 'timeout', message: `超过 ${timeoutMs}ms 未完成（可用 timeoutMs 调整；分页用 --page-limit）` }, stdout, stderr: stderrClean, meta }
     }
 
     const parsed = parseCliOutput({ stdout, stderr: stderrClean, exitCode: result.exitCode })
@@ -282,19 +285,27 @@ export class LarkService {
 
   // -- 常用查询 -----------------------------------------------------------
 
-  /** auth status：brief 模式只留关键字段，full 模式给全部。带 TTL 缓存。 */
-  async status({ account, detail = 'brief', refresh = false } = {}) {
+  /**
+   * auth status：brief 模式只留关键字段，full 模式给全部。带 TTL 缓存。
+   *
+   * `verify=true` 走 `--verify`（一次网络往返，实测 ~1.1s）：这是**唯一**能拿到
+   * “token 到底还有没有效”的方式，也是唯一会返回 bot openId / appName 的模式。
+   * 默认不开（每个账户多 1 秒），由调用方显式要。
+   */
+  async status({ account, detail = 'brief', refresh = false, verify = false } = {}) {
     const acc = account ? this.resolveAccount(account) : this.resolveAccount()
     if (!acc) return { ok: false, error: '尚未配置任何账户', accounts: [] }
     const key = acc.id
     const c = this.cache.status.get(key)
     const now = Date.now()
     const ttl = Number(this.statusTtlMs)
-    const useCache = !refresh && c && ttl > 0 && now - c.at < ttl
+    // verify 必须绕缓存：否则“上次验过且有效”会把现在已经过期的结论当成新鲜的。
+    const useCache = !refresh && !verify && c && ttl > 0 && now - c.at < ttl
     if (useCache) {
       return this.composeStatus(c.value, detail, true, now - c.at)
     }
-    const r = await this.run(['auth', 'status'], { accountId: acc.id, timeoutMs: 30000 })
+    const args = verify ? ['auth', 'status', '--json', '--verify'] : ['auth', 'status']
+    const r = await this.run(args, { accountId: acc.id, timeoutMs: verify ? 45000 : 30000 })
     const identities = r.json?.identities || {}
     const value = {
       ok: r.ok,
@@ -305,7 +316,15 @@ export class LarkService {
       dpopMode: r.json?.dpopMode,
       credentialSource: r.json?.credentialSource,
       identities: {
-        bot: { available: !!identities.bot?.available, status: identities.bot?.status, message: identities.bot?.message },
+        bot: {
+          available: !!identities.bot?.available,
+          status: identities.bot?.status,
+          message: identities.bot?.message,
+          // --verify 才有：真实 open_id 与 app 名（不验就是 undefined，不能当“没有”）
+          verified: identities.bot?.verified,
+          openId: identities.bot?.openId,
+          appName: identities.bot?.appName,
+        },
         user: {
           available: !!identities.user?.available,
           status: identities.user?.status,
@@ -488,6 +507,30 @@ export class LarkService {
       scopes: scope || domains || 'recommend',
     }
     fs.writeFileSync(pendingFile, JSON.stringify(pending, null, 2), { encoding: 'utf8', mode: 0o600 })
+    /*
+     * 清掉上一轮遗留的二维码目录。
+     * 工具路径（lark_login_start qrcode=true）不像 HTTP 路由那样“读完就删”，
+     * 每次授权都会在 temp 里留一个 lark-qr-*，反复发起就反复积。
+     * 旧码本来就扫不出（flow_id 已换），所以可以回收。
+     * 只删**过期**的（>15 分钟）：device_code 本身 10 分钟就废了，旧码扫不出来；
+     * 而不分新旧全删会和并发请求撞车 —— 另一个账户刚生成一张、还没被路由读完就被删。
+     */
+    try {
+      const now = Date.now()
+      for (const name of fs.readdirSync(os.tmpdir())) {
+        if (!name.startsWith('lark-qr-')) continue
+        const dir = path.join(os.tmpdir(), name)
+        try {
+          if (now - fs.statSync(dir).mtimeMs > 15 * 60 * 1000) {
+            fs.rmSync(dir, { recursive: true, force: true })
+          }
+        } catch {
+          /* 单个删不掉不影响其他 */
+        }
+      }
+    } catch {
+      /* 清不掉不影响授权 */
+    }
     return {
       account: acc.id,
       verificationUrl: j.verification_url,
@@ -500,7 +543,15 @@ export class LarkService {
   }
 
   /** 用已保存的 device_code 完成授权。 */
-  async loginFinish({ account, deviceCode } = {}) {
+  /*
+   * 设备流第二步：拿 device_code 换 token。
+   *
+   * 关键：`auth login --device-code` 是**长轮询** —— 用户还没在手机/浏览器上点确认时，
+   * 它不会立刻报错，而是挂在那里等。曾经用 180s，结果面板点一下「我已完成授权」就卡三分钟，
+   * 用户以为死了。所以默认只等 30s，超时就直接说「还没确认，请重新发起」。
+   * device_code 在 expires_in（通常 10 分钟）内仍然有效，被中途 kill 不影响后面兑换。
+   */
+  async loginFinish({ account, deviceCode, timeoutMs = 30000 } = {}) {
     const acc = this.resolveAccount(account)
     if (!acc) throw new Error('尚未配置账户')
     const ap = accountPaths(this.dataDir, acc.id)
@@ -512,7 +563,10 @@ export class LarkService {
         '没有可用的 device_code：先调 lark_login_start 拿授权链接，或在用户确认授权后用 deviceCode 参数传入。',
       )
     }
-    const r = await this.run(['auth', 'login', '--device-code', code], { accountId: acc.id, timeoutMs: 180000 })
+    const r = await this.run(['auth', 'login', '--device-code', code], {
+      accountId: acc.id,
+      timeoutMs: Number(timeoutMs) > 0 ? Number(timeoutMs) : 30000,
+    })
     if (r.ok) {
       try {
         fs.unlinkSync(pendingFile)
@@ -525,7 +579,12 @@ export class LarkService {
       ok: r.ok,
       account: acc.id,
       identity: r.identity,
-      message: r.ok ? '授权完成，user 身份应已可用' : r.error?.message || r.stderr,
+      message: r.ok
+        ? '授权完成，user 身份应已可用'
+        : // 长轮询超时 = 用户还没点确认，这不是错误，是“还没好”
+          r.timedOut
+          ? '还没检测到你确认授权：请先在手机飞书/浏览器里点「同意」，再点一次「我已完成授权」。'
+          : r.error?.message || r.stderr,
       hint: r.error?.hint,
     }
   }
@@ -545,10 +604,37 @@ export class LarkService {
       const r = await this.run(['auth', 'qrcode', String(target), '--ascii'], { accountId: acc.id, timeoutMs: 30000 })
       return { ascii: true, text: r.raw || r.stderr }
     }
-    const out = path.join(ap.dir, 'login-qr.png')
-    const r = await this.run(['auth', 'qrcode', String(target), '--output', out], { accountId: acc.id, timeoutMs: 30000 })
-    if (!r.ok) throw new Error(`生成二维码失败：${r.error?.message || r.stderr || '未知原因'}`)
-    return { ascii: false, file: out, exists: fs.existsSync(out) }
+    /*
+     * 输出路径的坑（v0.2.0 实测）：CLI 对 --output 有两条硬规矩——
+     *   ① 必须在 cwd / 账户 temp / 账户 files 之内；
+     *   ② **不能落在 LARKSUITE_CLI_CONFIG_DIR 里**（配置目录是受保护禁区）。
+     * 而本插件的 cwd 恰恰就是那个配置目录，所以原先写到 ap.dir/login-qr.png
+     * **必定失败**（这条链路以前从来没被真正跑通过）。
+     * 修法：cwd 改成系统 temp 的独立子目录，输出也写在同一个目录里。
+     */
+    const saveDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-qr-'))
+    const out = path.join(saveDir, 'login-qr.png')
+    try {
+      const r = await this.run(['auth', 'qrcode', String(target), '--output', out], {
+        accountId: acc.id,
+        timeoutMs: 30000,
+        cwd: saveDir,
+      })
+      if (!r.ok) {
+        const msg = r.error?.message || r.stderr || '未知原因'
+        throw new Error(`生成二维码失败：${msg}`)
+      }
+      if (!fs.existsSync(out)) throw new Error('二维码命令返回成功，但文件不存在')
+      return { ascii: false, file: out, exists: true }
+    } catch (e) {
+      // 失败时把临时目录收掉，不留垃圾（成功则留给 HTTP 路由读，读完由调用方清）
+      try {
+        fs.rmSync(saveDir, { recursive: true, force: true })
+      } catch {
+        /* ignore */
+      }
+      throw e
+    }
   }
 
   /** 账户是否已授权 user 身份（轻量：只读缓存/一次 status）。 */
@@ -557,8 +643,15 @@ export class LarkService {
     return { bot: !!st.identities?.bot?.available, user: !!st.identities?.user?.available }
   }
 
-  /** 给状态面板用的完整快照（含每个账户的位置与授权状态）。 */
-  async snapshot({ refresh = false } = {}) {
+  /**
+   * 给状态面板用的完整快照。
+   *
+   * v0.2.0 起每个账户除了「bot/user 可用」还带上**可展示的身份信息**
+   * （应用名/头像/描述、用户姓名/邮箱）。这些是慢信息（每个账户 2-3 次 API），
+   * 所以很关键：**默认不拉**，只有面板传 withIdentity=1 才拉，且失败不影响行。
+   * 理由：面板首帧必须快，用户点「详情」时才愿意等 1 秒。
+   */
+  async snapshot({ refresh = false, withIdentity = false } = {}) {
     const accounts = this.store.read()
     const defaultId = accounts.default || accounts.accounts[0]?.id || ''
     const rows = []
@@ -571,7 +664,7 @@ export class LarkService {
       } catch (e) {
         err = String(e.message || e)
       }
-      rows.push({
+      const row = {
         id: a.id,
         label: a.label,
         description: a.description,
@@ -585,13 +678,60 @@ export class LarkService {
         user: st?.identities?.user?.available ?? false,
         identityStatus: st?.identities ?? null,
         error: err || (st && st.ok === false ? st.error?.message : null),
-      })
+        identity: null,
+      }
+      if (withIdentity && row.bot) {
+        try {
+          // 动态 import：identity.js 依赖 scopes.js，避免 loader 阶段的循环依赖
+          const { describeAccount } = await import('./identity.js')
+          row.identity = await describeAccount({ service: this, account: a, status: st, withApp: true })
+        } catch (e) {
+          row.identity = { error: String(e.message || e) }
+        }
+      }
+      rows.push(row)
     }
     return {
       dataDir: this.dataDir,
       accounts: rows,
       defaultId,
+      binary: { path: this.exePath(), exists: this.hasBinary(), version: this.versionCache || '' },
     }
+  }
+
+  // -- 二进制 / 更新 -------------------------------------------------------
+
+  /** 版本体检（本机 vs 镜像最新）。网络不通只报 reachable=false。 */
+  async checkUpdate({ timeoutMs = 20000 } = {}) {
+    const { updateStatus } = await import('./install.js')
+    const st = await updateStatus({ exePath: this.exePath(), timeoutMs })
+    if (st.installed && st.installed !== 'unknown') this.versionCache = st.installed
+    return st
+  }
+
+  /**
+   * 安装/升级二进制。安装后清掉版本缓存与 schema 缓存
+   * （新版本可能带新命令，旧 schema 索引必须作废）。
+   */
+  async installCli({ version = '', force = false, onLog = null } = {}) {
+    const { installBinary } = await import('./install.js')
+    const r = await installBinary({
+      targetExe: this.exePath(),
+      stagingDir: path.join(this.dataDir, 'staging'),
+      version,
+      force,
+      log: onLog || (() => {}),
+    })
+    if (r.ok) {
+      this.versionCache = ''
+      this.cache.schema = { at: 0, list: null }
+      try {
+        fs.rmSync(path.join(this.dataDir, 'cache', 'schema.json'), { force: true })
+      } catch {
+        /* 删不掉不影响功能 */
+      }
+    }
+    return r
   }
 }
 

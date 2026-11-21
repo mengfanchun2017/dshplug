@@ -451,6 +451,51 @@ const partialDoc = { ok: true, at: Date.now(), counts: {}, summary: {},
 const d4 = renderPanel([partialDoc, '', '', {}]);
 ok('体检缺 candidates/summary 时不崩', !d4.threw, d4.threw && d4.threw.message);
 
+/* ⑥ 本机真实态：blocking 全部 safe=false → needs-human。
+   这不是造出来的极端情况，而是这台机器现在的真实现状（7 条 blocking、rescue=[]）。
+   必须验两件事：结论说「要你定」而不是「能修」，且**不给一键按钮**。
+   给了一键按钮就是欺骗：点了什么也不会变（apply 会返回「没有 rescue 项」）。 */
+const humanDoc = JSON.parse(JSON.stringify(doctorFixture));
+humanDoc.summary = { error: 0, warn: 3, info: 0, fixable: 0, needsChoice: 3, total: 3,
+  blocking: 3, advisory: 0, rescue: 0, misc: 0, needsHuman: 2, health: 'needs-human' };
+humanDoc.rescue = { needed: false, ids: [], humanCodes: ['orphan-group-relocatable', 'orphan-group-recoverable'] };
+humanDoc.misc = { ids: [], count: 0 };
+humanDoc.findings = doctorFixture.findings.filter(f => f.impact === 'blocking').map(f =>
+  ({ ...f, impact: 'blocking', fixable: false }));
+humanDoc.actions = doctorFixture.actions.filter(a => !a.safe).map(a => ({ ...a, safe: false }));
+const d5 = renderPanel([humanDoc, '', '', {}]);
+ok('needs-human 时说「要你定」而不是「能修」',
+  !d5.threw && d5.text.indexOf('要你定') >= 0 && d5.text.indexOf('● 能修') < 0,
+  '现在这台机器就是这个状态，说错了比不报更糟');
+ok('needs-human 时不给一键修复按钮（点也不会有效果）',
+  !d5.threw && d5.text.indexOf('一键修复') < 0,
+  '没有 rescue 项却给按钮 = 欺骗用户');
+ok('needs-human 时逐条列出待定项',
+  !d5.threw && d5.text.indexOf('可改指到一个现存工作区') >= 0 && d5.text.indexOf('1 条登记指向已删除的会话') >= 0);
+
+/* ⑦ 升级中间态：新 client + 旧 index（findings 里没有 impact）。
+   这时 blockingList 必为空 → 修复按钮不会出现。所以若声称「能救」就是骗人：
+   用户点了发现没按钮，或者有按钮但 apply 回「没有 rescue 项」。
+   真扫到过：旧的 healthOf 回退分支写的就是 warn: '● 能修'。 */
+const legacyDoc = { ok: true, at: Date.now(), counts: { groups: 2, sessionDirs: 3 },
+  summary: { error: 0, warn: 2, info: 0, total: 2 },
+  findings: [
+    { code: 'dangling-ref', severity: 'warn', title: '旧版数据', detail: 'D', actionId: 'drop:x' },
+    { code: 'empty-group', severity: 'info', title: '旧版数据 2', detail: 'D2', actionId: 'rmdir:y' },
+  ],
+  actions: [
+    { id: 'drop:x', kind: 'drop-ref', safe: true, label: '清引用', payload: {} },
+    { id: 'rmdir:y', kind: 'rmdir', safe: true, label: '删空组', payload: {} },
+  ] };
+const d6 = renderPanel([legacyDoc, '', '', {}]);
+ok('旧版宿主半（无 impact）不得声称「能修」',
+  !d6.threw && d6.text.indexOf('● 能修') < 0,
+  'blockingList 必为空，说能修就是承诺了一个不会出现的按钮');
+ok('旧版宿主半时告诉用户重启对齐版本',
+  !d6.threw && /两半版本对齐/.test(d6.text),
+  '「两半版本对齐」只在 hint 里，去掉 hint 渲染这条必红；' +
+  '别用「版本还不会区分」— 它在始终渲染的 line 里，瞄不到 hint');
+
 console.log('\nE1. 打开侧边栏不强制刷新（20 分钟缓存 + 上次检查时间）');
 ok('有跨挂载缓存（模块级，卸载不丢）', /const PANEL_CACHE = \{/.test(src0),
   '缓存必须在组件外，否则卸载即丢，下次打开照样要等');

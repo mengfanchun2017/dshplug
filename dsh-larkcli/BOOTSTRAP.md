@@ -22,7 +22,7 @@
 | 改了什么 | 生效方式 | 耗时 |
 |---|---|---|
 | `lib/client.js`（浏览器半 / 面板） | **刷新页面** | 1s |
-| `lib/index.js` / `lib/core.js` / `lib/service.js`（宿主半） | **完全退出 DSH 再打开** | 20s |
+| `lib/index.js` / `lib/core.js` / `lib/service.js` / `lib/install.js` / `lib/scopes.js` / `lib/identity.js` / `lib/resolver.js`（宿主半） | **完全退出 DSH 再打开** | 20s |
 | `cordis.patch.yml` 的 `config:` | **完全退出 DSH 再打开**（行激活时读） | 20s |
 | `package.json` 的 `dsh.client` / `files` | **重装**（`install.ps1 -Force`）+ 重启 | 1min |
 | `lark-cli-win\lark-cli.exe` 升级 | **重启**（进程按路径现起，但版本缓存要重载） | 20s |
@@ -41,19 +41,32 @@
 
 ```powershell
 # ① 确认清单里有它、status=active、bundle 合格
-& C:\dsh\dshplug\install.ps1 -Check
+& C:\dsh\dw-plugin\install.ps1 -Check
 
 # ② 装（建 link: Junction）
-& C:\dsh\dshplug\install.ps1 -Only dsh-larkcli
+& C:\dsh\dw-plugin\install.ps1 -Only dsh-larkcli
 
-# ③ 补齐二进制（不入 git，50 MB，带官方 SHA256 校验）
-cd C:\dsh\dshplug\dsh-larkcli
-.\scripts\fetch-lark-cli.ps1
-
+# ③ 二进制：不用手工下载了。首次启动后在会话里：
+#    lark_install action="install"
+#    或设置面板 → Mlarkcli → lark-cli 本体 →「安装」
+#    （从 registry.npmmirror.com 下载 + 比对官方 SHA256 + 原子替换；不经过 GitHub）
 # ④ 完全退出 DSH 再打开（首次加载新 bundle 必须重启）
 ```
 
-`-Check` 应该显示 `dsh-larkcli  v0.1.0  status=active  link-junction`。
+`-Check` 应该显示 `dsh-larkcli  v0.2.0  status=active  link-junction`。
+
+### 1.1 幂等：重复执行不会坏
+
+上面三步**全部可重入**，不需要先卸载、也不会叠出重复条目：
+
+| 重复执行 | 结果 |
+|---|---|
+| `-Check` 跑多次 | 纯只读，不写任何东西 |
+| `-Only` 跑多次 | 检到已有 link 就跳过；配置被改坏的会重建，不会叠第二条 |
+| `lark_install action="install"` | 已是最新就直说“已是最新”，不重下载；要强制重装传 `force` |
+
+所以「装坏了」的通用第一动作就是：**再跑一次 `-Only dsh-larkcli`，然后重启**。
+不用先想怎么卸干净 —— 没有半步卸载状态。
 
 ### 为什么不用 `dsh plugin add`
 
@@ -69,16 +82,20 @@ cd C:\dsh\dshplug\dsh-larkcli
 
 ```powershell
 $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
-cd C:\dsh\dshplug\dsh-larkcli
+cd C:\dsh\dw-plugin\dsh-larkcli
 
 & $node test/run.mjs      # 38 项：纯函数 + 数据层 + 失败态
 & $node test/client.mjs   # 浏览器半形态与 slot 注册
-& $node test/smoke.mjs    # 宿主半结构与 9 个工具是否齐全
+& $node test/smoke.mjs    # 宿主半结构 + 13 个工具 + 10 条路由都要齐全
 & $node test/tools.mjs    # 27 项：真实 CLI + 真实凭据跑每个工具
-& $node test/e2e.mjs      # 端到端：迁移旧凭据 → status/call/schema
+& $node test/v2.mjs       # 76 项：scopes / resolver / install + 故障回归
+& $node test/activate.mjs  # apply() 在 5 种 ctx 下都不崩（无 webServer / config 缺失 / 垃圾 config）
 ```
 
-全绿再往下。当前实测：**38 + 27 + client + smoke 全通过**。
+全绿再往下。当前实测：**38 + 27 + 76 + client + smoke + activate 全通过**。
+
+> `test/e2e.mjs` **不在上面**：它是人工诊断脚本（真实凭据跑一遍并打印原始输出，无断言），
+> 查“为什么调不通”时手动跑。别把它当回归测试。
 
 ### 2.2 宿主半能被加载（不启 DSH）
 
@@ -119,13 +136,20 @@ Invoke-WebRequest -Uri 'http://127.0.0.1:64594/plugins/larkcli/status' -UseBasic
 | 会话里没有 `lark_*` 工具 | bundle 没激活：没装 / 没重启 | `install.ps1 -Only dsh-larkcli` → **完全退出**重开 |
 | `-Check` 显示 `missing` | 只登记没安装 | 同上 |
 | `-Check` 显示 `orphan` | `dsh plugin remove` 留下的 Junction 残骸 | 跑 `install.ps1`（会先清残骸再装） |
-| 工具报「找不到 lark-cli.exe」 | 50 MB 二进制不入 git | `.\scripts\fetch-lark-cli.ps1` |
+| 工具报「找不到 lark-cli.exe」 | 50 MB 二进制不入 git | `lark_install action="install"`（或面板「安装」） |
+| 升到新版但 `--version` 没变 | 宿主半缓存了版本号 | 完全退出 DSH 重开 |
+| 面板显示「镜像不可达」 | npmmirror 不通 | 查代理 / 网络；GitHub 也不通时这是唯一源，没别的路 |
 | 工具报「还没有任何账户」 | 新机器首次，或旧凭据没导入 | `lark_account_upsert` → `lark_account_set_secret` |
 | `failed to read secret file` | **这是本次迁移踩的坑**：旧 `config.json` 写死了绝对路径，目录一搬就断 | 插件会按本机路径**重新生成** config.json，重启后会自愈；手改过的 config 删掉即可 |
 | bot ❌ | secret 错 / 应用未发布权限 | `lark_account_set_secret` 重写；去开放平台核对权限已发布 |
-| user ❌ | 还没授权，或 token 过期太久 | `lark_login_start` → 浏览器 → `lark_login_finish` |
+| user ❌ | 还没授权，或 token 过期太久 | `lark_login_start qrcode=true` → 点链接或扫码 → `lark_login_finish` |
+| 二维码显示不出来 / 生成二维码失败 | **配置目录是 CLI 的保护区**，`--output` 不能落在 `LARKSUITE_CLI_CONFIG_DIR` 里 | 插件已改用 `mkdtemp`（cwd 也跟着换）；若手改过请抄回这一模式 |
+| 面板说「token 存在（未验证）」 | 这是故意的不假装健康 | 点「验证 token」/ `lark_identity verify=true`（~1.1s/账户） |
+| 点「我已完成授权」后说「还没检测到你确认授权」 | `auth login --device-code` 是**长轮询**，没点确认就干等；插件只等 30s 就返回 | 先去手机/浏览器点「同意」，再点一次；device_code 在 10 分钟内仍有效，重复点不坏 |
+| 授权链接过期 / 扫码报错 | 每个 `login-start` 生成新 `flow_id`，旧码只能用一次 | 重新 `lark_login_start`（面板「授权 user 身份」）拿新链接 |
 | 面板「状态接口不可用」 | Host 半没加载 | 完全退出 DSH 重开（不是刷页面） |
 | 工具超时 | 大查询没分页 | `--page-limit` / `--page-size`，或 `timeoutMs` 加大 |
+| `lark_scopes` 说缺权限但开放平台看着已给 | 改完权限没发布 | 开放平台「创建版本并发布」 |
 | 结果被截断 | 默认 24000 字符上限 | 分页；或 `maxChars` 参数 / 配置调大 |
 | PowerShell 里敲 `lark_call` 不认 | 它是模型工具 | 正常，见 0.1 |
 
@@ -147,16 +171,16 @@ Windows 上每条命令的 stderr 都会出现：
 ## 4. 换机器（新 Windows，只装 DSH）
 
 ```
-1) clone 仓库到同一个绝对路径 C:\dsh\dshplug     # 路径必须一致（link: 写绝对路径）
-2) & C:\dsh\dshplug\install.ps1 -Only dsh-larkcli
-3) cd C:\dsh\dshplug\dsh-larkcli; .\scripts\fetch-lark-cli.ps1
-4) 完全退出 DSH 再打开
+1) clone 仓库到同一个绝对路径 C:\dsh\dw-plugin     # 路径必须一致（link: 写绝对路径）
+2) & C:\dsh\dw-plugin\install.ps1 -Only dsh-larkcli
+3) 完全退出 DSH 再打开
+4) 会话里 lark_install action="install"        # 下载 + SHA256 + 原子替换，不需要手敲 PowerShell
 5) 会话里 lark_doctor → 它会告诉你缺什么
 6) 重建账户：
    lark_account_upsert        id="work" ... appId="cli_xxx" description="..." tags=[...]
    lark_account_set_secret    account="work" appSecret="..."
+   lark_scopes profile="read" # 缺什么权限？（给预填好的申请链接）
    lark_login_start / _finish （要 user 身份时）
-```
 
 **凭据不会跟着仓库走**（数据目录在仓库外，且 `_native-config` 被 `.gitignore` 挡住），
 所以新机器必须重新填一次 secret —— 这正是设计意图：密钥不出机器。
@@ -165,15 +189,26 @@ Windows 上每条命令的 stderr 都会出现：
 
 ## 5. 升级二进制
 
-```powershell
-# 去 https://github.com/larksuite/cli/releases 查最新版，然后：
-cd C:\dsh\dshplug\dsh-larkcli
-Remove-Item lark-cli-win\lark-cli.exe            # 脚本见到已存在会跳过
-.\scripts\fetch-lark-cli.ps1 -Version 1.0.100 -Sha256 <官方 checksums.txt 里的哈希>
+**不用手敲命令**，三种方式等价（都走同一套 `lib/install.js`）：
+
+```
+lark_install action="check"     # 只查：本机 / 最新 / 镜像可达
+lark_install action="install"   # 真升级
 ```
 
-GitHub 直连在国内常超时，脚本用官方 npmmirror 镜像。
-**必须核对 SHA256**，脚本会拒绝不匹配的包。升级后重启 DSH（版本有缓存）。
+或设置面板 → Mlarkcli → `lark-cli 本体` →「检查更新」→「升级」。
+
+内部流程（读 `lib/install.js` 可核对）：
+
+1. `GET https://registry.npmmirror.com/-/binary/lark-cli/` 列版本 → 取最大
+2. 下载 `lark-cli-<ver>-windows-amd64.zip`（带跟随重定向；npmmirror 会 302）
+3. **必须**拿到官方 SHA256 才对；`checksumFor()` 返回空 → **直接拒绝**，不擦“可能没校验”的包
+4. 解压到 `lark-cli-win/staging/x-<ver>` → 探活 `--version` → 确认自报版本对
+5. 原子替换：旧 exe 重命名为 `.old-<ts>`，新 exe 就位，失败自动回滚
+6. 同步 `README.md` / `CHANGELOG.md` / `LICENSE`
+
+GitHub 直连在国内常超时（本机 `ECONNRESET` / `CRYPT_E_REVOCATION_OFFLINE`），
+所以**只用 npmmirror**。升级后重启 DSH（版本有缓存）。
 
 ---
 
@@ -181,10 +216,10 @@ GitHub 直连在国内常超时，脚本用官方 npmmirror 镜像。
 
 ```powershell
 # 看会提交什么（不提交）
-& C:\dsh\dshplug\plugpush.ps1 dsh-larkcli "看看会提交啥" -DryRun
+& C:\dsh\dw-plugin\plugpush.ps1 dsh-larkcli "看看会提交啥" -DryRun
 
 # 真正推
-& C:\dsh\dshplug\plugpush.ps1 dsh-larkcli "dsh-larkcli v0.1.0：9 工具 + 多账户 + 设置面板"
+& C:\dsh\dw-plugin\plugpush.ps1 dsh-larkcli "dsh-larkcli v0.1.0：9 工具 + 多账户 + 设置面板"
 ```
 
 仓库根 `.gitignore` 已挡住：`_native-config/`（明文 secret）、`*.exe`（50 MB 二进制）、
@@ -225,7 +260,7 @@ git check-ignore -v dsh-larkcli/test/run.mjs # exit 1 = 未被忽略，会正常
 ## 8. 手工兜底（插件坏了，只想用 CLI）
 
 ```powershell
-cd C:\dsh\dshplug\dsh-larkcli
+cd C:\dsh\dw-plugin\dsh-larkcli
 .\lark.ps1 auth status
 .\lark.ps1 "im +chat-list --page-size 10 --as bot"
 .\lark.ps1 "im +messages-search --query 周报 --page-size 5"

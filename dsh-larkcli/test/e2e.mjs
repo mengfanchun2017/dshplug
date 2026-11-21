@@ -1,4 +1,6 @@
-// 端到端验证：用真实 CLI + 真实凭据跑通 status / +chat-list / schema
+// 人工诊断脚本（**不是**自动化测试，没断言，不进 test:all）：用真实 CLI + 真实凭据跑一遍
+// status / +chat-list / schema，把原始输出打出来给人看。查“为什么调不通”时用它，
+// 而不是把它当回归测试 —— 它不检查任何预期值。自动化回归看 run/tools/client/smoke/v2/activate。
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'

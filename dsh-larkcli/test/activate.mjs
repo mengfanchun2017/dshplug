@@ -35,7 +35,11 @@ console.log('\n[最小 ctx] 异常 =', err1 ? err1.constructor.name + ': ' + err
 console.log('[最小 ctx] 工具数 =', tools1.length)
 console.log('[最小 ctx] effects =', effects1.length)
 assert.equal(err1, null, '没有 webServer 时 apply 不应抛异常')
-assert.equal(tools1.length, 9, '工具仍应全部注册')
+/*
+ * 不要写死数量：每加一个工具就得回来改一次，忘了就是这套件静默发臭的源头。
+ * 只断言“该有的都在”，数量一致性交给 tools.mjs / smoke.mjs 那边管。
+ */
+assert.ok(tools1.length >= 13, `工具应至少 13 个（当前 ${tools1.length}）`)
 
 // 场景 2：完整 ctx（含 webServer）—— 应额外注册 HTTP 路由
 const tools2 = []
@@ -61,8 +65,8 @@ console.log('\n[完整 ctx] 异常 =', err2 ? err2.constructor.name + ': ' + err
 console.log('[完整 ctx] 工具数 =', tools2.length)
 console.log('[完整 ctx] 路由 =', JSON.stringify(routes))
 assert.equal(err2, null, '完整 ctx 下 apply 不应抛异常')
-assert.equal(tools2.length, 9)
-assert.equal(routes.length, 4, '应注册 4 条路由')
+assert.ok(tools2.length >= 13, `完整 ctx 下工具也应至少 13 个（当前 ${tools2.length}）`)
+assert.ok(routes.length >= 10, `应至少注册 10 条路由（当前 ${routes.length}：${routes.join(', ')}）`)
 
 // 场景 3：config 为 undefined（行里没写 config）—— 不能崩
 let err3 = null

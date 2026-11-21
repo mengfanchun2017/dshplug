@@ -363,7 +363,9 @@ await testAsync('缺二进制时报可执行的修复命令，不是空错误', 
     await svc.run(['auth', 'status'])
     throw new Error('should have thrown')
   } catch (e) {
-    assert.match(e.message, /fetch-lark-cli\.ps1/)
+    // v0.2.0：修法从「跑 ps1 脚本」改为「调 lark_install」——断言跟代码同步，
+    // 否则旧测试会因“文案变了”而红，掩盖真的回归。
+    assert.match(e.message, /lark_install/)
   }
 })
 
@@ -444,7 +446,7 @@ if (hasReal) {
     assert.ok(st.error)
   })
 } else {
-  console.log('  （未安装二进制，真实调用跳过；跑 .\\scripts\\fetch-lark-cli.ps1 后可复测）')
+  console.log('  （未安装二进制，真实调用跳过；lark_install action="install" 后可复测）')
 }
 
 cleanTmp()

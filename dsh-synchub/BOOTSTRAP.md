@@ -186,14 +186,14 @@ Get-ChildItem "$P\test" -Filter *.cjs | Sort-Object Name | ForEach-Object {
   if ($LASTEXITCODE -ne 0) { throw "FAIL $($_.Name)" }
 }
 ```
-各套件自己的通过标志（`ALL PASS` / `SYNCHUB_SMOKE_OK` / … / `会话体检 smoke：17 通过 / 0 失败`）。
+各套件自己的通过标志（`ALL PASS` / `SYNCHUB_SMOKE_OK` / … / `会话体检 smoke：23 通过 / 0 失败`）。
 全绿 = 10/10 套件 exit 0。
 
 | 套件 | 盯什么 |
 |---|---|
-| `render-smoke.cjs` | 浏览器半**真渲染**：首帧/有数据/报错/钩子序（含 E0b+E0c 体检卡 26 条） |
+| `render-smoke.cjs` | 浏览器半**真渲染**：首帧/有数据/报错/钩子序（含 E0b+E0c 体检卡） |
 | `synchub-smoke.cjs` | 27 路由注册 + 三槽 + CSS + 新卡片 |
-| `sessiondoctor-smoke.cjs` | 体检引擎：17 条，只读性/confirm 闸门/不误报 subagent/回滚点原文 |
+| `sessiondoctor-smoke.cjs` | 体检引擎：**23 条**，只读性/confirm 闸门/不误报 subagent/回滚点原文 + **J 组 6 条职责边界**（impact 不漏网 / health 三态 / 一键救援不碰空组） |
 | `sessionmove-smoke.cjs` | 单条+批量迁移（含 14 个真实目录交叉验证） |
 | `purge-smoke.cjs` | 受控删除 |
 | `sessionnote-smoke.cjs` | 蒸馏文档 |
@@ -259,7 +259,11 @@ GET  /api/dsh-synchub/state     # 只读：初始化 / 两仓库 .git / 回滚�
 
 ---
 
-### 4.4 会话体检与修复（ADR-034，0.8.0）
+### 4.4 会话救援（ADR-034，0.9.0 收窄）
+
+> **0.9.0 把职责砍到只剩一件事：会话能不能打开。**
+> 重复登记、空组目录、该归档的，一律只报告不主动改——那是专门的会话管理插件的事。
+> 你当时的原话：「如果报错了先修复避免不能用，就可以了，其他交给专业的 session 管理插件」。
 
 ### 什么时候用它
 
@@ -277,11 +281,17 @@ GET  /api/dsh-synchub/state     # 只读：初始化 / 两仓库 .git / 回滚�
 
 侧边栏 → **⑤ 会话体检与修复**：
 
-1. 点「开始检查（只读）」→ 列出分级问题（✕ 需要处理 / ! 有提醒 / · 可选）。
-2. 有 `safe:true` 的项时，会出现「一键修安全项（N）」。安全项 = 清悬空引用、补登记、搬错位目录、删空组。
-3. 「可改指」的项前面有下拉框：选目标工作区，再点按钮。**工具不会替你选。**
-4. 修完自动复查一遍，并告诉你还剩什么。
+1. 点「检查一下（只读）」→ 画面只出现**一行结论**，三选一：
+   - 绿 `● 能用` —— 会话都能打开，没事做，按钮也不出现；
+   - 黄 `● 能修` —— 有打不开的，给一个「一键修复（N）」，点一下就好；
+   - 红 `● 要你定` —— 有打不开的，但**必须你指定改到哪个工作区**（猜错会搬到错的地方）。
+2. 「要你定」时逐条列出，每条前面有下拉框选目标工作区，再点「确认并…」。**工具不会替你选。**
+3. 整洁项（重复登记、空组、可归档）全部折在「明细与整洁项」里，
+   **不影响使用、不进一键修复**，但每条仍有自己的按钮，想清就点。
+4. 修完自动复查一遍，告诉你还剩几处不能自动修。
 
+**看 `health` 而不是数条数**：`ok` / `repairable` / `needs-human` 三态就是「你能不能用」。
+条数多不等于有事 —— 十几条 advisory 也是 `ok`。
 ### 命令行等价接口
 
 ```powershell
@@ -293,7 +303,7 @@ Invoke-RestMethod "$API/session-doctor" -Headers @{'sec-fetch-site'='same-origin
 # ② 看接口自述（问题分类表 + 安全边界）
 Invoke-RestMethod "$API/session-doctor/help" -Headers @{'sec-fetch-site'='same-origin'} | ConvertTo-Json -Depth 4
 
-# ③ 只跑安全项
+# ③ 一键救援（只跑 rescue.ids：影响「能不能用」且 safe 的，绝不碰空组/重复登记）
 Invoke-RestMethod "$API/session-doctor" -Method Post -ContentType 'application/json' `
   -Headers @{'sec-fetch-site'='same-origin'} -Body '{"confirm":"REPAIR"}'
 
@@ -360,9 +370,10 @@ Copy-Item "$($b.FullName)\storages\workspace.json" "$env:USERPROFILE\.dsh\storag
 | 推送被拒「behind-remote」 | 另一台推过、本机落后 | 先「拉取并应用」再推，永不 force |
 | 删除会话后列表还看得到 | 没重启，DSH 内存还持有旧会话 | 完全退出再打开，然后 `verify=1` 验收 |
 | 删除后同步镜像里还有 | purge 只删本机正文，不动 payload | 下次推送时显式 `prune` 才清远端 |
-| **会话掉进「未分组」/ 点了空白** | 工作区目录改名后，正文目录与 `workspace.json` 归属**两半都错位** | 侧边栏「⑤ 会话体检与修复」→ 开始检查；参见 §4.4 |
+| **会话掉进「未分组」/ 点了空白** | 工作区目录改名后，正文目录与 `workspace.json` 归属**两半都错位** | 侧边栏「⑤ 会话体检与修复」→ 检查一下；参见 §4.4 |
 | 工作区删了又加后会话变成新的 | 删/加会新建 `workspaceId`，旧记录变成死指针 | 同上；体检把这种情况报成 `duplicate-ref` |
-| 体检报了一堆「subagent 未登记」 | **不会** —— 旧版本（≤ 0.7.0）的误报；subagent 已排除 | 升级到 0.8.0 |
+| 体检报了一堆「subagent 未登记」 | **不会** —— 旧版本（≤ 0.7.0）的误报；subagent 已排除 | 升级到 0.9.0 |
+| **会话能用但体检报一堆「不整齐」** | 0.9.0 只自动修「打不开」，其余只报告 | 看 `health`：是 `ok` 就不用管；不要拿条数吓自己 |
 | 体检说「可改指」但下拉里的工作区不对 | 旧路径已不存在，名字相似度只是排序建议 | 自己选对的那个；工具不猜目标 |
 | 修完侧边栏还是旧分组 | `workspace.json` 是宿主启动时读的 | **完全重启** DSH（刷页面不够） |
 | 体检执行报「正在写入」 | 30 秒内该会话还有改动 | 等会话静下来再修，或关掉那个会话 |

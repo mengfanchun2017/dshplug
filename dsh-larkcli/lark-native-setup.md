@@ -1,24 +1,23 @@
 # 全新 Windows 机器接入飞书（不用 WSL、不用预装 Node）
 
 这套文件是自包含的：把整个 `dsh-larkcli` 目录（本插件工作区）拷到新机器即可。
-唯一前提：**Windows 10/11 x64 + PowerShell + 网络能到 open.feishu.cn**。
+唯一前提：**Windows 10/11 x64 + PowerShell + 网络能到 open.feishu.cn 与 registry.npmmirror.com**。
 不需要 WSL、不需要系统 Node.js、不需要 Claude Code。
+
+> **v0.2.0 起这份文档大部分已过时**：二进制不再手工下载（`lark_install` / 面板一键装），
+> 凭据不再手工改 `_native-config`（写进 `C:\dsh\data-larkcli`，每账户独立）。
+> 现在只在插件彻底坏了、想绕过插件直接摸 CLI 时才需要看它。
+> 日常用 [README.md](README.md)，安装排错看 [BOOTSTRAP.md](BOOTSTRAP.md)。
 
 ## 目录里有什么
 
 | 文件 | 作用 |
 |---|---|
-| `lark-cli-win/lark-cli.exe` | 飞书官方 CLI v1.0.99 的 **Windows 原生二进制**（50 MB，自带 Go runtime） |
-| `lark-cli-win/_native-config/config.json` | 应用凭证配置（App ID + 指向 secret 文件） |
-| `lark-cli-win/_native-config/appsecret.txt` | App Secret 明文（仅本机可读） |
+| `lark-cli-win/lark-cli.exe` | 飞书官方 CLI 的 **Windows 原生二进制**（约 15 MB，自带 Go runtime） |
+| `lark-cli-win/_native-config/` | **历史遗留**。首次启动会自动导入为 `default` 账户，之后可删 |
+| `lib/install.js` | v0.2.0：装/升级二进制的实现（镜像 + SHA256 + 原子替换） |
 | `lark.ps1` | 封装好环境变量的调用入口，纯 Windows |
-| 本文 | 换机 / 重装步骤 |
-
-二进制来源与校验（下载时已验证）：
-- 官方发布：`lark-cli-1.0.99-windows-amd64.zip`
-- 下载：`https://registry.npmmirror.com/-/binary/lark-cli/v1.0.99/lark-cli-1.0.99-windows-amd64.zip`
-- SHA256：`1b43cb63ff533ee067db45d93a862074d147df5a0d05f95c2d2a7c70c3f97375`（与官方 `checksums.txt` 一致）
-
+| 本文 | 绕过插件手调 CLI 的兜底路径 |
 ## 最小使用（拷过去就能跑）
 
 ```powershell
@@ -58,13 +57,16 @@ user token 约 2 小时过期，CLI 会自动用 refresh token 续（refresh 约
 
 1. 编辑 `lark-cli-win/_native-config/appsecret.txt`，只放 secret 本身，无换行。
 2. 编辑 `config.json` 里的 `appId`；`appSecret.id` 用**正斜杠绝对路径**指向该文件
-   （下面是本机当前的实际值——注意它在 `C:/dsh/dshplug/...`，因为已并入 dshplug）：
+2. 编辑 `config.json` 里的 `appId`；`appSecret.id` 用**正斜杠绝对路径**指向该文件：
+
+> 这是**绕过插件的手工路径**。插件正常时应该用 `lark_account_upsert` + `lark_account_set_secret`，
+> 它们会把配置写进 `C:\dsh\data-larkcli\accounts\<id>\`，不碰 `_native-config`。
 
 ```json
 {
   "apps": [{
     "appId": "cli_你的ID",
-    "appSecret": { "source": "file", "id": "C:/dsh/dshplug/dsh-larkcli/lark-cli-win/_native-config/appsecret.txt" },
+    "appSecret": { "source": "file", "id": "C:/dsh/dw-plugin/dsh-larkcli/lark-cli-win/_native-config/appsecret.txt" },
     "brand": "feishu"
   }]
 }
@@ -76,21 +78,23 @@ user token 约 2 小时过期，CLI 会自动用 refresh token 续（refresh 约
 
 ## 升级二进制
 
-```powershell
-# 到 https://github.com/larksuite/cli/releases 查最新版本 vX.Y.Z，改下面三处：
-$ver='1.0.99'
-curl.exe --ssl-revoke-best-effort -fL -o lark-cli-win\lark-cli.zip "https://registry.npmmirror.com/-/binary/lark-cli/v$ver/lark-cli-$ver-windows-amd64.zip"
-# 用官方 checksums.txt 核对 SHA256 后再 Expand-Archive 覆盖 lark-cli.exe
+**不要手工做**。v0.2.0 起三种方式等价，都走 `lib/install.js`：
+
 ```
-GitHub 直连在国内常超时；上面用的是 npmmirror 官方二进制镜像（下载时已实测 15 MB / 秒级完成）。
+lark_install action="check"     # 只查
+lark_install action="install"   # 升级
+# 或设置面板 → Mlarkcli → lark-cli 本体 → 「检查更新」/「升级」
+```
+
+流程：查镜像最新版 → 下载 → 对官方 SHA256（拿不到就拒装）→ 解压探活 → 原子替换（失败回滚）。
+GitHub 直连在国内常超时，所以只走 `registry.npmmirror.com`。
 
 ## 在 DSH 里用（推荐，已经是原生插件）
 
 上面是「agent 用 pwsh 调 CLI」—— 给人手用、插件坏了的兜底路径。
-**日常用插件**：装好后模型直接有 9 个 `lark_*` 工具（`lark_call` 直接 spawn exe，不走 pwsh，快 ~200–400ms）。
-
+**日常用插件**：装好后模型直接有 13 个 `lark_*` 工具（`lark_call` 直接 spawn exe，不走 pwsh，快 ~200–400ms）。
 ```powershell
-& C:\dsh\dshplug\install.ps1 -Only dsh-larkcli
+& C:\dsh\dw-plugin\install.ps1 -Only dsh-larkcli
 # 完全退出 DSH 再打开，然后会话里：lark_doctor
 ```
 

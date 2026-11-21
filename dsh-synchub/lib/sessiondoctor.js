@@ -350,7 +350,7 @@ export async function doctorScan(opts = {}) {
       const id = `adopt-group:${g.name}`;
       push({
         code: 'orphan-group-recoverable',
-        impact: 'advisory',
+        impact: 'blocking',
         severity: 'warn',
         title: `组 ${g.name} 下有 ${ids.length} 个会话可以归位到「${recoverWs.title}」`,
         detail: `这些会话的工作目录 ${liveCwd[0].cwd} 存在且已被工作区「${recoverWs.title}」登记，把正文目录搬过去并补登记即可恢复。`,
@@ -374,7 +374,7 @@ export async function doctorScan(opts = {}) {
       const id = `create-ws:${g.name}`;
       push({
         code: 'orphan-group-recoverable',
-        impact: 'advisory',
+        impact: 'blocking',
         severity: 'warn',
         title: `目录 ${live} 还在，但工作区登记丢了（${ids.length} 个会话）`,
         detail: 'DSH 在目录改名/重加工作区时会删掉旧登记。目录本身完好，重建一条登记就能让这些会话回到侧边栏。',
@@ -408,7 +408,7 @@ export async function doctorScan(opts = {}) {
         const id = `relocate:${g.name}`;
         push({
           code: 'orphan-group-relocatable',
-          impact: 'advisory',
+          impact: 'blocking',
           severity: 'warn',
           title: `组 ${g.name} 的 ${ids.length} 个会话可改指到一个现存工作区`,
           detail: `这些会话原来的工作目录（${deadCwd || '未知'}）已不存在 —— 典型原因是目录被改名了。正文还在，选一个目标工作区，它们就搬过去并补登记。最像的是「${candidates[0].title}」。`,

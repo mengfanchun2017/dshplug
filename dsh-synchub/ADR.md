@@ -1457,3 +1457,89 @@ DSH 在目录改名后会为该新路径**新建**一个 `workspaceId`，旧记�
 
 > **为什么不自动重建那 44 个会话的工作区登记**：用户已明确回复「不用重建了，现在已经恢复了所需内容」。
 > 体检只负责把它检出来并给出一键动作，执行与否用户决定。
+
+---
+
+## ADR-035 · 0.9.0：把体检从「9 类巡检」砍到「会话能不能打开」
+
+### 结论
+
+体检引擎只对**一根轴**负责：**这件事会不会让会话打不开 / 看不见**。
+每条 finding 新增 `impact` 字段，只取两个值：
+
+| impact | 含义 | 引擎行为 |
+|---|---|---|
+| `blocking` | 用户打不开 / 看不见 / 工作区开不了 | 进救援范围；`safe:true` 的进 `rescue.ids`，一键修 |
+| `advisory` | 只是不整齐，不影响使用 | **只报告，永不自动修**，需用户单独点 |
+
+`summary.health` 三态：`ok`（都能打开）/ `repairable`（打不开但一键能修）/ `needs-human`（打不开且必须人给目标）。
+**不传 `ids` 的 `POST` 默认只跑 `rescue.ids`**（旧行为是「全部 safe 动作」，会顺手删空组、去重）。
+
+判据原文用用户的话写：「如果报错了先修复避免不能用，就可以了，其他的交给专业的 session 管理插件」。
+
+### 理由
+
+**上版错在把「整不整齐」当成了自己的职责。** 0.8.0 的 9 类问题里，`duplicate-ref`、`empty-group`、
+`orphan-group-dead` 三类即使存在，用户照样能打开会话。把它们摆在首屏、还给一键按钮，
+实际效果是：**体检报一堆红字，用户以为自己坏了，其实没坏。** 这是第四次「假红」
+（前三次是假绿）。
+
+而且这三件事本来就有专业工具在做：会话管理插件能看到列表、能批量整理。synchub 抢着做，
+结果是两边都能改 `workspace.json`，出了事无法定位是谁改的。
+
+**为什么不能反过来全降 advisory。** 实测本机：把 `orphan-group-*` 也降成 advisory 后，
+`health` 报 `ok`、排查列表清空 —— 但侧边栏里明明躺着 7 个未分组会话。那是**假绿**，
+边界不是「要不要管这事」，而是「会话能不能打开」：未分组会话其实还能从「未分组」里点进去，
+但它的归属确实丢了（改名后没归位）；而 44 个会话那个 `orphan-group-recoverable` 是登记彻底丢了，
+侧边栏根本列不出来。两者都是 blocking，只是修法不同。
+
+### 反面代价
+
+- **advisory 默认不自动修**：用户如果真想清空组目录 / 去重，得多点几下。
+  缓解：advisory 项仍然有自己的按钮（共用的 `actRow`），只是不进一键，不是没入口。
+- **`needs-human` 状态经常出现**：本机实测 7 条 blocking 全部 `safe:false`，
+  所以一键按钮**不出现**，需要人逐条选目标。这是故意的：猜错比不改更糟，
+  但它确实意味着「点一下就好」并不能适用于所有故障。
+- **多一个维度**：`impact` 与 `severity` 正交（`workspace-path-missing` 是 blocking + error，
+  `orphan-group-recoverable` 是 blocking + warn）。两个字段都得看，多一层心智负担。
+- **旧客户端的兼容成本**：旧 client 不认识 `health`/`rescue`，会继续按 `summary.error/warn` 分级，
+  且会调不带 `ids` 的 POST —— 此时后端已经改成救援范围，所以旧界面会看到「按钮叫一键修安全项，
+  实际只修了一部分」。已做：`healthOf()` 在缺 `health` 时从 `summary.error/warn` 降级推导。
+  但**升级时必须重启 DSH**（`index.js` 改了），否则会出现新 client + 旧宿主半的组合。
+
+### 已否决的替代方案
+
+| 方案 | 否决原因 |
+|---|---|
+| 保持 0.8.0 的「9 类都管」，只把文案改温和 | 问题不在文案，在职责。摆一堆不影响使用的项就是在制造焦虑 |
+| 把三类整活项直接删掉不报告 | 用户看得见侧边栏里有空组，工具装作不存在就是第二次「假绿」 |
+| 用「严重程度」代替 `impact` 分级 | `severity` 已经在用了，且它与「能不能用」没有对应关系（空组是 info，但 rebuild 44 个会话是 warn — 两者都不是 error） |
+| 把所有 advisory 都改成 `safe:false` 来防止误改 | 那就退化成上上版的「全部要二次确认」，用户每点一下都多一步 |
+| 让 synchub 把会话管理功能也做了 | 用户明确反对：「其他交给专业的 session 管理插件」；且两边都能改 `workspace.json` 会让故障无法定责 |
+
+### 验证
+
+- `test/sessiondoctor-smoke.cjs` 从 17 条增到 **23 条**，新增 J 组 6 条专盯职责边界：
+  - J1 干净现场 `health=ok` 且 `rescue.needed=false`；
+  - J2 `dangling-ref` 必须 `impact='blocking'`、`health='repairable'`；
+  - **J3 只有空组目录时 `health='ok'`、`blocking=0`** —— 防止把整活项算进不能用；
+  - **J4 一键救援（不传 `ids`）只动 `blocking` 且不碰空组目录** —— 直接比对 `r.applied` 的
+    `kinds` 严格等于 `['drop-ref']`，并断言空组目录**仍在磁盘上**；
+  - J5 `orphan-group-relocatable` 必须 `needs-human` 且**不进** `rescue.ids`；
+  - J6 每条 finding 都必须有合法 `impact`，且 `blocking + advisory === total`（防漏网）。
+- 实数据双跑比对（本机 `~/.dsh`，14 组 / 104 目录）：
+  - 全降 advisory 的试错版：`health=ok`、`blocking=0` —— 与侧边栏里 7 个未分组会话矛盾，**已否决**；
+  - 最终版：`health=needs-human`、`blocking=7`（6 个 `orphan-group-relocatable` + 1 个
+    `orphan-group-recoverable` 带 44 会话）、`advisory=6`、`rescue.ids=[]`（全部 `safe:false`）——
+    与手工审计完全一致。
+- `render-smoke.cjs` **98 条全绿**。新增 6 条真渲染断言，分两组：
+  - 「结论说能不能用而不是几条」「整洁项折进 details」「只有可一键救援的项进总按钮」；
+  - **「本机真实态 `needs-human`」3 条**与 **「升级中间态（新 client + 旧 index）」2 条**。
+    后者尤其重要：旧宿主半不返 `impact` 时 `blockingList` 必为空，
+    若 `healthOf()` 的降级分支仍写「● 能修」，就是**承诺了一个不会出现的按钮**。
+    已改成「● 要你定」+ `hint` 提示重启对齐版本。
+- **变异测试过两条新断言**：
+  - 把 `label: '● 要你定'` 改成 `'● 能修'` → `needs-human` 那条立即变红；
+  - 删掉 `dh.hint` 那行渲染 → 旧版断言立即变红。
+  后者还揭出一个自测陷阱：最初断言写 `/重启 DSH/`，而页面上**另一个卡也有这四个字**，
+  所以删掉 hint 照样绿。改成只匹 hint 独有的「两半版本对齐」后才真正生效。

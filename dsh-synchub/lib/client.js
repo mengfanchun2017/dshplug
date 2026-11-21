@@ -419,16 +419,28 @@ function firstCand(act) {
 function healthOf(d) {
   if (!d || !d.summary) return { tone: 'muted', label: '尚未检查', line: '' };
   const s = d.summary;
-  const h = s.health || (s.error ? 'needs-human' : s.warn ? 'repairable' : 'ok');
+  const fs = d.findings || [];
+  const hasImpact = fs.some(f => f.impact === 'blocking' || f.impact === 'advisory');
+  if (!hasImpact) {
+    /* 旧版宿主半（升级中：新 client + 旧 index）根本不返回 impact。
+       这时绝不能声称「能修」—— 因为 blockingList 会是空的，按钮根本不会出现，
+       文案说「点下面一下就好」就是骗人。只能说「得看看」，不承诺执行。 */
+    const n = fs.length;
+    if (!n) return { tone: 'good', label: '● 能用', line: '会话都能打开，没有需要你处理的问题。' };
+    return { tone: 'red', label: '● 要你定',
+      line: `发现 ${n} 处异常，但当前宿主半版本还不会区分「打不开」和「不整齐」。`,
+      hint: '重启 DSH 让两半版本对齐后再检查就能区分。' };
+  }
+  const h = s.health || (s.blocking ? (s.rescue ? 'repairable' : 'needs-human') : 'ok');
   if (h === 'ok') {
     return { tone: 'good', label: '● 能用', line: '会话都能打开，没有需要你处理的问题。' };
   }
   if (h === 'repairable') {
     return { tone: 'warn', label: '● 能修',
-      line: `有 ${s.blocking || s.warn || 0} 处会让会话打不开或看不见，点下面一下就好。` };
+      line: `有 ${s.blocking || 0} 处会让会话打不开或看不见，点下面一下就好。` };
   }
   return { tone: 'red', label: '● 要你定',
-    line: `有 ${s.blocking || s.error || 0} 处让会话打不开，且必须你指定改到哪个工作区（猜错会搬到错的地方）。` };
+    line: `有 ${s.blocking || 0} 处让会话打不开，且必须你指定改到哪个工作区（猜错会搬到错的地方）。` };
 }
 function checkedAtText(atMs) {
   if (!atMs) return '尚未检查';
@@ -1087,6 +1099,8 @@ function checkedAtText(atMs) {
 
         /* 一句话结论。不展开任何细节，用户只需要知道「要不要管」。 */
         e('div', { style: { marginBottom: 6 } }, dh.line),
+        /* 旧版宿主半的专属提醒：不说就不知道为什么要重启。 */
+        dh.hint ? e('div', { className: 'warn', style: { marginBottom: 6 } }, dh.hint) : null,
         e('div', { className: 'muted', style: { marginBottom: 8 } },
           '只管一件事：目录改名/移动之后会话点进去是不是空的。数据不会因此丢失，',
           '重复登记、空组目录这类整洁问题不在这里处理。'),
@@ -1121,27 +1135,7 @@ function checkedAtText(atMs) {
                 /* 不可修的一类（工作区路径没了）必须说清「要你做什么」。 */
                 !act0 ? e('div', { className: 'muted' },
                   '这项改不了自动修：需要你在 DSH 里把那个工作区重新添加回来。') : null,
-                act0 ? e('div', { className: 'btns' },
-                  /* 改指要选目标：下拉列出候选，默认第一个，但默认值必须显式传回。 */
-                  act0.kind === 'relocate-group' && firstCand(act0)
-                    ? e('select', {
-                        value: (doctorPick[act0.id] || firstCand(act0).wsId || ''),
-                        onChange: ev => setDoctorPick(p => ({ ...p, [act0.id]: ev.target.value })),
-                        style: { marginRight: 6 },
-                      }, (candsOf(act0) || []).map(c =>
-                        e('option', { key: c.wsId, value: c.wsId }, `${c.title}（${c.path}）`)))
-                    : null,
-                  e('button', {
-                    disabled: Boolean(doctorBusy),
-                    onClick: () => {
-                      if (act0.kind === 'relocate-group') {
-                        const wsId = doctorPick[act0.id] || (firstCand(act0) && firstCand(act0).wsId);
-                        doDoctorApply([act0.id], { [act0.id]: wsId });
-                      } else {
-                        doDoctorApply([act0.id]);
-                      }
-                    },
-                  }, act0.safe ? act0.label : `确认并${act0.label}`)) : null);
+                actRow(f));
             }))
           : null,
 
@@ -1159,12 +1153,15 @@ function checkedAtText(atMs) {
                   ? e('div', { className: 'warn' }, '找不到 storages\\workspace.json —— 全新安装的正常状态，不是错误。')
                   : null,
                 e('div', { className: 'muted' }, '检查时间：', checkedAtText(doctor.at))),
-              advisoryList.map((f, i) => e('div', { key: i, className: 'note', style: { marginBottom: 6 } },
+              /* 降级成 advisory 的不代表没动作可做：「未分组归位」就在这里，
+                 必须能点，否则用户看得见问题却没入口。 */
+              advisoryList.map((f, i) => e('div', { key: i, className: 'note', style: { marginBottom: 10 } },
                 e('div', { className: 'muted', style: { fontWeight: 600 } }, '· ', f.title),
-                e('div', { className: 'muted' }, f.detail))),
+                e('div', { className: 'muted', style: { margin: '2px 0' } }, f.detail),
+                actRow(f))),
               advisoryList.length
                 ? e('div', { className: 'muted', style: { marginTop: 4 } },
-                    '这些只是不整洁，不影响打开会话，所以不自动改。')
+                    '这些不影响打开会话，所以不会进一键修复；需要时手动点。')
                 : null)
           : null,
 

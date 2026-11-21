@@ -1,31 +1,31 @@
 # dsh-larkcli
 
-> 版本 **0.1.0** ｜ 状态 active ｜ 2026-11-16
+> 版本 **0.2.0** ｜ 状态 active ｜ 2026-11-21
 > Windows 原生飞书/Lark 驱动：直连官方 `lark-cli.exe`，**不靠 WSL、不装系统 Node、不用 MCP**。
-> 多账户（每账户独立 App + 独立 user 授权，可写描述与标签），按任务本地搜索账户以降低消耗。
-
+> 一键安装/升级 CLI、多账户（每账户独立 App + 独立 user 授权）、展示接入的应用与用户名、权限清单一键申请。
 | 文档 | 回答什么 | 什么时候读 |
 |---|---|---|
 | **README.md**（本文） | **怎么用**：工具清单、面板长什么样、多账户模型、日常例子 | 想用它做点什么 |
 | [BOOTSTRAP.md](BOOTSTRAP.md) | **怎么做**：安装、验证、排错、换机、升级、改哪要重启 | 装不上 / 坏了 / 换机器 |
-| [ADR.md](ADR.md) | **为什么**：六条决策 + 反面代价 + 已否决方案 | 想改设计、或质疑某个选择 |
+| [ADR.md](ADR.md) | **为什么**：15 条决策 + 反面代价 + 已否决方案 | 想改设计、或质疑某个选择 |
 
 ---
 
 ## 0. 一句话定位
 
 让 DSH Agent 在**纯 Windows** 上读写飞书线上内容：群消息、文档、多维表格、日历、邮件、云盘……
-底层是飞书官方 CLI 的 Windows 原生二进制（v1.0.99，18 个业务域 / 256 个 API 方法 / 大量 `+` 快捷键）。
+底层是飞书官方 CLI 的 Windows 原生二进制（本机实测 v1.0.100，22 个业务域 / 256 个 API 方法 / 大量 `+` 快捷键）。
+**自己管版本**：从 npmmirror 查最新版 → 下载 → 比对官方 SHA256 → 原子替换，不经过 GitHub。
 
 **边界**：只管「Agent 读/写飞书内容」。飞书**聊天通道**（长连接收消息、审批卡片）是另一回事，
 仍在 `default-workspace\feishu-bridge`，两者不合并（ADR-001）。
 
 ---
 
-## 1. 9 个工具
+## 1. 13 个工具
 
-装好后模型直接能看到这些工具。**工具数量刻意压在 9 个**：工具 schema 每轮都进上下文，
-注册 200 个命令等于每轮白烧 token。
+装好后模型直接能看到这些工具。**工具数量刻意压在 13 个**：工具 schema 每轮都进上下文，
+注册 200 个命令等于每轮白烧 token。v0.2.0 新增 4 个（安装、身份、权限、按链接读文档）。
 
 | 工具 | 干什么 | 调 CLI？ |
 |---|---|---|
@@ -38,6 +38,10 @@
 | `lark_account_set_secret` | 写 App Secret（唯一收密钥的入口，**永不回显**） | 否 |
 | `lark_login_start` | 发起 user 设备流授权，给链接 | 是 |
 | `lark_login_finish` | 用户确认后完成授权 | 是 |
+| `lark_install` | **装/升级 CLI**：`action="check"` 只查，`action="install"` 下载+校验+替换 | 否（自己下载） |
+| `lark_identity` | 展示接入的飞书应用（名/描述/头像/owner/版本）与用户名 | 是（2-3 次 API） |
+| `lark_scopes` | 权限清单：应用缺 / 用户缺分开算，给预填好的申请链接 | 是 |
+| `lark_read_doc` | **给个链接就读**：自动识别文档/表格/多维表格/幻灯片/知识库，从认证池依次尝试 | 是 |
 
 ### 常用调用
 
@@ -117,19 +121,31 @@ C:\dsh\data-larkcli\                 ← 仓库外，不进 Git、不进插件�
 > 规则见 [`../BOOTSTRAP.md` §5.1](../BOOTSTRAP.md)。改显示名只动 `client.js` 的 `nav` 与 `locale/*.json`，不碰目录名。
 
 ```
-┌─ Mlarkcli ─────────────────────────────────┐
-│ 共 2 个账户            [默认 work]  [刷新状态] │
-│ 二进制   ✅ ...\lark-cli.exe (v1.0.99)        │
-│ 数据目录 C:\dsh\data-larkcli                  │
-│ 账户表   ...\accounts.json                    │
-│                                             │
-│ ┌ work ────────────────────────────────┐    │
-│ │ [默认] [bot 可用] [user 未授权]        │    │
-│ │ 研发群、周报文档、项目A 多维表格         │    │
-│ │ (研发) (周报) (项目A)                  │    │
-│ │ [编辑描述/标签] [授权 user 身份]        │    │
+┌─ Mlarkcli ──────────────────────────────────┐
+│ 共 2 个账户           [默认 work]  [刷新状态] │
+│ 二进制   ✅ ...\lark-cli.exe                 │
+│ 版本     1.0.100                            │
+│ 数据目录 C:\dsh\data-larkcli                │
+│ 账户表   ...\accounts.json                   │
+│                                              │
+│ ┌ lark-cli 本体 ──────────────────────┐    │
+│ │ [v1.0.100]  [已是最新]               │    │
+│ │ 从 registry.npmmirror.com 下载官方包… │    │
+│ │              [检查更新] [升级]         │    │
 │ └──────────────────────────────────────┘    │
-│                                             │
+│                                              │
+│ ┌ work ─────────────────────────────┐    │
+│ │ [默认] [bot 可用] [user 未授权]       │    │
+│ │ █ DSH Agent  [应用已发布]            │    │
+│ │    Redmi DeepSeek Harness 的飞书入口   │    │
+│ │    用户：未知（user 尚未授权）        │    │
+│ │ 应用名   DSH Agent                    │    │
+│ │ 应用已开通权限 38 条                  │    │
+│ │ (研发) (周报) (项目A)                 │    │
+│ │ [编辑描述/标签] [授权 user 身份]      │    │
+│ │ [权限清单]                           │    │
+│ └──────────────────────────────────────┘    │
+│                                              │
 │ 新增账户                                     │
 │ id [work      ]  App ID [cli_xxxxxxxx   ]   │
 │ 描述（AI 按任务选账户时靠它）…                │
@@ -139,30 +155,83 @@ C:\dsh\data-larkcli\                 ← 仓库外，不进 Git、不进插件�
 
 面板**不接收密钥**（请求体里出现 `secret` 字段会被 Host 直接 400 拒掉）——密钥只走工具。
 
+### 点「权限清单」展开后
+
+```
+┌ 要申请的权限范围： [只读（推荐）] [标准] [全部] ┐
+│ 知识库   6 条｜用户缺 5                        │
+│ 云空间   4 条｜用户缺 3                        │
+│ 多维表格 1 条｜应用缺 1｜用户缺 1              │
+│ 新版文档 1 条｜✅ 已齐                          │
+│                                                │
+│ 应用侧缺 1 条 —— 点链接，权限已勾好，按「确认」  │
+│              [打开权限申请页] [复制]            │
+│ 用户侧缺 17 条（仅 user 需要，bot 不受影响）     │
+│              [复制]                             │
+└──────────────────────────────────────────────┘
+```
+
+两个关键设计：
+
+1. **默认选「只读」档位**。全部权限 145 条，一上来就列完会把人吓跑；只读包 21 条就够查文档/表格/消息。
+2. **应用缺与用户缺分开算**。租户级权限（`tenant`）用户授权也没用，必须去开放平台申请；
+   用户级权限（`user`）走设备流即可。混在一起会让人重复劳动。
+   申请链接是**预填好的**：`https://open.feishu.cn/page/scope-apply?clientID=<appId>&scopes=<编码后清单>`，
+   打开就是勾好的状态，只用点「确认」（这是用户原话要求的「直接弹出只用点确认」）。
+
+> 申请完还要在开放平台「**创建版本并发布**」，租户级权限才真正生效。这一点容易漏，所以面板上直说了。
+
+面板**不接收密钥**（请求体里出现 `secret` 字段会被 Host 直接 400 拒掉）——密钥只走工具。
+
 ---
 
 ## 4. 首次上手（5 步）
 
-```powershell
-# 0) 二进制。不入 git（50 MB），clone 后补一次，带官方 SHA256 校验
-cd C:\dsh\dshplug\dsh-larkcli
-.\scripts\fetch-lark-cli.ps1
-```
+全在会话里说就行，不用开终端。或者打开 **设置 → Mlarkcli**，里面每步都有按钮。
 
 然后**在会话里**（不是 PowerShell）：
 
 ```
-1) lark_doctor             # 先看缺什么
-2) lark_account_upsert     id="work" label="公司主账号" appId="cli_xxx"
-                           description="研发群、周报文档、项目A 多维表格" tags=["研发","周报","项目A"]
-3) lark_account_set_secret account="work" appSecret="..."      # 只回长度
-4) lark_status             # bot ✅ 就能干活了
-5) lark_login_start        # 只有要读私人文档/日历/邮件/私聊历史时才需要
-   （浏览器打开链接 → 回来 lark_login_finish）
+0) lark_install action="install"        # 没装过才需要；升级用 action="check" 看有没有新版
+1) lark_doctor               # 先看缺什么
+2) lark_identity             # 看接入的是哪个飞书应用（名/描述/头像/owner）
+3) lark_account_upsert      id="work" label="公司主账号" appId="cli_xxx"
+                            description="研发群、周报文档、项目A 多维表格" tags=["研发","周报","项目A"]
+4) lark_account_set_secret account="work" appSecret="..."      # 只回长度
+5) lark_status               # bot ✅ 就能干活了
+6) lark_scopes profile="read"   # 缺哪些权限？给一条预填好的申请链接，打开点确认
+7) lark_login_start qrcode=true
+   （拿到链接 + 一张二维码：桌面点「打开授权页」直接跳，手机扫码就完事；
+     完成后回来 lark_login_finish）
+```
+
+装完之后**不用记账户**：把文档链接丢给它就行。
+
+```
+lark_read_doc url="https://xxx.feishu.cn/docx/xxxxxxxx"
+# → 自动识别 docx/wiki/sheets/base/slides，从认证池里依次试，读到就返回正文
 ```
 
 > 老机器升级：`lark-cli-win\_native-config\` 里的旧凭据会在**首次启动时自动导入**为 `default` 账户
 > （`autoMigrate: true`）。导完那个目录就只剩纪念价值，可以删。
+
+### 4.1 设备流三种完成方式（目标：尽量零点击）
+
+| 方式 | 操作 | 说明 |
+|---|---|---|
+| 桌面点开 | 面板点「打开授权页」 | `window.open` 带 `noopener`，不会把面板导航走 |
+| 手机扫码 | 面板直接显示二维码 | 二维码由 `auth qrcode` 现画（≈0.9 KB PNG），指向同一个 flow_id |
+| 纯文本 | 复制链接到任何浏览器 | 最低保底，也适合转给别人 |
+
+三条路指向**同一个** `verification_url`，用哪条都行；二维码是一次性的，旧码扫了只会报错。
+
+**第二步也在面板里**：确认完点「我已完成授权」（`POST /plugins/larkcli/login-finish`），不用回会话。
+这一步是长轮询，所以**只等 30 秒**；没确认就提示你「还没检测到你确认授权」，再点一次即可
+（device_code 在 10 分钟内仍然有效）。
+
+`lark_identity verify=true` 或面板的「验证 token」会真的打一次服务端（`auth status --verify`，
+实测 ~1.1s），这是**唯一**能区分「token 存在」与「token 真的还有效」的办法 ——
+不验时面板只会写「存在（未验证）」，不假装健康。
 
 ---
 
@@ -184,14 +253,15 @@ user token 约 2 小时过期，CLI 自动用 refresh token 续（refresh 约 7 
 
 这是最初的三条要求之一（「增加速度降低消耗」），具体落在五处：
 
-1. **9 个工具**，不是 200 个 —— 工具 schema 每轮都进上下文。
+1. **13 个工具**，不是 200 个 —— 工具 schema 每轮都进上下文。
+   v0.2.0 新增的 4 个都做了“零杂音”设计：`lark_scopes` 纯本地（零 API）、`lark_identity` 按需拉（不自动）、
+   `lark_install` 只在你要拍的时候跑、`lark_read_doc` 一个参数就把多账户试完。
 2. **`lark_schema` 全量 1.5 MB 只在本地**，进上下文的只有索引（几百字）或单方法（约 2 KB）。
 3. **`lark_status` 默认 brief + 60s TTL 缓存**；`detail="full"` 才展开。
 4. **账户选择纯本地**：`lark_account_search` 不调 CLI、不花配额。
 5. **结果自动截断**（默认 24000 字符）并提示 `--page-limit` / `--page-size`，
    同时剥掉 CLI 的 `_notice` 升级提示。
-
-实测：`lark_schema` 索引 ≈ 6 KB；单方法查询 ≈ 2 KB；原始全量 1,496,509 字节（**约 250 倍差**）。
+实测：`lark_schema` 索引 ≈ 6 KB；单方法查询 ≈ 2 KB；原始全量 1,571,017 字节（**约 260 倍差**）。
 
 ---
 
@@ -202,6 +272,32 @@ user token 约 2 小时过期，CLI 自动用 refresh token 续（refresh 约 7 
 - HTTP 路由只接受 **loopback + 同源**；写接口拒收任何 `secret`/`token` 字段。
 - 高危命令（CLI 标 `high-risk-write`，需 `--yes`）**不代用户点**；写操作先 `--dry-run`。
 - lark-cli 自带输入防注入与输出净化，别主动关。
+
+### 7.1 验证（改完代码跑这一条）
+**本机的 `node` 不在 PATH 里**（DSH 桌面版自带运行时），所以直接写 `node` 会报「找不到命令」。
+用完整路径：
+
+```powershell
+$node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
+cd C:\dsh\dw-plugin\dsh-larkcli
+& $node test\run.mjs     # 38 项：核心逻辑与错误路径
+& $node test\tools.mjs   # 27 项：13 个工具的注册与描述
+& $node test\client.mjs  # 浏览器半：初始态 / 带数据 / 身份块 / 按钮 / 缺权限
+& $node test\smoke.mjs   # 结构与 10 条路由（少一条界面就 404）
+& $node test\v2.mjs      # 76 项：scopes / resolver / install + 回归
+& $node test\activate.mjs # apply() 在 5 种 ctx 下都不崩（无 webServer / config 缺失 / 垃圾 config）
+```
+
+`test/e2e.mjs` **不在上面**：它是人工诊断脚本（真实凭据跑一遍并打印原始输出，无断言）。
+
+
+`package.json` 里的 `test:all` 需要 `npm`，而本机运行时**不带 npm**；有 npm 的机器可以直接 `npm run test:all`。
+
+
+或直接：`& C:\dsh\dw-plugin\install.ps1 -Only dsh-larkcli`
+
+> 回归项里专门盯了两个曾真坏过的点：二维码不能写进 CLI 配置目录（必被 denylist 拒）、
+> `loginFinish` 不能挂 180s（面板点一下卡三分钟）。改这两处代码会被测试即时发现。
 
 ---
 
