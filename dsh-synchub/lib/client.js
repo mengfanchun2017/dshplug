@@ -1,4 +1,4 @@
-// Msynchub 浏览器半 v0.8.0：主面板（只读状态 + 手动同步 + 会话体检）+ 设置面板。
+// Msynchub 浏览器半 v0.9.0：主面板（只读状态 + 手动同步 + 会话救援）+ 设置面板。
 // 与 chatsync / dsh-config-manager 同形态：window.__ModuleLoader__.load 包装 + Cordis 导出。
 //
 // v0.3.0 的界面职责变了：0.2.0 是「看别人状态」，现在是「管自己同步」。
@@ -413,6 +413,23 @@ function firstCand(act) {
   const cs = candsOf(act);
   return cs.length ? cs[0] : null;
 }
+/* 体检结论只有三种，必须回答「能不能用」而不是「查到了什么」。
+   health 由宿主半算（sessiondoctor.js）：ok / repairable / needs-human。
+   旧版宿主半没有 health 字段，就退化看 error / warn，不能崩也不能谎报。 */
+function healthOf(d) {
+  if (!d || !d.summary) return { tone: 'muted', label: '尚未检查', line: '' };
+  const s = d.summary;
+  const h = s.health || (s.error ? 'needs-human' : s.warn ? 'repairable' : 'ok');
+  if (h === 'ok') {
+    return { tone: 'good', label: '● 能用', line: '会话都能打开，没有需要你处理的问题。' };
+  }
+  if (h === 'repairable') {
+    return { tone: 'warn', label: '● 能修',
+      line: `有 ${s.blocking || s.warn || 0} 处会让会话打不开或看不见，点下面一下就好。` };
+  }
+  return { tone: 'red', label: '● 要你定',
+    line: `有 ${s.blocking || s.error || 0} 处让会话打不开，且必须你指定改到哪个工作区（猜错会搬到错的地方）。` };
+}
 function checkedAtText(atMs) {
   if (!atMs) return '尚未检查';
   const t = new Date(atMs);
@@ -680,10 +697,19 @@ function checkedAtText(atMs) {
           if (r && r.ok) {
             setDoctor(null); // 让下一次渲染去重扫，拿最新结论
             await doDoctorScan();
-            setOkMsg(`已执行 ${(r.applied || []).length} 项；回滚点在 ${r.backupDir || '（已略）'}`);
-            if (r.verify && r.verify.ok) setOkMsg('修复完成，复查已无待处理项。侧边栏归属要重启 DSH 后才刷新。');
+            const fixed = (r.verify && r.verify.fixed) || 0;
+            const left = r.verify && typeof r.verify.blockingAfter === 'number' ? r.verify.blockingAfter : null;
+            if (left === 0) {
+              setOkMsg('修好了，会话现在能打开。侧边栏要重启 DSH 后才按新分组显示。');
+            } else {
+              setOkMsg(`修了 ${fixed} 处（已备份，回滚点在 ${r.backupDir || '（已略）'}），`
+                + `还剩 ${left === null ? '若干' : left} 处需要你指定目标。`);
+            }
           } else {
-            setDoctorErr((r && r.error) || '修复没有执行');
+            /* 后端返回健康态时说明「没事可修」，这不是错误，不要报红。 */
+            if (r && r.health) { await doDoctorScan(); }
+            if (r && r.health === 'ok') setOkMsg('没有需要修的，会话都能用。');
+            else setDoctorErr((r && r.error) || '修复没有执行');
           }
         } catch (ex) {
           setDoctorErr('修复异常：' + String((ex && ex.message) || ex));
@@ -1012,29 +1038,66 @@ function checkedAtText(atMs) {
           '「不同步」的目录只在这里列出来，永不进入仓库 —— 解释见设置面板的目录清单。',
           '危险项不统计大小（避免遍历几百 MB 的运行时目录）。')) : null;
 
-      /* ---------- ADR-034 会话体检卡 ----------
-         命名就按用户的词：他要的是「session 修复」。文案回答三件事：
-           ① 现在要不要管（徽标一句话）；② 不管会怎样；③ 点哪个按钮。
-         每条发现都带 actionId，按钮把 id 回传；改指额外给一个下拉选目标。 */
+      /* ---------- ADR-034 会话体检卡（0.9.0 收窄） ----------
+         用户原话：「能不能做成 1 —— 如果报错了先修复避免不能用，就可以了，
+         其他的交给专业的 session 管理插件」。所以这里只回答一个问题：
+         **会话是不是打不开 / 看不见**。重复登记、空组目录、归档一律不主动改。
+         整张卡就是一行结论 + 一个按钮 + 折叠起来的明细。 */
+      const dh = healthOf(doctor);
+      const blockingList = doctor ? (doctor.findings || []).filter(f => f.impact === 'blocking') : [];
+      const advisoryList = doctor ? (doctor.findings || []).filter(f => f.impact !== 'blocking') : [];
+      /* 不要直接信 doctor.rescue.ids：那是宿主半算的，一旦两边版本不同步
+         （旧宿主半没这个字段，或 findings/actions 被改了一侧）就会给出
+         与当前 findings 不一致的按钮。这里以 findings+actions 为唯一依据重算。 */
+      const rescueIds = blockingList.filter(f => {
+        const a = f.actionId && (doctor.actions || []).find(x => x.id === f.actionId);
+        return Boolean(a && a.safe);
+      }).map(f => f.actionId);
+      /* 动作区只写一份：blocking 与 advisory 两边都要能点，
+         否则降级成 advisory 的「未分组归位」就彻底没入口了。
+         纯函数、不调 hooks，所以可以就地定义。 */
+      const actRow = f => {
+        const act0 = f.actionId ? (doctor.actions || []).find(a => a.id === f.actionId) : null;
+        if (!act0) return null;
+        return e('div', { className: 'btns' },
+          /* 改指要选目标：下拉列出候选，默认第一个，但默认值必须显式传回。 */
+          act0.kind === 'relocate-group' && firstCand(act0)
+            ? e('select', {
+                value: (doctorPick[act0.id] || firstCand(act0).wsId || ''),
+                onChange: ev => setDoctorPick(p => ({ ...p, [act0.id]: ev.target.value })),
+                style: { marginRight: 6 },
+              }, (candsOf(act0) || []).map(c =>
+                e('option', { key: c.wsId, value: c.wsId }, `${c.title}（${c.path}）`)))
+            : null,
+          e('button', {
+            disabled: Boolean(doctorBusy),
+            onClick: () => {
+              if (act0.kind === 'relocate-group') {
+                const wsId = doctorPick[act0.id] || (firstCand(act0) && firstCand(act0).wsId);
+                doDoctorApply([act0.id], { [act0.id]: wsId });
+              } else {
+                doDoctorApply([act0.id]);
+              }
+            },
+          }, act0.safe ? act0.label : `确认并${act0.label}`));
+      };
       const doctorCard = e('div', { className: 'card' },
         e('h3', null, '⑤ 会话体检与修复',
-          doctor
-            ? e('span', { className: doctor.summary.error ? 'red' : doctor.summary.warn ? 'warn' : 'good' },
-                doctor.summary.error ? '● 需要处理' : doctor.summary.warn ? '● 有提醒' : '● 一切正常')
-            : e('span', { className: 'muted' }, '尚未检查')),
+          e('span', { className: dh.tone }, dh.label)),
+
+        /* 一句话结论。不展开任何细节，用户只需要知道「要不要管」。 */
+        e('div', { style: { marginBottom: 6 } }, dh.line),
         e('div', { className: 'muted', style: { marginBottom: 8 } },
-          '目录改名/移动/重新添加工作区之后，会话会掉进「未分组」、或者侧边栏显示但点进去是空的。',
-          '这不是数据丢了 —— 是 workspace.json 的归属和 sessions/ 里的分组目录对不上。',
-          '这个卡片只读扫描先列问题，不自动修：涉及改归属时由你决定改成哪个。'),
+          '只管一件事：目录改名/移动之后会话点进去是不是空的。数据不会因此丢失，',
+          '重复登记、空组目录这类整洁问题不在这里处理。'),
 
         e('div', { className: 'btns' },
           e('button', { disabled: Boolean(doctorBusy), onClick: doDoctorScan },
-            doctorBusy === '扫描' ? '扫描中…' : (doctor ? '重新检查' : '开始检查（只读）')),
-          doctor && doctor.actions && doctor.actions.some(a => a.safe)
-            ? e('button', {
-                disabled: Boolean(doctorBusy),
-                onClick: () => doDoctorApply(doctor.actions.filter(a => a.safe).map(a => a.id)),
-              }, doctorBusy === '修复' ? '修复中…' : `一键修安全项（${doctor.actions.filter(a => a.safe).length}）`)
+            doctorBusy === '扫描' ? '检查中…' : (doctor ? '重新检查' : '检查一下（只读）')),
+          /* 只有一个修复按钮，且只在真的能一键修时出现。 */
+          rescueIds.length
+            ? e('button', { className: 'primary', disabled: Boolean(doctorBusy), onClick: () => doDoctorApply(rescueIds) },
+                doctorBusy === '修复' ? '修复中…' : `一键修复（${rescueIds.length}）`)
             : null,
           doctor && doctor.verify && !doctor.verify.ok
             ? e('button', { disabled: Boolean(doctorBusy), onClick: doDoctorScan }, '复查')
@@ -1042,30 +1105,22 @@ function checkedAtText(atMs) {
 
         doctorErr ? e('div', { className: 'alert red' }, doctorErr) : null,
 
-        doctor ? e('div', { className: 'note', style: { marginTop: 8 } },
-          e('div', null,
-            '扫了 ', doctor.counts.groups, ' 个分组 / ', doctor.counts.sessionDirs, ' 个会话目录：',
-            '顶层 ', doctor.counts.topLevel, '，subagent ', doctor.counts.subagent, '，',
-            '损坏 ', doctor.counts.broken, '；已登记 ', doctor.counts.registered, '，已归档 ', doctor.counts.archived),
-          doctor.counts.workspaceFileMissing
-            ? e('div', { className: 'warn' }, '注意：找不到 storages\\workspace.json —— 这是全新安装的正常状态，不是错误。')
-            : null,
-          e('div', { className: 'muted' }, '检查时间：', checkedAtText(doctor.at))) : null,
+        /* 扫完但全可修时给一句「已经好了」的反馈。 */
+        doctor && doctor.verify ? e('div', { className: doctor.verify.ok ? 'note good' : 'note warn' },
+          doctor.verify.ok
+            ? '修好了。重启 DSH 后侧边栏就正常了。'
+            : `还有 ${doctor.verify.blockingAfter || 0} 处不能自动修，看下面。`) : null,
 
-        /* 没有发现问题时给一个明确结论，不要只留一堆数字让人自己判断。 */
-        doctor && doctor.findings.length === 0
-          ? e('div', { className: 'note good' },
-              '没有任何需要处理的问题。分组目录、登记表、归档列表三者是一致的。')
-          : null,
-
-        doctor && doctor.findings.length
-          ? e('div', { style: { marginTop: 10 } }, doctor.findings.map((f, i) => {
+        /* 关键的只有 blocking 项。每项都回答了「为什么不能用」+ 一个动作。 */
+        blockingList.length
+          ? e('div', { style: { marginTop: 10 } }, blockingList.map((f, i) => {
               const act0 = f.actionId ? (doctor.actions || []).find(a => a.id === f.actionId) : null;
-              const tone = f.severity === 'error' ? 'red' : f.severity === 'warn' ? 'warn' : 'muted';
               return e('div', { key: i, className: 'note', style: { marginBottom: 10 } },
-                e('div', { className: tone, style: { fontWeight: 600 } },
-                  f.severity === 'error' ? '✕ ' : f.severity === 'warn' ? '! ' : '· ', f.title),
+                e('div', { className: 'warn', style: { fontWeight: 600 } }, '! ', f.title),
                 e('div', { className: 'muted', style: { margin: '4px 0' } }, f.detail),
+                /* 不可修的一类（工作区路径没了）必须说清「要你做什么」。 */
+                !act0 ? e('div', { className: 'muted' },
+                  '这项改不了自动修：需要你在 DSH 里把那个工作区重新添加回来。') : null,
                 act0 ? e('div', { className: 'btns' },
                   /* 改指要选目标：下拉列出候选，默认第一个，但默认值必须显式传回。 */
                   act0.kind === 'relocate-group' && firstCand(act0)
@@ -1086,10 +1141,31 @@ function checkedAtText(atMs) {
                         doDoctorApply([act0.id]);
                       }
                     },
-                  }, act0.safe ? act0.label : `确认并${act0.label}`),
-                  act0.safe ? null : e('span', { className: 'muted', style: { marginLeft: 6 } }, '（会动 workspace.json，已备份）')
-                ) : null);
+                  }, act0.safe ? act0.label : `确认并${act0.label}`)) : null);
             }))
+          : null,
+
+        /* 其余全部折起来：默认不看，但它们必须可查。 */
+        doctor && (advisoryList.length || (doctor.counts && doctor.counts.sessionDirs))
+          ? e('details', { style: { marginTop: 10 } },
+              e('summary', { className: 'muted', style: { cursor: 'pointer' } },
+                '明细与整洁项（不影响使用，共 ', advisoryList.length, ' 条）'),
+              e('div', { className: 'note', style: { marginTop: 6 } },
+                e('div', null,
+                  '扫了 ', doctor.counts.groups, ' 个分组 / ', doctor.counts.sessionDirs, ' 个会话目录：',
+                  '顶层 ', doctor.counts.topLevel, '，subagent ', doctor.counts.subagent, '，',
+                  '损坏 ', doctor.counts.broken, '；已登记 ', doctor.counts.registered, '，已归档 ', doctor.counts.archived),
+                doctor.counts.workspaceFileMissing
+                  ? e('div', { className: 'warn' }, '找不到 storages\\workspace.json —— 全新安装的正常状态，不是错误。')
+                  : null,
+                e('div', { className: 'muted' }, '检查时间：', checkedAtText(doctor.at))),
+              advisoryList.map((f, i) => e('div', { key: i, className: 'note', style: { marginBottom: 6 } },
+                e('div', { className: 'muted', style: { fontWeight: 600 } }, '· ', f.title),
+                e('div', { className: 'muted' }, f.detail))),
+              advisoryList.length
+                ? e('div', { className: 'muted', style: { marginTop: 4 } },
+                    '这些只是不整洁，不影响打开会话，所以不自动改。')
+                : null)
           : null,
 
         doctor ? e('div', { className: 'note' },

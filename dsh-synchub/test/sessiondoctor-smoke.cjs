@@ -15,6 +15,8 @@
  *   G. 二次确认闸门：不带 confirm 一律拒绝，且拒绝时不写盘
  *   H. 执行后写回 workspace.json 且备份存在
  *   I. 源码级断言：只读扫描里没有写盘调用
+ *   J. 职责边界（0.9.0 收窄）：blocking/advisory 划分、一键救援范围、健康态
+ *      —— 用户原话：「如果报错了先修复避免不能用，就可以了，其他交给专业的插件」。
  */
 const fs = require('node:fs');
 const os = require('node:os');
@@ -78,6 +80,8 @@ function makeHome(spec) {
   fs.writeFileSync(path.join(home, 'storages', 'workspace.json'), JSON.stringify(doc), 'utf8');
 
   for (const g of spec.groups || []) {
+    /* 组目录本身要先建 —— 空组（sessions:[]）也要在磁盘上存在，否则扫不到。 */
+    fs.mkdirSync(path.join(home, 'sessions', g.name), { recursive: true });
     for (const s of g.sessions || []) writeSession(path.join(home, 'sessions', g.name, s.id), s.id, s);
   }
   return home;
@@ -333,6 +337,119 @@ function makeHome(spec) {
     assert.equal(typeof doc.encodeGroup, 'function');
     assert.equal(typeof idx.__test.sessionDoctorScan, 'function', 'index.js 必须 re-export 给 smoke 用');
     assert.equal(typeof idx.__test.sessionDoctorApply, 'function');
+  });
+
+  /* ================= J. 职责边界（0.9.0 收窄） =================
+     用户原话：「能不能做成 1 —— 如果报错了先修复避免不能用，就可以了，
+     其他的交给专业的 session 管理插件」。于是判据从「数据整不整齐」
+     改成「用户能不能打开会话」。J 组就是把这条边界钉住。 */
+  await okAsync('J1 干净现场 health=ok，且不需要救援', async () => {
+    const wsPath = path.join(os.tmpdir(), 'doc-j1-ws');
+    fs.mkdirSync(wsPath, { recursive: true });
+    const home = makeHome({
+      workspaces: [{ id: 'W1', path: wsPath, title: 'j1', sessionIds: ['session-j1'] }],
+      groups: [{ name: munge(wsPath), sessions: [{ id: 'session-j1', cwd: wsPath }] }],
+    });
+    const r = await doc.doctorScan({ dshHome: home });
+    assert.equal(r.summary.health, 'ok', '干净现场必须报能用：' + JSON.stringify(r.summary));
+    assert.equal(r.rescue.needed, false);
+    assert.equal(r.rescue.ids.length, 0);
+    assert.equal(r.summary.blocking, 0);
+  });
+
+  await okAsync('J2 悬空引用（点进去空白）属于 blocking，且可一键救援', async () => {
+    const wsPath = path.join(os.tmpdir(), 'doc-j2-ws');
+    fs.mkdirSync(wsPath, { recursive: true });
+    const home = makeHome({
+      workspaces: [{ id: 'W1', path: wsPath, title: 'j2', sessionIds: ['session-ghost'] }],
+      groups: [],
+    });
+    const r = await doc.doctorScan({ dshHome: home });
+    const f = r.findings.find(x => x.code === 'dangling-ref');
+    assert.ok(f, '应识别悬空引用');
+    assert.equal(f.impact, 'blocking', '点进去是空白 = 不能用 = blocking');
+    assert.equal(r.summary.health, 'repairable', '全可一键修时必须是 repairable');
+    assert.ok(r.rescue.needed, '应标为需要救援');
+    assert.equal(r.rescue.ids.length, 1, '救援列表里应有 drop-ref：' + JSON.stringify(r.rescue));
+  });
+
+  await okAsync('J3 只有空组目录（不影响使用）不算 blocking，health 仍为 ok', async () => {
+    const wsPath = path.join(os.tmpdir(), 'doc-j3-ws');
+    fs.mkdirSync(wsPath, { recursive: true });
+    const home = makeHome({
+      workspaces: [{ id: 'W1', path: wsPath, title: 'j3', sessionIds: ['session-j3'] }],
+      groups: [
+        { name: munge(wsPath), sessions: [{ id: 'session-j3', cwd: wsPath }] },
+        { name: '--C-leftover-empty--', sessions: [] },
+      ],
+    });
+    const r = await doc.doctorScan({ dshHome: home });
+    const f = r.findings.find(x => x.code === 'empty-group');
+    assert.ok(f, '应识别空组目录：' + JSON.stringify(r.findings.map(x => x.code)));
+    assert.equal(f.impact, 'advisory', '空组只是不整洁，不该算不能用');
+    assert.equal(r.summary.blocking, 0, '空组不能计入 blocking');
+    assert.equal(r.summary.health, 'ok', '只有整洁问题时必须报「能用」');
+    assert.equal(r.rescue.ids.length, 0, '整洁项不能进救援列表');
+    assert.ok(r.misc.count >= 1, '但要如实计入 misc，不能藏起来');
+  });
+
+  await okAsync('J4 一键救援（不传 ids）只动「不能用」的，不碰空组目录', async () => {
+    const wsPath = path.join(os.tmpdir(), 'doc-j4-ws');
+    fs.mkdirSync(wsPath, { recursive: true });
+    const home = makeHome({
+      workspaces: [{ id: 'W1', path: wsPath, title: 'j4', sessionIds: ['session-real', 'session-ghost'] }],
+      groups: [
+        { name: munge(wsPath), sessions: [{ id: 'session-real', cwd: wsPath }] },
+        { name: '--C-j4-empty--', sessions: [] },
+      ],
+    });
+    const emptyDir = path.join(home, 'sessions', '--C-j4-empty--');
+    assert.ok(fs.existsSync(emptyDir), '前置：空组目录应该在');
+
+    const r = await doc.doctorApply({ dshHome: home, confirm: 'REPAIR' });
+    assert.equal(r.ok, true, '一键救援不应失败：' + JSON.stringify(r));
+    assert.equal(r.scope, 'rescue', '结里要标明本次范围是救援');
+    const kinds = r.applied.map(x => x.kind);
+    assert.deepEqual(kinds, ['drop-ref'], '只该清悬空引用，实际：' + JSON.stringify(kinds));
+    assert.ok(fs.existsSync(emptyDir), '空组目录不能被顺手删掉（那不是救援范围）');
+  });
+
+  await okAsync('J5 需要人指定目标的（改指）→ health=needs-human 且不进救援列表', async () => {
+    const live = path.join(os.tmpdir(), 'doc-j5-live');
+    fs.mkdirSync(live, { recursive: true });
+    const dead = path.join(os.tmpdir(), 'doc-j5-dead');
+    const home = makeHome({
+      workspaces: [{ id: 'W1', path: live, title: 'j5', sessionIds: [] }],
+      groups: [{ name: munge(dead), sessions: [{ id: 'session-j5', cwd: dead }] }],
+    });
+    const r = await doc.doctorScan({ dshHome: home });
+    assert.equal(r.summary.health, 'needs-human',
+      '改指需要人给目标，不能说成可自动修：' + JSON.stringify(r.summary));
+    assert.equal(r.rescue.ids.length, 0, '不能把改指塞进一键救援（猜错就搬到错的地方）');
+    assert.ok(r.rescue.humanCodes.indexOf('orphan-group-relocatable') >= 0,
+      '要如实列出哪些项要人管：' + JSON.stringify(r.rescue.humanCodes));
+  });
+
+  await okAsync('J6 每条发现都必须带合法的 impact，不能有漏网', async () => {
+    const wsPath = path.join(os.tmpdir(), 'doc-j6-ws');
+    fs.mkdirSync(wsPath, { recursive: true });
+    const dead = path.join(os.tmpdir(), 'doc-j6-dead');
+    const home = makeHome({
+      workspaces: [{ id: 'W1', path: wsPath, title: 'j6', sessionIds: ['session-ghost'] }],
+      groups: [
+        { name: munge(wsPath), sessions: [{ id: 'session-j6', cwd: wsPath }] },
+        { name: munge(dead), sessions: [{ id: 'session-j6b', cwd: dead }] },
+        { name: '--C-j6-empty--', sessions: [] },
+      ],
+    });
+    const r = await doc.doctorScan({ dshHome: home });
+    assert.ok(r.findings.length >= 3, '造了三种故障，应该全部报出来');
+    for (const f of r.findings) {
+      assert.ok(f.impact === 'blocking' || f.impact === 'advisory',
+        `发现 ${f.code} 的 impact 不合法：${f.impact}`);
+    }
+    assert.equal(r.summary.blocking + r.summary.advisory, r.summary.total,
+      'blocking + advisory 必须等于 total，不然就漏数据了');
   });
 
   /* ---------------- 汇总 ---------------- */

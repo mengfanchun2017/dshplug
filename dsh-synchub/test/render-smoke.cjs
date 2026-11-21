@@ -339,15 +339,17 @@ ok('改指必须带 targets（不让前端猜目标）',
   /body\.targets = targets/.test(src0) && /\{ \[act0\.id\]: wsId \}/.test(src0),
   'relocate 不带 targets 会被后端拒绝');
 ok('体检卡文案说清「数据没丢」而不是只报错误',
-  /这不是数据丢了/.test(src0),
+  /数据不会因此丢失/.test(src0),
   '用户最怕丢数据，必须先回答这个问题');
 ok('改完提示要重启 DSH 才刷新归属',
   /重启 DSH 才按新分组显示/.test(src0),
   '不说明就会让人以为没修好');
 
 /* E0c — 体检卡的真渲染。
-   E0b 那 7 条全是源码正则，查不出渲染期才求值的错误（历史上就因此白屏过两次）。
-   本人真跑三种状态：未扫描 / 扫完有发现 / 接口报错。
+   E0b 那几条全是源码正则，查不出渲染期才求值的错误（历史上就因此白屏过两次）。
+   E0c 真跑五种状态：未扫描 / 有发现 / 接口报错 / 干净 / 缺字段。
+   fixture 必须带 impact + health + rescue —— 0.9.0 把判定从「整齐不整齐」
+   改成「能不能用」，没了这三个字段就测不到真正的分支。
    注意 Panel 的 state 是「按位置」注入的，index 0~17 先用 undefined 占位，
    doctor 在 18、doctorBusy 19、doctorErr 20、doctorPick 21。 */
 const doctorFixture = {
@@ -356,17 +358,21 @@ const doctorFixture = {
   dshHome: 'C:\\Users\\x\\.dsh',
   counts: { workspaces: 2, groups: 3, sessionDirs: 9, topLevel: 8, subagent: 1, broken: 0,
     registered: 4, archived: 0, workspaceFileMissing: false },
-  summary: { error: 0, warn: 2, info: 1, fixable: 0, needsChoice: 3, total: 3 },
+  /* 改指是 blocking 但 safe=false → 不自作主张搬；悬空引用可一键清 → repairable。 */
+  summary: { error: 0, warn: 2, info: 1, fixable: 1, needsChoice: 2, total: 3,
+    blocking: 2, advisory: 1, rescue: 1, misc: 1, needsHuman: 1, health: 'repairable' },
+  rescue: { needed: true, ids: ['drop:abc'], humanCodes: ['orphan-group-relocatable'] },
+  misc: { ids: ['rmdir:--C-dsh-gone--'], count: 1 },
   findings: [
-    { code: 'orphan-group-relocatable', severity: 'warn',
+    { code: 'orphan-group-relocatable', severity: 'warn', impact: 'blocking',
       title: '组 --C-dsh-old-- 的 1 个会话可改指到一个现存工作区',
       detail: '原目录已不存在，典型原因是目录被改名了。',
       fixable: true, actionId: 'relocate:--C-dsh-old--' },
-    { code: 'dangling-ref', severity: 'warn',
+    { code: 'dangling-ref', severity: 'warn', impact: 'blocking',
       title: '1 条登记指向已删除的会话',
       detail: '清引用即可，不碰任何正文文件。',
       fixable: true, actionId: 'drop:abc' },
-    { code: 'empty-group', severity: 'info',
+    { code: 'empty-group', severity: 'info', impact: 'advisory',
       title: '空组 --C-dsh-gone--', detail: '改名后留下的空壳。',
       fixable: true, actionId: 'rmdir:--C-dsh-gone--' },
   ],
@@ -395,16 +401,21 @@ const renderPanel = (doctorVals) => renderTree(slots.main, baseArgs.concat(pad(d
 const d0 = renderPanel([null, '', '', {}]);
 ok('体检未扫描时渲染不抛错', !d0.threw, d0.threw && d0.threw.message);
 ok('体检未扫描显示「尚未检查」', !d0.threw && d0.text.indexOf('尚未检查') >= 0);
-ok('体检未扫描不谎称一切正常', !d0.threw && d0.text.indexOf('一切正常') < 0);
-ok('体检卡有扫描按钮', !d0.threw && d0.text.indexOf('开始检查') >= 0);
+ok('体检未扫描不谎称「能用」也不谎称「有问题」',
+  !d0.threw && d0.text.indexOf('● 能用') < 0 && d0.text.indexOf('要你定') < 0);
+ok('体检卡有扫描按钮', !d0.threw && d0.text.indexOf('检查一下') >= 0);
 
 // ② 扫完有发现：这是真正会求值 payload.candidates 的路径。
 const d1 = renderPanel([doctorFixture, '', '', {}]);
 ok('体检有发现时渲染不抛错', !d1.threw, d1.threw && d1.threw.message);
 ok('体检有发现时无子组件报错', d1.errors.length === 0, d1.errors.join('; '));
 ok('体检列出问题标题', !d1.threw && d1.text.indexOf('可改指到一个现存工作区') >= 0);
-ok('体检显示分级徽标', !d1.threw && d1.text.indexOf('有提醒') >= 0);
-ok('体检显示扫描统计', !d1.threw && d1.text.indexOf('个分组') >= 0);
+ok('体检结论说「能不能用」而不是「查到几条」',
+  !d1.threw && d1.text.indexOf('能修') >= 0,
+  '徽标应该是「能用/能修/要你定」三种之一');
+ok('体检把整洁项折进 details，不占首屏',
+  !d1.threw && d1.text.indexOf('明细与整洁项') >= 0,
+  '重复登记/空组这类不该占首屏，必须折叠');
 ok('可改指项渲染出候选下拉（真求值 candidates）',
   !d1.threw && JSON.stringify(d1).length > 0 && d1.text.indexOf('dw-plugin（C:\\dsh\\dw-plugin）') >= 0,
   '下拉没渲染出来，可能是 payload.candidates 求值出错');
@@ -412,8 +423,10 @@ ok('安全项按钮不要求二次确认',
   !d1.threw && d1.text.indexOf('清掉悬空引用') >= 0);
 ok('非安全项按钮文案带「确认并」',
   !d1.threw && d1.text.indexOf('确认并把 1 个会话改指') >= 0);
-ok('有安全项时出现一键修复按钮',
-  !d1.threw && d1.text.indexOf('一键修安全项') >= 0);
+ok('只有可一键救援的项才进总按钮（改指不进）',
+  !d1.threw && /一键修复（1）/.test(d1.text),
+  '改指要人给目标，不能默默默认第一个候选就往一键里塞');
+ok('有可救援项时出现一个总修复按钮', !d1.threw && d1.text.indexOf('一键修复') >= 0);
 ok('体检卡说明回滚点', !d1.threw && d1.text.indexOf('回滚点') >= 0);
 
 // ③ 异常：错误必须显示成 alert，而不是静默。
@@ -426,8 +439,9 @@ const cleanDoc = JSON.parse(JSON.stringify(doctorFixture));
 cleanDoc.findings = []; cleanDoc.actions = [];
 cleanDoc.summary = { error: 0, warn: 0, info: 0, fixable: 0, needsChoice: 0, total: 0 };
 const d3 = renderPanel([cleanDoc, '', '', {}]);
-ok('体检无问题时给明确结论', !d3.threw && d3.text.indexOf('没有任何需要处理的问题') >= 0);
-ok('体检无问题时不显示一级修复按钮', !d3.threw && d3.text.indexOf('一键修安全项') < 0);
+ok('体检无问题时明确说「能用」',
+  !d3.threw && d3.text.indexOf('能用') >= 0 && d3.text.indexOf('没有需要你处理的问题') >= 0);
+ok('体检无问题时不给修复按钮', !d3.threw && d3.text.indexOf('一键修复') < 0);
 
 /* ⑤ 缺字段不能崩：旧版宿主半不返回 candidates / summary 时必须降级。
    这是「新版 client + 旧版 index」的真实升级态。 */

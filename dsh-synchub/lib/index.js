@@ -34,7 +34,7 @@ const execFileAsync = promisify(execFile);
 
 const name = 'dsh-synchub';
 const inject = ['webServer'];
-const VERSION = '0.8.0';
+const VERSION = '0.9.0';
 /* 分支不能写死。远端仓库可能是 master（GitHub 旧默认）也可能是 main，
    写死一个就会在已有仓库上推出一个**平行的空历史分支**。
    优先级：config.channels[ch].branch → 远端 HEAD 指向的分支 → DEFAULT_BRANCH。 */
@@ -3332,24 +3332,27 @@ function routesFor() {
       handler: async (_req, res) => json(res, 200, {
         ok: true,
         why: '工作区目录改名/移动/重加之后，会话会掉进「未分组」或变成幽灵组。数据没丢，是 workspace.json 的归属和 sessions/ 的分组目录对不上了。',
+        scope: '只管「能不能用」：会话看不见 / 点进去空白 / 工作区打不开。重复登记、空组目录、归档这类整洁问题只报告不主动修 —— 那是专门的会话管理插件的事。',
         how: [
-          'GET  /api/dsh-synchub/session-doctor                          # 全量体检（只读），返回 findings + actions',
-          "POST /api/dsh-synchub/session-doctor {confirm:'REPAIR'}        # 执行全部安全动作",
-          "POST /api/dsh-synchub/session-doctor {ids:[...], confirm:'REPAIR'}   # 只执行指定动作",
+          'GET  /api/dsh-synchub/session-doctor                          # 全量体检（只读），返回 findings + actions + summary.health',
+          "POST /api/dsh-synchub/session-doctor {confirm:'REPAIR'}        # 一键救援：只跑 rescue.ids（影响「能不能用」且 safe 的）",
+          "POST /api/dsh-synchub/session-doctor {ids:[...], confirm:'REPAIR'}   # 只执行指定动作（想把整洁项一起做，把 misc.ids 也带进来）",
           "POST /api/dsh-synchub/session-doctor {ids:['relocate:...'], targets:{'relocate:...':'<wsId>'}, confirm:'REPAIR'}  # 改指到指定工作区",
         ],
         findings: {
-          'workspace-path-missing': '工作区登记指向的路径已不存在（改名/删除），不可自动修',
-          'dangling-ref': '登记了磁盘上不存在的会话，可安全清引用',
-          'duplicate-ref': '同一会话被登记进多个工作区，保留一个',
-          'orphan-group-recoverable': '组目录还在但登记丢了，可重建登记或搬进目标工作区',
-          'orphan-group-relocatable': '原工作目录已不存在（典型是改名了），可改指到现存工作区',
-          'orphan-group-dead': '对不上任何工作区时只能归档（只隐藏，不删正文）',
-          'unregistered-live': '会话就在有效组里却没登记，补一条即可',
-          'group-mismatch': '正文目录与归属工作区不一致，需要搬目录',
-          'empty-group': '空组目录，删掉无害',
+          'workspace-path-missing': '[blocking] 工作区登记指向的路径已不存在（改名/删除），不可自动修，需重新添加工作区',
+          'dangling-ref': '[blocking] 登记了磁盘上不存在的会话，点进去是空白；可安全清引用',
+          'duplicate-ref': '[advisory] 同一会话被登记进多个工作区，只影响整洁，不主动修',
+          'orphan-group-recoverable': '[blocking] 组目录还在但登记丢了，可重建登记或搬进目标工作区',
+          'orphan-group-relocatable': '[blocking] 原工作目录已不存在（典型是改名了），可改指到现存工作区（必须人给 targets）',
+          'orphan-group-dead': '[advisory] 对不上任何工作区时的归档建议（只隐藏，不删正文），不主动修',
+          'unregistered-live': '[blocking] 会话就在有效组里却没登记，侧边栏看不见；补一条即可',
+          'group-mismatch': '[blocking] 正文目录与归属工作区不一致，需要搬目录',
+          'empty-group': '[advisory] 空组目录，不影响使用，不主动删',
         },
         notes: [
+          '职责边界（0.9.0）：只修「会话打不开/看不见」，其余只报告。blocking vs advisory 见 findings 里的 impact 字段。',
+          'summary.health 三态：ok=能用 / repairable=不能用但可一键修 / needs-human=不能用且必须人指定目标。',
           '只读扫描永不写盘；执行前先把 workspace.json 备份到 <state>/backups/doctor-<时间>/。',
           '搬目录一律「复制 → 逐文件/字节校验 → 删源」，失败时源仍在。',
           '30 秒内还在写入的会话拒绝搬动。',

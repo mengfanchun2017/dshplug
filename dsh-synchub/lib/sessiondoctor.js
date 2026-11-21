@@ -5,12 +5,20 @@
  * workspace.json」再塞进去会让它更难测。这里只做**纯逻辑**：入参给 dshHome，
  * 出参给结构化结论，不注册路由、不读配置、不碰 git。
  *
- * 解决的故障（都是「目录改名」引发的同一类）：
+ * 解决的故障（都是「目录改名」引发的同一类，共同点是**会话用不了**）：
  *   ① 工作区改名/移动 → DSH 删掉旧登记、新建一个登记 → 旧会话全部掉进「未分组」
  *   ② sessions/<编码组>/ 目录还在，但 workspace.json 里已经没有对应工作区 → 幽灵组
- *   ③ workspace.json 里登记了会话，但磁盘上没有目录 → 悬空引用
- *   ④ 同一个会话被登记进两个工作区 → 删了又加一次的典型后果
- *   ⑤ 会话目录所在组与它的归属工作区路径不一致 → 显示在工作区 A、正文在 B
+ *   ③ workspace.json 里登记了会话，但磁盘上没有目录 → 悬空引用（点进去空白）
+ *   ④ 同一个会话被登记进两个工作区 → blocking（删了又加一次的典型后果）
+ *   ⑤ 会话目录所在组与它的归属工作区路径不一致 → 显示在工作区 A、正文在 B（打不开）
+ *   ⑥ 会话就在有效组里却没登记 → 侧边栏看不见
+ *
+ * **职责边界（0.9.0 收窄）**：synchub 只管「让它能用」。每条发现带 impact：
+ *   - blocking：会话看不见 / 点进去空白 / 工作区打不开 —— 属于本插件的职责，
+ *     其中动作 safe 的一律可以一键救援（summary.health='repairable'）。
+ *   - advisory：重复登记、空组目录、可以归档的幽灵组 —— 只是不整洁，不影响使用，
+ *     只报告不主动修。这些交给专门的会话管理插件，不要在这里掺和。
+ * 判断标准很硬：「用户是不是打不开/看不见会话」。不是「数据不整齐」。
  *
  * 判据一律用**正向编码比对**（把候选路径 encode 成组名去比），不做反向解码。
  * 原因：路径里的 `-` 与分隔符 `-` 无法区分，反解必然出错（`deepseek-harness` 会被
@@ -272,6 +280,7 @@ export async function doctorScan(opts = {}) {
     if (w.pathExists) continue;
     push({
       code: 'workspace-path-missing',
+      impact: 'blocking',
       severity: 'error',
       title: `工作区「${w.title || w.id}」的路径已不存在`,
       detail: `${w.path} 读不到。DSH 打开该工作区时会新建一个同路径的新登记，原来的 ${w.sessionIds.length} 个会话就会掉进「未分组」。`,
@@ -287,6 +296,7 @@ export async function doctorScan(opts = {}) {
     const id = `drop-dangling:${w.id}`;
     push({
       code: 'dangling-ref',
+      impact: 'blocking',
       severity: 'error',
       title: `「${w.title || w.id}」登记了 ${dead.length} 个磁盘上不存在的会话`,
       detail: '侧边栏会显示这些条目，点进去是空白。清掉引用不影响任何正文文件。',
@@ -308,6 +318,7 @@ export async function doctorScan(opts = {}) {
     const id = `dedupe:${sid}`;
     push({
       code: 'duplicate-ref',
+      impact: 'advisory',
       severity: 'warn',
       title: `会话 ${sid} 被登记进 ${list.length} 个工作区`,
       detail: `分别属于：${list.map(w => w.title || w.id).join('、')}。通常来自「删掉工作区再加回来」。保留路径与实际目录一致的那个。`,
@@ -339,6 +350,7 @@ export async function doctorScan(opts = {}) {
       const id = `adopt-group:${g.name}`;
       push({
         code: 'orphan-group-recoverable',
+        impact: 'advisory',
         severity: 'warn',
         title: `组 ${g.name} 下有 ${ids.length} 个会话可以归位到「${recoverWs.title}」`,
         detail: `这些会话的工作目录 ${liveCwd[0].cwd} 存在且已被工作区「${recoverWs.title}」登记，把正文目录搬过去并补登记即可恢复。`,
@@ -362,6 +374,7 @@ export async function doctorScan(opts = {}) {
       const id = `create-ws:${g.name}`;
       push({
         code: 'orphan-group-recoverable',
+        impact: 'advisory',
         severity: 'warn',
         title: `目录 ${live} 还在，但工作区登记丢了（${ids.length} 个会话）`,
         detail: 'DSH 在目录改名/重加工作区时会删掉旧登记。目录本身完好，重建一条登记就能让这些会话回到侧边栏。',
@@ -395,6 +408,7 @@ export async function doctorScan(opts = {}) {
         const id = `relocate:${g.name}`;
         push({
           code: 'orphan-group-relocatable',
+          impact: 'advisory',
           severity: 'warn',
           title: `组 ${g.name} 的 ${ids.length} 个会话可改指到一个现存工作区`,
           detail: `这些会话原来的工作目录（${deadCwd || '未知'}）已不存在 —— 典型原因是目录被改名了。正文还在，选一个目标工作区，它们就搬过去并补登记。最像的是「${candidates[0].title}」。`,
@@ -413,6 +427,7 @@ export async function doctorScan(opts = {}) {
       const aid = `archive-orphan:${g.name}`;
       push({
         code: 'orphan-group-dead',
+        impact: 'advisory',
         severity: 'info',
         title: `组 ${g.name} 的 ${ids.length} 个会话无法归位时，可以归档`,
         detail: `归档只是把它们从「未分组」里藏起来，正文一个字节都不动，日后还能取消归档。先试「改指到」，真对不上再归档。`,
@@ -441,6 +456,7 @@ export async function doctorScan(opts = {}) {
     const id = `register:${s.name}`;
     push({
       code: 'unregistered-live',
+      impact: 'blocking',
       severity: 'warn',
       title: `会话 ${s.name} 没登记进任何工作区`,
       detail: `它在组 ${s.group} 里，而该组对应工作区「${target.title || target.id}」。补一条登记即可，目录不需要搬。`,
@@ -466,6 +482,7 @@ export async function doctorScan(opts = {}) {
     const id = `move-dir:${s.name}`;
     push({
       code: 'group-mismatch',
+      impact: 'blocking',
       severity: 'warn',
       title: `会话 ${s.name} 的正文目录与归属工作区不一致`,
       detail: `正文在 ${s.group}，但登记在「${w.title || w.id}」（应为 ${w.group}）。搬过去才在重启后仍能打开。`,
@@ -487,6 +504,7 @@ export async function doctorScan(opts = {}) {
     const id = `rmdir:${g.name}`;
     push({
       code: 'empty-group',
+      impact: 'advisory',
       severity: 'info',
       title: `空组目录 ${g.name}`,
       detail: '里面没有会话，只是一个空壳。删掉不影响任何数据。',
@@ -502,6 +520,21 @@ export async function doctorScan(opts = {}) {
     });
   }
 
+  /* ---------- 4. 分成「不能用」与「其余」 ----------
+     设计目的（0.9.0）：synchub 的职责只是「别让会话用不了」。所以只有
+     impact==='blocking' 的发现才算救援范围；其余（重复登记、空组、归档）
+     一律降为 advisory，只报告不主动修 —— 那些交给专门的会话管理插件。
+     判据：blocking = 「侧边栏点进去是空的 / 会话看不见了 / 工作区整个打不开」。 */
+  const blocking = findings.filter(f => f.impact === 'blocking');
+  const advisory = findings.filter(f => f.impact === 'advisory');
+  const actionOf = id => actions.find(a => a.id === id) || null;
+  const isSafeFor = f => Boolean(f.actionId && (actionOf(f.actionId) || {}).safe);
+  /* 能一键搞定的「不能用」；剩下的要人给目标（改指/重建），或压根不可修。 */
+  const rescueIds = blocking.filter(isSafeFor).map(f => f.actionId);
+  const humanIds = [...new Set(blocking.filter(f => !isSafeFor(f)).map(f => f.code))];
+  /* safe 但只影响整洁的——不并入救援，单独列出来。 */
+  const miscIds = actions.filter(a => a.safe && rescueIds.indexOf(a.id) < 0).map(a => a.id);
+
   const summary = {
     error: findings.filter(f => f.severity === 'error').length,
     warn: findings.filter(f => f.severity === 'warn').length,
@@ -509,6 +542,13 @@ export async function doctorScan(opts = {}) {
     fixable: actions.filter(a => a.safe).length,
     needsChoice: actions.filter(a => !a.safe).length,
     total: findings.length,
+    blocking: blocking.length,
+    advisory: advisory.length,
+    rescue: rescueIds.length,
+    misc: miscIds.length,
+    needsHuman: humanIds.length,
+    /* ok=能用 / repairable=不能用但能一键修 / needs-human=不能用且要人给目标 */
+    health: blocking.length === 0 ? 'ok' : (rescueIds.length ? 'repairable' : 'needs-human'),
   };
 
   return {
@@ -530,6 +570,9 @@ export async function doctorScan(opts = {}) {
     },
     findings,
     actions,
+    /* 客户端只需看这两个字段：一键救援做什么、剩下多少要人管。 */
+    rescue: { needed: rescueIds.length > 0, ids: rescueIds, humanCodes: humanIds },
+    misc: { ids: miscIds, count: miscIds.length },
     summary,
   };
 }
@@ -562,15 +605,29 @@ export async function doctorApply(opts = {}) {
   const scan = await doctorScan({ dshHome, encode });
   if (!scan.ok) return scan;
 
+  /* 不传 ids = 一键救援：**只动「不能用」且 safe 的那些**。
+     以前是「所有 safe 都干」（连空组目录、重复登记一起改），范围太宽。
+     0.9.0 收窄：不传 ids 时只跑 scan.rescue.ids；想顺带搞整洁，显式传
+     ids 把 scan.misc.ids 一起带上 —— 让「救急」与「打扫」是两个决定。 */
   const wanted = Array.isArray(opts.ids) && opts.ids.length
     ? new Set(opts.ids)
-    : new Set(scan.actions.filter(a => a.safe).map(a => a.id));
+    : new Set(scan.rescue.ids);
   const chosen = scan.actions.filter(a => wanted.has(a.id));
-  if (!chosen.length) return { ok: false, error: '没有匹配的动作（先 GET 扫描拿 actions[].id）', available: scan.actions.map(a => a.id) };
+  if (!chosen.length) {
+    return {
+      ok: false,
+      error: scan.actions.length
+        ? '当前没有可一键救援的「不能用」项（剩下的要么需要人给目标，要么只影响整洁）'
+        : '没有需要处理的问题',
+      health: scan.summary.health,
+      available: scan.actions.map(a => a.id),
+      misc: scan.misc.ids,
+    };
+  }
 
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const backupDir = path.join(backupRoot, `doctor-${stamp}`);
-  const result = { ok: true, at: new Date().toISOString(), backupDir, applied: [], failed: [], skipped: [], wrote: [] };
+  const result = { ok: true, at: new Date().toISOString(), backupDir, scope: 'rescue', applied: [], failed: [], skipped: [], wrote: [] };
 
   /* 回滚点：workspace.json 先落一份，任何动作前都有退路。
      文件本来不存在（全新安装）就记一笔 missing 而不是当成失败 ——
@@ -784,19 +841,32 @@ export async function doctorApply(opts = {}) {
     }
   }
 
-  /* 验收：重扫一遍，看原问题是否真的消失。 */
+  /* 验收：重扫一遍，看「不能用」真的消失没有。
+     注意判据变了（0.9.0）：以前是「非 info 的发现为 0」，那把重复登记/空组也算失败，
+     但它们不影响使用，救急本来就不该去动。现在只看 blocking 是否归零。 */
   try {
     const after = await doctorScan({ dshHome, encode });
+    const beforeBlocking = scan.summary.blocking;
+    const afterBlocking = after.summary.blocking;
     result.verify = {
-      ok: after.ok && after.findings.filter(f => f.severity !== 'info').length === 0,
+      ok: after.ok && afterBlocking === 0,
       before: scan.summary,
       after: after.summary,
-      remaining: (after.findings || []).map(f => ({ code: f.code, title: f.title })),
+      blockingBefore: beforeBlocking,
+      blockingAfter: afterBlocking,
+      fixed: Math.max(0, beforeBlocking - afterBlocking),
+      remaining: (after.findings || [])
+        .filter(f => f.impact === 'blocking')
+        .map(f => ({ code: f.code, title: f.title })),
+      /* 剩下的整洁项不算失败，但要如实报出来，不能让人以为全干净了。 */
+      advisoryLeft: (after.findings || [])
+        .filter(f => f.impact !== 'blocking')
+        .map(f => f.code),
     };
   } catch (e) {
     result.verify = { ok: false, error: `复查失败：${e.message}` };
   }
 
-  result.note = 'workspace.json 已改，侧边栏要等 DSH 重启（或重新载入窗口）后才按新归属显示；会话正文是即时生效的。';
+  result.note = '只动了会影响「能不能打开」的部分。workspace.json 已改，侧边栏要等 DSH 重启（或重新载入窗口）后才按新归属显示；会话正文是即时生效的。';
   return result;
 }
