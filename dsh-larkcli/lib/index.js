@@ -1177,7 +1177,21 @@ export function apply(ctx, config) {
             if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'POST only' })
             try {
               const body = await readBody(req)
-              const r = await service.loginFinish({ account: body.account ? String(body.account) : undefined })
+              /*
+               * timeoutMs 必须是可调的。
+               * auth login --device-code 本身是**长轮询**：用户没点确认就挂到超时才返回。
+               * 面板的自动轮询如果每次都等 30s，那 10 分钟内只能试 17 次，且用户每轮都盯着
+               * “正在检查”转圈。传一个短的（3-5s）就能变成“快问快答”，每秒都能刷。
+               * 超时不会作废 device_code（只在 r.ok 时才删 pending），所以短超时是安全的。
+               */
+              const r = await service.loginFinish({
+                account: body.account ? String(body.account) : undefined,
+                // 上限 60s：给个足够宽的天花板，防止面板/脚本传个巨大值把路由挂住。
+                timeoutMs: Math.min(
+                  Math.max(Number(body.timeoutMs) > 0 ? Number(body.timeoutMs) : 30000, 1000),
+                  60000,
+                ),
+              })
               json(res, 200, { ok: !!r.ok, ...r })
             } catch (err) {
               json(res, 500, { ok: false, error: String((err && err.message) || err) })

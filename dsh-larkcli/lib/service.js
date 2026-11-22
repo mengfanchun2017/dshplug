@@ -563,6 +563,25 @@ export class LarkService {
         '没有可用的 device_code：先调 lark_login_start 拿授权链接，或在用户确认授权后用 deviceCode 参数传入。',
       )
     }
+    /*
+     * 过期的 pending 必须当成“没有”。
+     * 实测踩坑：账户目录里留着一份过期 6 分钟的 login-pending.json，
+     * 面板轮询就一直在用一个死掉（已被服务端消费）的 device_code 去兑换：
+     *   ① 每次只能拿到“还没确认”，看起来永远没反应；
+     *   ② 用户根本不知道真正要做的是重新发起授权。
+     * 所以过期就直说“需要重新拿链接”，并把死文件清掉，不继续拿它空转。
+     */
+    if (pending?.expiresAt) {
+      const exp = Date.parse(pending.expiresAt)
+      if (Number.isFinite(exp) && Date.now() > exp && !deviceCode) {
+        try {
+          fs.unlinkSync(pendingFile)
+        } catch {
+          /* ignore */
+        }
+        throw new Error('上次的授权链接已过期，请重新点「授权 user 身份」拿一条新的。')
+      }
+    }
     const r = await this.run(['auth', 'login', '--device-code', code], {
       accountId: acc.id,
       timeoutMs: Number(timeoutMs) > 0 ? Number(timeoutMs) : 30000,

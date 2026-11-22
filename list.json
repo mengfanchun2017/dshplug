@@ -49,7 +49,7 @@
     {
           "name": "dsh-larkcli",
       "dir": "dsh-larkcli",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "description": "飞书/Lark 原生驱动（Windows only，不靠 WSL、不装系统 Node）：直连官方 lark-cli.exe 并可一键安装/升级（镜像 + SHA256 + 原子替换），多账户（每账户独立 App + 独立 user 授权），展示接入的飞书应用名/描述/头像/用户名，按任务本地加权搜索账户以降低消耗，权限清单可一键申请（应用侧给预填链接、用户侧给命令），给文档链接就自动从认证池依次读取；13 个工具 + 设置面板。",
       "installedOn": [],
       "status": "active",

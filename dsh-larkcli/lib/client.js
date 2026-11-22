@@ -421,17 +421,30 @@ window.__ModuleLoader__.load({
         setBusy('正在获取授权链接…');
         setMsg(null);
         try {
-          const d = await postAction('/plugins/larkcli/login-start', { account: acc.id });
+          /*
+           * 默认一次要够：--domain all。
+           * 用户原话「机器人的和用户的授权如果都需要你就一次都开开」。
+           * bot 侧靠开发者后台的 scope，user 侧靠这次 login 拿到的授权；
+           * 两边都要的权限，一次 --domain all 就把 user 侧全申请了，不用分几次点。
+           */
+          const d = await postAction('/plugins/larkcli/login-start', { account: acc.id, domains: 'all' });
           if (!alive.current) return;
           /*
            * 目标④「尽量零点击」：链接不能只是一段文本。
            * 但也不自动开窗 —— 弹窗需要用户手势，setTimeout 里 window.open 会被拦。
            * 所以把三条路都摆出来：直接点开 / 复制 / 手机扫码。
            */
-          setAuthUrl({ url: d.verificationUrl || '', expiresIn: d.expiresIn || 600 });
+          setAuthUrl({
+            url: d.verificationUrl || '',
+            expiresIn: d.expiresIn || 600,
+            requestedAt: Date.now(),
+          });
           setMsg({
             ok: true,
-            text: `已发起授权（${Math.round((d.expiresIn || 600) / 60)} 分钟内有效）。\n下方点「打开授权页」直接跳，或扫码在手机飞书上确认；完成后回会话调 lark_login_finish。`,
+            text:
+              `已发起授权（${Math.round((d.expiresIn || 600) / 60)} 分钟内有效），本次一次性申请全部业务域权限。\n` +
+              '重要：请先在浏览器里登录到「你想授权的那个飞书账号」，再点「打开授权页」——授权是发给当前浏览器里登着的那个人的。\n' +
+              '授权完成后本面板会自动检测并刷新（也可随时点「刷新状态」）。',
           });
         } catch (e) {
           if (alive.current) setMsg({ ok: false, text: String((e && e.message) || e) });
@@ -439,6 +452,88 @@ window.__ModuleLoader__.load({
           if (alive.current) setBusy(null);
         }
       };
+
+      /*
+       * 授权后的自动刷新。
+       * 用户原话：「我点击了 user 身份授权，到网页授权完成了，但是这里没有刷新，还是 user 未授权状态」。
+       * 原因：面板只在点按钮时拉一次，浏览器里点头意之后没有任何人通知它。
+       * 而且真实完成要靠 login-finish（用 device_code 兑换）—— 光点头意不兑换，
+       * CLI 侧依旧认为 user 是 missing。所以「自动刷新」不只是刷新显示，
+       * 而是**主动去兑换并刷新显示**，否则用户等到天荒地老也不会变。
+       *
+       * 策略：发起授权后每 4s 试一次 login-finish（它是长轮询，只会快返回不阻塞），
+       * 拿到 ok 就停轮询、自动拉身份、通知父级刷新；10 分钟后放弃。
+       */
+      useEffect(() => {
+        if (!authUrl || !authUrl.url) return undefined;
+        let stopped = false;
+        let timer = null;
+        let tries = 0;
+        const deadline = (authUrl.requestedAt || Date.now()) + 10 * 60 * 1000;
+
+        const tick = async () => {
+          if (stopped || !alive.current) return;
+          if (Date.now() > deadline) {
+            setMsg({ ok: false, text: '授权链接已过期（10 分钟）。请重新点「授权 user 身份」拿一条新的。' });
+            setAuthUrl(null);
+            setBusy(null);
+            return;
+          }
+          tries += 1;
+          /*
+           * 间隔要**自适应**，不能写死 4s。
+           * 因为 timeoutMs 是 0.2.2 新增的宿主参数：如果宿主半还是旧版（没重启），
+           * 它会忽略这个字段、按默认 30s 长轮询，一个请求真的就占 30s。
+           * 写死 4s 排程会让请求不断堆积（同时多个 device_code 兑换在跑）。
+           * 所以：下一轮的延迟 = max(4s, 本轮实际耗时)，天然适配新旧两种宿主。
+           */
+          const startedAt = Date.now();
+          try {
+            /*
+             * timeoutMs=5000：让长轮询变成“快问快答”。
+             * 不传就是 30s，自动轮询会变成 34s 一轮、用户在 “正在检查” 里干等。
+             * 超时不会作废 device_code（service 只在 ok 时删 pending），所以短超时安全。
+             */
+            const d = await postAction('/plugins/larkcli/login-finish', { account: acc.id, timeoutMs: 5000 });
+            if (stopped || !alive.current) return;
+            if (d && d.ok) {
+              setMsg({ ok: true, text: '授权完成，user 身份已可用（状态已自动刷新）。' });
+              setAuthUrl(null);
+              setBusy(null);
+              await loadIdentity(false);
+              if (onChanged) onChanged();
+              return;
+            }
+            // 还没确认：keep polling，但把“正在等”告诉用户，别让人以为卡死
+            setBusy(`等待你在浏览器/手机上确认…（已检查 ${tries} 次）`);
+          } catch (e) {
+            /*
+             * 两类失败要分开处理：
+             *   - “链接已过期” = 确定性失败，再轮询一万次也不会变 → 停掉并让用户重新发起；
+             *   - 其他（网络抖动/子进程偶尔挂）= 继续轮询。
+             * 不区分就会变成：明明已经过期，面板还永远转着“等待确认”。
+             */
+            const msg = String((e && e.message) || e)
+            if (/过期|expired/i.test(msg)) {
+              setMsg({ ok: false, text: msg })
+              setBusy(null)
+              setAuthUrl(null)
+              return
+            }
+          }
+          if (stopped) return;
+          const cost = Date.now() - startedAt;
+          timer = setTimeout(tick, Math.max(4000, cost));
+        };
+
+        timer = setTimeout(tick, 3000);
+        return () => {
+          stopped = true;
+          if (timer) clearTimeout(timer);
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, [authUrl && authUrl.url, acc.id]);
+
 
       /*
        * 身份信息是**按需拉**的（opt-in）：describeAccount 要跑 2-3 次 API（bot info、application v6、
@@ -472,14 +567,28 @@ window.__ModuleLoader__.load({
       return react.createElement(
         'div',
         { style: { ...S.card, marginBottom: 10 } },
+        /*
+         * 标题区：第一行大字 = 显示名，第二行小字 = 技术 id。
+         * 用户原话：「上面写的 default 是说 default 用户么，我没有看到有改名字的地方」。
+         * 原先是直接写 acc.id（= 'default'）当标题，而“显示名”藏在「编辑描述/标签」里，
+         * 用户根本不会想到去那里改名。现在：
+         *   - 第一行大字 = 显示名（label），没设则回退到 id；
+         *   - 第二行小字 = id + appId，技术上认人用，但不抢占视觉；
+         *   - “默认”只是个徒标，表达“不指定时用哪个”，不是用户名。
+         */
         react.createElement(
           'div',
-          { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 } },
-          react.createElement('strong', { style: { fontSize: 13 } }, acc.id),
+          { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 2 } },
+          react.createElement('strong', { style: { fontSize: 14 } }, acc.label || acc.id),
           acc.isDefault ? react.createElement('span', { style: S.badge(true) }, '默认') : null,
           react.createElement('span', { style: S.badge(!!acc.bot) }, acc.bot ? 'bot 可用' : 'bot 不可用'),
           react.createElement('span', { style: S.badge(!!acc.user) }, acc.user ? 'user 已授权' : 'user 未授权'),
           acc.hasSecret ? null : react.createElement('span', { style: S.badge(false) }, '缺 secret'),
+        ),
+        react.createElement(
+          'div',
+          { style: { ...S.hint, margin: '0 0 8px', fontFamily: mono } },
+          'id ' + acc.id + (acc.appId ? '  ·  ' + acc.appId : ''),
         ),
 
         /*
@@ -538,6 +647,39 @@ window.__ModuleLoader__.load({
           ident
             ? react.createElement('button', { style: S.btnLink, disabled: !!busy, onClick: () => loadIdentity(true) }, '验证 token')
             : null,
+          /*
+           * 手动刷新按钮。
+           * 用户原话：「是否应该加个自动刷新或者手动刷新按钮」。
+           * 自动轮询只在“已发起授权”后跑；但人有无数种理由想手动确认现在到底是不是已授权
+           * （在另一台机器上点的、等了很久回头看、刚改了后台权限），所以必须有个随时可点的。
+           * 这个按钮要拉**真实状态**（不走缓存），否则点了没反应看起来就像坏了。
+           */
+          react.createElement(
+            'button',
+            {
+              style: S.btnLink,
+              disabled: !!busy,
+              onClick: async () => {
+                setBusy('正在刷新状态…');
+                setMsg(null);
+                try {
+                  await loadIdentity(false);
+                  if (onChanged) onChanged();
+                  setMsg({ ok: true, text: '状态已刷新。' });
+                } catch (e) {
+                  if (alive.current) setMsg({ ok: false, text: String((e && e.message) || e) });
+                } finally {
+                  if (alive.current) setBusy(null);
+                }
+              },
+            },
+            '刷新状态',
+          ),
+          /*
+           * 「我已完成授权」必须**任何时候都留着**。
+           * 自动轮询只在本次会话发起过授权时才会跑；如果用户是之前在别处发起的授权、
+           * 或者轮询刚好超时放弃了，那就只剩这一个手动入口能兑换 device_code。
+           */
           ident && ident.user && ident.user.available
             ? null
             : react.createElement(
@@ -549,7 +691,7 @@ window.__ModuleLoader__.load({
                     setBusy('正在完成授权…');
                     setMsg(null);
                     try {
-                      const d = await postAction('/plugins/larkcli/login-finish', { account: acc.id });
+                      const d = await postAction('/plugins/larkcli/login-finish', { account: acc.id, timeoutMs: 8000 });
                       setMsg({ ok: !!d.ok, text: d.message || (d.ok ? '授权完成' : '授权未完成') });
                       if (d.ok) {
                         setAuthUrl(null);
@@ -650,7 +792,7 @@ window.__ModuleLoader__.load({
               'div',
               null,
               react.createElement('div', { style: { marginBottom: 6 } },
-                react.createElement('div', { style: { ...S.hint, margin: '0 0 3px' } }, '显示名'),
+                react.createElement('div', { style: { ...S.hint, margin: '0 0 3px' } }, '显示名（面板上给人看的大字）'),
                 react.createElement('input', { style: S.input, value: label, onChange: (e) => setLabel(e.target.value) }),
               ),
               react.createElement('div', { style: { marginBottom: 6 } },
@@ -686,7 +828,9 @@ window.__ModuleLoader__.load({
               react.createElement(
                 'div',
                 { style: { display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' } },
-                react.createElement('button', { style: S.btn, onClick: () => setEditing(true) }, '编辑描述/标签'),
+                // 「改名」必须能被看见。用户原话：「我没有看到有改名字的地方」。
+                // 原先写「编辑描述/标签」，用户不会想到里面能改名 —— 显式说出来。
+                react.createElement('button', { style: S.btn, onClick: () => setEditing(true) }, '改名 / 描述 / 标签'),
                 acc.isDefault
                   ? null
                   : react.createElement('button', { style: S.btn, disabled: !!busy, onClick: makeDefault }, '设为默认'),
@@ -727,20 +871,66 @@ window.__ModuleLoader__.load({
         authUrl && authUrl.url
           ? react.createElement(
               'div',
-              { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 } },
+              null,
               react.createElement(
-                'button',
-                {
-                  style: S.btn,
-                  onClick: () => window.open(authUrl.url, '_blank', 'noopener,noreferrer'),
-                },
-                '打开授权页',
+                'div',
+                { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 } },
+                react.createElement(
+                  'button',
+                  {
+                    style: S.btnPrimary,
+                    onClick: () => window.open(authUrl.url, '_blank', 'noopener,noreferrer'),
+                  },
+                  '1. 打开授权页',
+                ),
+                react.createElement(Copyable, { text: authUrl.url, id: 'auth-' + acc.id }),
+                react.createElement(
+                  'button',
+                  {
+                    style: S.btn,
+                    disabled: !!busy,
+                    onClick: async () => {
+                      setBusy('正在检查授权结果…');
+                      setMsg(null);
+                      try {
+                        const d = await postAction('/plugins/larkcli/login-finish', { account: acc.id, timeoutMs: 8000 });
+                        if (!alive.current) return;
+                        setMsg({ ok: !!(d && d.ok), text: (d && d.message) || (d && d.ok ? '授权完成' : '还没有检测到确认') });
+                        if (d && d.ok) {
+                          setAuthUrl(null);
+                          await loadIdentity(false);
+                          if (onChanged) onChanged();
+                        }
+                      } catch (e) {
+                        if (alive.current) setMsg({ ok: false, text: String((e && e.message) || e) });
+                      } finally {
+                        if (alive.current) setBusy(null);
+                      }
+                    },
+                  },
+                  '2. 我已完成授权',
+                ),
+                react.createElement(
+                  'a',
+                  { href: '#', style: S.btnLink, onClick: (e) => { e.preventDefault(); setAuthUrl(null); } },
+                  '取消',
+                ),
               ),
-              react.createElement(Copyable, { text: authUrl.url, id: 'auth-' + acc.id }),
               react.createElement(
-                'a',
-                { href: '#', style: S.btnLink, onClick: (e) => { e.preventDefault(); setShowScopes(false); setAuthUrl(null); } },
-                '收起',
+                'div',
+                {
+                  style: {
+                    ...S.hint,
+                    margin: '0 0 8px',
+                    padding: '8px 10px',
+                    borderLeft: '3px solid ' + C.warn,
+                    background: 'var(--dsw-alias-bg-overlay)',
+                    lineHeight: 1.7,
+                  },
+                },
+                '先在浏览器登录到你要授权的飞书账号，再点第 1 步。',
+                react.createElement('br'),
+                '授权是发给浏览器当前登录的那个人的；登错了账号，授权就会落到别人身上。',
               ),
             )
           : null,
@@ -954,7 +1144,7 @@ window.__ModuleLoader__.load({
           ),
         ),
         react.createElement('div', { style: { marginBottom: 6 } },
-          react.createElement('div', { style: { ...S.hint, margin: '0 0 3px' } }, '显示名'),
+          react.createElement('div', { style: { ...S.hint, margin: '0 0 3px' } }, '显示名（面板上给人看的大字）'),
           react.createElement('input', { style: S.input, placeholder: '公司主账号', value: label, onChange: (e) => setLabel(e.target.value) }),
         ),
         react.createElement('div', { style: { marginBottom: 6 } },
@@ -1040,9 +1230,16 @@ window.__ModuleLoader__.load({
             'div',
             { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 } },
             react.createElement('strong', { style: { fontSize: 13 } }, loading ? '正在读取…' : `共 ${accounts.length} 个账户`),
-            snap && snap.defaultId ? react.createElement('span', { style: S.badge(true) }, `默认 ${snap.defaultId}`) : null,
+            snap && snap.defaultId
+              ? react.createElement(
+                  'span',
+                  { style: { ...S.hint, margin: 0 } },
+                  '不指定账户时用 ',
+                  react.createElement('strong', { style: { color: C.text } }, snap.defaultId),
+                )
+              : null,
             react.createElement('span', { style: { flex: 1 } }),
-            react.createElement('button', { style: S.btnPrimary, disabled: loading, onClick: () => load(true) }, loading ? '读取中…' : '刷新状态'),
+            react.createElement('button', { style: S.btnPrimary, disabled: loading, onClick: () => load(true) }, loading ? '读取中…' : '刷新全部状态'),
           ),
           layout && react.createElement(Row, { k: '二进制', v: `${layout.binaryExists ? '✅' : '❌'} ${layout.binary}` }),
           /* 版本号单独拉一次会跑子进程，所以面板只展示 data.version；安装卡再负责检查更新 */
@@ -1074,9 +1271,11 @@ window.__ModuleLoader__.load({
               react.createElement(
                 'p',
                 { style: { ...S.hint, margin: 0 } },
-                '用下面的「新增账户」建一个（id / App ID / 描述 / 标签），然后在会话里让 AI 调 ',
+                '一个账户 = 一个飞书应用（appId + secret）。要用几个飞书应用就建几个账户，它们相互独立。',
+                react.createElement('br'),
+                '建完后在会话里让 AI 调 ',
                 react.createElement('code', { style: { fontSize: 11.5 } }, 'lark_account_set_secret'),
-                ' 写入 App Secret。bot 身份配好 secret 即可用；要读私人文档/日历/邮件再授权 user 身份。',
+                ' 写入 App Secret（只报长度，不回显）。bot 身份配好 secret 即可用；要读私人文档/日历/邮件再点卡片上的「授权 user 身份」。',
               ),
             )
           : null,

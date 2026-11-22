@@ -145,7 +145,9 @@ Invoke-WebRequest -Uri 'http://127.0.0.1:64594/plugins/larkcli/status' -UseBasic
 | user ❌ | 还没授权，或 token 过期太久 | `lark_login_start qrcode=true` → 点链接或扫码 → `lark_login_finish` |
 | 二维码显示不出来 / 生成二维码失败 | **配置目录是 CLI 的保护区**，`--output` 不能落在 `LARKSUITE_CLI_CONFIG_DIR` 里 | 插件已改用 `mkdtemp`（cwd 也跟着换）；若手改过请抄回这一模式 |
 | 面板说「token 存在（未验证）」 | 这是故意的不假装健康 | 点「验证 token」/ `lark_identity verify=true`（~1.1s/账户） |
-| 点「我已完成授权」后说「还没检测到你确认授权」 | `auth login --device-code` 是**长轮询**，没点确认就干等；插件只等 30s 就返回 | 先去手机/浏览器点「同意」，再点一次；device_code 在 10 分钟内仍有效，重复点不坏 |
+| 点「我已完成授权」后说「还没检测到你确认授权」 | `auth login --device-code` 是**长轮询**，没点确认就干等；手动按钮等 8s、自动轮询等 5s 就返回 | 先去手机/浏览器点「同意」；device_code 在 10 分钟内仍有效，重复兑换实测幂等（连试 3 次均正常），不会“第二次必败” |
+| **授权完成但面板还是「user 未授权」** | 光在浏览器点「同意」**不会**自动生效，必须有人拿 device_code 去兑换（0.2.2 前只能靠手动点按钮） | 0.2.2 起已自动轮询（4s/次，10 分钟上限）；若超时或跨机点的，点「刷新状态」 |
+| 面板一直「等待你在浏览器/手机上确认…」不停 | 那份 `login-pending.json` 已过期但还在被拿去兑换（0.2.2 前会死循环空转） | 0.2.2 起 `loginFinish` 先校 `expiresAt`，过期就删文件并直说「请重新拿一条新的」 |
 | 授权链接过期 / 扫码报错 | 每个 `login-start` 生成新 `flow_id`，旧码只能用一次 | 重新 `lark_login_start`（面板「授权 user 身份」）拿新链接 |
 | 面板「状态接口不可用」 | Host 半没加载 | 完全退出 DSH 重开（不是刷页面） |
 | **设置里完全找不到「Mlarkcli」，且右键/工具都正常** | **`client.js` 的 `inject` 漏列了 `apply` 里用到的服务**（本插件 0.2.0 真实踩过：用了 `ctx.locale` 却只写 `['slots']`）。Cordis 只注入声明过的服务，没列就是 `undefined`，`apply` 首行抛 `TypeError`，**整个浏览器半静默不注册** | 不是重启问题也不是缓存问题。打桩 ctx 只放声明过的服务跑一遍 `apply`，会直接抛 `Cannot read properties of undefined`；`test/client.mjs` 已加静态守卫，把源码里所有 `ctx.xxx` 与 `inject` 逐个核 |

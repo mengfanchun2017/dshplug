@@ -337,6 +337,32 @@ assert.ok(mBtns.some((t) => /开放平台权限页/.test(t)), '缺权限时没�
 // user 未授权 → 「我已完成授权」必须出现（这才是它该出现的时候）
 assert.ok(mBtns.some((t) => /我已完成授权/.test(t)), `user 未授权时必须给「我已完成授权」（现有：${mBtns.join(' / ')}）`)
 console.log('缺权限分支：OK（数量 + 具体 scope + 一键入口都在）')
+// 多账户语义：卡片标题必须是**显示名**，不能拿 id（default）当标题
+const namedAcc = { ...fullAcc, id: 'default', label: '公司主账号' }
+hookState.length = 0
+hookIdx = 0
+hookState[6] = seededIdent
+const treeNamed = cardFn({ acc: namedAcc, onChanged: () => {}, alive: { current: true } })
+const tNamed = harvest(treeNamed)
+assert.ok(/公司主账号/.test(tNamed), `卡片标题应显示 label（显示名），实际：${tNamed.slice(0, 200)}`)
+assert.ok(/id default/.test(tNamed), '技术 id 应以小字形式保留在卡片上（认人/对日志用）')
+console.log('多账户标题：OK（大字显示名 + 小字技术 id）')
+
+/*
+ * 授权流程的行为契约（静态）。
+ * 假 react 的 useEffect 不执行，所以轮询与“授权后自动刷新”**无法用渲染树断言**，
+ * 只能对源码做关键断言。这三条都是用户真实反馈过的缺陷，掉一个就回到原形：
+ *   1) login 默认一次申请全部业务域（用户：机器人的和用户的一次都开开）
+ *   2) 授权后要主动兑换 + 自动刷新（用户：网页授权完了但面板还是未授权）
+ *   3) 必须有随时可点的手动刷新（用户：是否应该加个自动刷新或者手动刷新按钮）
+ */
+const srcClient = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+assert.ok(/domains:\s*'all'/.test(srcClient), 'login-start 未默认申请全部业务域（--domain all）')
+assert.ok(/setInterval|setTimeout\(tick/.test(srcClient), '发起授权后没有自动轮询逻辑')
+assert.ok(/timeoutMs:\s*5000/.test(srcClient), '自动轮询未使用短超时，长轮询会把面板卡住')
+assert.ok(/刷新状态/.test(srcClient), '缺少「刷新状态」手动刷新入口')
+assert.ok(/登录到.*飞书账号/.test(srcClient), '授权前缺少“先在浏览器登录目标账号”的提醒')
+console.log('授权契约：OK（domain all / 自动轮询 / 短超时 / 手动刷新 / 账号提醒）')
 
 console.log('组件接线：OK（安装卡 / 身份 / 权限清单 都已在树里）')
 
