@@ -399,10 +399,25 @@ Windows 凭据管理器的底层是 **DPAPI**，用当前用户的 master key �
 
 ## 6. 安装与开发
 
-### 6.1 目录结构（符合 dshplug 仓库约定）
+### 6.0 路径不写死（先读这段，否则会白搬仓库）
+
+本插件**不要求**装在某一个固定目录。两件事分开看：
+
+| 谁依赖绝对路径 | 实际情况 |
+|---|---|
+| **插件代码** | **不依赖**。`lib/index.js` 用 `import.meta.url` 推导出 `here`，所有文档路径都在这上面 `path.join` |
+| **`install.ps1` / `plugpush.ps1`** | **不依赖**。用 `$PSScriptRoot`，仓库搬哪都行 |
+| **profile 的依赖声明** | 依赖。`link:` 写的是**绝对路径**，目标被移走链接就断了 |
+
+所以：仓库可以放在 `C:\dsh\dw-plugin`，也可以放别处。**搬动之后跑一次 `install.ps1 -Force`**
+把 `link:` 指向新位置就行。不需要因为换目录而重写代码或改 `package.json`。
+
+下面命令里的 `C:\dsh\dw-plugin` 只是**本机当前的例子**，换成你自己的路径即可。
+
+### 6.1 目录结构（符合 dw-plugin 仓库约定）
 
 ```
-C:\dsh\dshplug\dsh-gitok\
+<仓库根>\dsh-gitok\
 ├─ package.json        # dsh.bundle.patch → cordis.patch.yml；dsh.client → 浏览器半
 ├─ cordis.patch.yml    # - insert: - id: gitok / name: dsh-gitok
 ├─ lib\index.js        # 宿主半：9 个工具 + 5 条 HTTP 路由
@@ -1194,11 +1209,14 @@ $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\nod
 ### 9.1 取代码
 
 ```powershell
-# 方式 A：本机已在 C:\dsh\dshplug（当前状态）
-cd C:\dsh\dshplug
+# 方式 A：本机已 clone（路径随意，本机当前是 C:\dsh\dw-plugin）
+cd C:\dsh\dw-plugin
 
-# 方式 B：新机器 clone（路径必须一致，link: 写死绝对路径）
-git clone https://github.com/mengfanchun2017/dshplug.git C:\dsh\dshplug
+# 方式 B：新机器 clone（目录名可自选，不需要和旧机器一致）
+git clone https://github.com/mengfanchun2017/dshplug.git C:\dsh\dw-plugin
+
+# 两种方式 clone 完都跑一次，把 profile 里的 link: 指向新位置
+& .\install.ps1 -Only dsh-gitok -Force
 ```
 
 ### 9.2 把 DSH 工作区切到插件目录

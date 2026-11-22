@@ -38,7 +38,7 @@
     {
       "name": "dsh-gitok",
       "dir": "dsh-gitok",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "description": "Git 认证一站式管理，分 Init / Manage / Monitor 三层。设置里有一个「Mgitok」面板（四态状态卡 + 六项持续监控 + 一键初始化/重新登录/撤销按钮 + WSL 接管说明 + 原始报告）。底层 9 个 gitok_* 工具（doctor/list/verify/login/revoke/adopt/bootstrap/rotate/monitor），凭据收敛到 Windows 凭据管理器（DPAPI，出机器不可用），WSL 经 interop 借用不落盘。文档三份：README（怎么用）/ BOOTSTRAP（怎么做）/ ADR（为什么，含决策 D）。",
       "installedOn": [
         "REDMIPRO"
@@ -47,9 +47,9 @@
       "note": "【0.3.11 三处纠正】按用户质疑改正 v0.3.10 的三处不准确：① 「撤销一个为何多台一起失效」原来写得含糊——现已讲清：每台机器单独登录确实各拿一个独立 token（同账号+同App+同scope 最多 10 个并存），但网页的 Revoke 是按 App 撤销，官方原文「任何与该授权的 token 都会被一并撤销」，所以根因是可操作粒度止于 App、单个 token 网页不给拆，不是只有一个凭据。② 「能否给 OAuth 授权加 -机器名 后缀」——不能：GCM 这个名字是 App 发布方注册时写死的，全球同名，本机改不了（实测 GCM 2.9.1 的 GitHub.dll 只有 gitHubDevClientId/gitHubDevRedirectUri 两个仅开发模式键）。为此宿主探针新增 machine 行（COMPUTERNAME），面板直接给 REDMIPRO-YYYYMMDD 命名示例。③ 链接补全并按用户要求重排：先 settings/personal-access-tokens（Fine-grained，GitHub 现在默认），再 settings/tokens（classic），两个都标明有名字+后4位、能单条删。新增 tools/render-check.mjs（React 桩真渲染 4 种输入的回归断言，node --check 查不出这类错）。"
     },
     {
-      "name": "dsh-larkcli",
+          "name": "dsh-larkcli",
       "dir": "dsh-larkcli",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "description": "飞书/Lark 原生驱动（Windows only，不靠 WSL、不装系统 Node）：直连官方 lark-cli.exe 并可一键安装/升级（镜像 + SHA256 + 原子替换），多账户（每账户独立 App + 独立 user 授权），展示接入的飞书应用名/描述/头像/用户名，按任务本地加权搜索账户以降低消耗，权限清单可一键申请（应用侧给预填链接、用户侧给命令），给文档链接就自动从认证池依次读取；13 个工具 + 设置面板。",
       "installedOn": [],
       "status": "active",

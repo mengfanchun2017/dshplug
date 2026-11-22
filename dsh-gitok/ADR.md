@@ -357,7 +357,7 @@ v0.3.2 补上时，最初把 `main` 塞进了 `sidebar.panellist` 的回调里�
 | 版本 | **0.3.10** |
 | 历史版本 | 0.3.5（2026-11-16 之前的快照） |
 | 状态 | `active` |
-| 安装形态 | `link-junction` → `C:\dsh\dshplug\dsh-gitok` |
+| 安装形态 | `link-junction` → `<仓库根>\dsh-gitok`（本机当前为 `C:\dsh\dw-plugin\dsh-gitok`；路径可变） |
 | 安装 profile | `desktop` |
 | 宿主机 | `REDMIPRO` |
 | 宿主半 | 9 个工具 + 5 条路由 |
@@ -499,7 +499,7 @@ const DISPLAY_NAME = 'Mgitok';
 | 文档里指代界面名的「Git 认证」 | ✅ | 本次已改 |
 | 文档里指代技术主题的「git 认证」 | ❌ | 如「三套互不相通的 git 认证」 |
 
-规范已写入 `C:\dsh\dshplug\BOOTSTRAP.md` §5.1 与 `~/.dsh/AGENTS.md` 开发约定，后续新插件照此执行。
+规范已写入 `<仓库根>\BOOTSTRAP.md` §5.1 与 `~/.dsh/AGENTS.md` 开发约定，后续新插件照此执行。
 
 ---
 
@@ -785,3 +785,54 @@ smoke-route.mjs     → exit 1        （FAIL: 期望 200，实际 500）
 **验收（v0.4.0）**：`node --check` 两文件通过；`tools/render-check.mjs` 全绿；
 `tools/smoke-route.mjs` `level=ok`；git 子目录安装实测成功；
 awesome 条目按对方 `validateEntries()` + `slugFor()` 逐条自检无 problem。
+---
+
+---
+
+## ADR-016 · 路径一律运行时推导，文档不写死安装位置
+
+**结论（2026-11-22，v0.4.1）**：插件不得假定「装在某一个固定目录」。所有路径运行时推导；
+文档里的绝对路径一律标注为「本机示例」。
+
+**背景（真实发生）**：仓库从 `C:\dsh\dshplug` 整体搬到 `C:\dsh\dw-plugin`。
+搬到之后逐层查了一遍，结论分成两半：
+
+| 层 | 是否硬编码 | 实测 |
+|---|---|---|
+| `lib/index.js` | **否** | `here = dirname(dirname(fileURLToPath(import.meta.url)))`；`DOCS_WSL = join(here,'docs',...)`。搬完 `smoke-route` 仍 `level=ok`，`docsPath` 自动变成新路径 |
+| `lib/client.js` | **否** | 前端不拼绝对路径，路径由宿主经路由下发 |
+| `install.ps1` | **否** | `RepoRoot` 默认 `$PSScriptRoot`；注释里还留着当初写死 `C:\dsh\dsh-plugins` 的教训 |
+| `cordis.patch.yml` | **否** | `gcmPath` / `proxy` / `heartbeatUrl` 默认空 = 自动探测 |
+| `lib/index.js` 的 `revokeImpact` | 部分 | 扫描目录含 `C:\dsh`（`$env:USERPROFILE\git` / `Documents` 是推导的）。**这是有意的**：只用于「撤销前提示影响面」，扫不到只会少列，不会误删 |
+| **文档（77 处）** | **是** | 6 份 md 里全是旧的 `C:\dsh\dshplug\...`，其中 BOOTSTRAP 39 处、README 25 处 |
+
+**为什么这次要动文档而不是只改代码**：代码本来就是对的，错的是文档把「本机当时的状态」
+写成了「必须遵守的规则」——BOOTSTRAP 原来的标题直接是「路径**必须**固定在 `C:\dsh\dshplug\dsh-gitok`」，
+还写了「不要在别的目录 clone 一份来开发」。这两条都是错的，会让人以为换目录是不可行的。
+
+**顺带修掉一个真 bug（`install.ps1 -Check` 静默漏报）**：
+Windows 的 Junction 在目标被移走/改名后，`Test-Path <链接>` **仍返回 True**、`LinkType` 仍是 `Junction`，
+**只有访问子项才失败**（2026-11-22 实测）。而 `-Check` 原本只在 `file:` 硬链接形态下调 `Test-BrokenLink`，
+`link:` 形态完全不查断链 → **仓库一搬，`-Check` 会把断掉的插件报成 green**。
+已新增 `Test-BrokenJunction`：真去读链接下的 `package.json`，读不到就报「链接已断，需重装」。
+实测：人为把 Junction 指向不存在的目标，旧逻辑 green、新逻辑正确报错并提示重装。
+
+**反面代价**：
+- 文档里仍会出现具体路径（示例、截图文字），不可能 100% 消除；只能保证**每个出现处都标明它是示例**。
+- `revokeImpact` 的 `C:\dsh` 扫描面在别人机器上大概率扫不到东西，影响面会显示为空。
+  已用「未扫到 ≠ 没有」的文案兜住，不假装完整。
+- 搬仓后必须记得重装（`-Force`），否则断链。这个动作无法自动完成——
+  但**现在至少会被 `-Check` 抓出来**，不再静默。
+
+**已否决的替代方案**：
+
+| 方案 | 为何否决 |
+|---|---|
+| 代码里读配置项 `installRoot` | 多一个用户必须理解的旋钮；而 `import.meta.url` 已经天然正确，不需要配置 |
+| 搬仓后用脚本自动改 profile 的 `link:` | 需要 DSH 未运行时操作 profile，风险大于收益；`install.ps1 -Force` 已是一行命令 |
+| 把绝对路径全删、只写相对路径 | 用户在 PowerShell 里执行需要完整命令；示例必须可复制执行 |
+| 强制固定目录（现状） | 每条路径都是本机的偶然事实，不是约束。换机器就失效，且会阻止用户按自己习惯布局 |
+
+**验收（v0.4.1）**：`smoke-route` `level=ok`（`docsPath` 跟随实际位置）；
+`render-check` 全绿；`install.ps1 -Check` 对健康仓库全绿、对人为断链正确报错；
+README/BOOTSTRAP 代码围栏配平（98 / 82，均偶数）；全库「必须固定」类错误陈述已清零。

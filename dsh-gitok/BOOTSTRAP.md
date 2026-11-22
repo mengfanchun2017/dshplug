@@ -9,10 +9,23 @@
 
 ## 0. 三个必读前提
 
-### 0.1 路径必须固定在 `C:\dsh\dshplug\dsh-gitok`
+### 0.1 路径**不要求**固定，但移动/改名后必须重装
 
-`link:` 安装把**绝对路径**写进 profile 的 `package.json`。换路径 = 换机器时必须重装。
-不要在别的目录 clone 一份来开发。
+先分清两件事，这是本节唯一容易搞混的点：
+
+| 谁依赖绝对路径 | 后果 |
+|---|---|
+| **代码**：不依赖 | `lib/index.js` 用 `import.meta.url` 推导 `here`，`install.ps1` 用 `$PSScriptRoot` → 仓库搬到哪里都能跑 |
+| **profile 的 `link:` 声明**：依赖 | `link:` 把**绝对路径**写进 `~/.dsh/profiles/<profile>/package.json`。目标被移走 = 链接断 |
+
+所以：**可以在任何目录 clone/开发**，只是搬完之后跑一次 `install.ps1 -Force` 把声明重新指向新位置。
+不必为了迁就旧路径而把仓库搬回去。
+
+> **断链的险恶之处（实测 2026-11-22）**：Junction 的目标被移走后，
+> `Test-Path <链接>` 仍返回 `True`、`LinkType` 仍是 `Junction`，**只有访问子项才失败**。
+> 所以不能用「Test-Path 过了」当作健康依据。旧的 `install.ps1 -Check` 只在 `file:` 硬链接形态下查断链，
+> `link:` 断链会被静默报成 green —— 现已修复（新增 `Test-BrokenJunction`，
+> 真去读 `package.json`，读不到就报「链接已断」）。
 
 ### 0.2 改配置要重启 App，改代码不用（但加 `dsh.client` 要重装）
 
@@ -418,7 +431,7 @@ cd C:\dsh\dshplug
 |---|---|
 | Windows 凭据管理器里的 token | **带不走**（DPAPI 绑机器）。新机跑一次 `gitok_login` |
 | `C:\dsh\data-*` 等技能数据目录 | 不在本插件范围。数据不进仓库、不进插件包；到新机后由插件首次运行自动重建（或手动拷贝） |
-| profile 里的 `link:` 绝对路径 | 新机路径必须同为 `C:\dsh\dshplug\dsh-gitok`，否则改 `package.json` 重装 |
+| profile 里的 `link:` 绝对路径 | **不要求新机路径相同**。路径随便挑，装完跑 `install.ps1 -Force` 把 `link:` 重新指向新位置即可（搬仓后 `-Check` 会报「链接已断」提醒你） |
 | 本机特定的 GCM 路径 | 检查 `cordis.patch.yml` 的 `gcmPath`；留空则自动探测 |
 
 ### 5.6 新机器第一次跑，可能缺的三样

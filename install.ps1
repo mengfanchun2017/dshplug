@@ -93,6 +93,18 @@ function Test-BrokenLink($name, $dir) {
   return $false
 }
 
+# 探测 Junction / Symlink 是否已断链（目标目录被移走或改名）。
+# 为什么单独一个函数：Windows 的 Junction 在目标消失后，Test-Path 对链接本身
+# 仍返回 True、LinkType 仍是 Junction，只有访问子项才失败。所以「Test-Path 过了」
+# 不能作为健康依据，必须真去读链接指向的内容（实测：2026-11-22）。
+function Test-BrokenJunction($name) {
+  $inst = Join-Path $profileDir "node_modules\$name"
+  $item = Get-Item -LiteralPath $inst -Force -ErrorAction SilentlyContinue
+  if (-not $item -or -not $item.LinkType) { return $false }
+  # package.json 是插件加载的硬前提；读不到就是断链。
+  return -not (Test-Path -LiteralPath (Join-Path $inst 'package.json'))
+}
+
 $targets = @($manifest.plugins | Where-Object {
   $_.status -eq 'active' -and (-not $Only -or $_.name -eq $Only)
 })
@@ -108,8 +120,11 @@ if ($List -or $Check) {
     $pkgName = if ($p.packageName) { $p.packageName } else { $p.name }
     $state = Get-InstallState $pkgName
     $broken = if ($exists -and $state -eq 'file-hardlink') { Test-BrokenLink $pkgName $dir } else { $false }
+    # Junction 断链必须单独查：目标被移走后 Test-Path 仍为 True（实测 2026-11-22）。
+    $jbroken = if ($state -eq 'link-junction') { Test-BrokenJunction $pkgName } else { $false }
     $flag = ''
     if ($state -eq 'file-hardlink') { $flag = '  ⚠ 用 file: 硬链接，可能断链' ; if ($broken) { $flag = '  ✗ 已断链，需修复'; $bad++ } }
+    elseif ($state -eq 'link-junction' -and $jbroken) { $flag = "  ✗ 链接已断（目标 $dir 不在了？），需重装" ; $bad++ }
     elseif ($state -eq 'missing') { $flag = '  · 未安装' }
     $verNote = if ($exists -and $ver -ne $p.version) { "  (list.json 记 $($p.version))" } else { '' }
     Write-Host ("  {0,-22} v{1,-8} status={2,-8} {3,-14}{4}{5}" -f $p.name, $ver, $p.status, $state, $verNote, $flag)
