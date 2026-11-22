@@ -34,7 +34,7 @@
 | `lib/index.js`（宿主半） | **完全退出 DSH 再打开** |
 | `lib/client.js`（浏览器半） | 刷新页面（浏览器每次现取） |
 | `cordis.patch.yml` 的 `config:` | **完全退出 DSH 再打开**（行激活时读） |
-| `package.json` 的 `dsh.client` | **重装插件**（`install.ps1 -Force`）+ 重启 |
+| `package.json` 的 `dsh.client` | **重装插件** + 重启。本机开发用 `install.ps1 -Force`；用公开仓库装的则重新跑一次 `dsh plugin --profile <p> add '<地址>'`（实测重复 add 输出 `Already up to date`，无副作用） |
 
 「刷新页面」不等于「重启 DSH」。宿主半改动只刷页面是**不生效**的 —— 这是本项目最容易误判的一条。
 
@@ -47,6 +47,103 @@
 ---
 
 ## 1. 首次安装
+
+两条路，**按「谁用」选，不要混**：
+
+| 场景 | 走哪条 | 需要本地有仓库吗 |
+|---|---|---|
+| 另一台机器 / 给别人装 / 从零装 | **§1.1 公开仓库地址**（首选） | **不需要** |
+| 在本机改代码、要 `link:` 热更新 | §1.2 `install.ps1` | 需要 |
+
+### 1.1 给一台新的 DSH 装（公开仓库地址，首选）
+
+> **这一步不需要先把仓库下载下来。** 插件发布在公开 GitHub 仓库上，
+> 给 DSH 一个地址它自己去取源码。下面的命令全部在**目标机器**上执行，
+> 目标机器上不需要有 `C:\dsh\dw-plugin`。
+
+**唯一的前置条件：桌面版必须先打开过至少一次，然后完全退出。**
+
+```text
+① 装好 DSH 桌面版 → ② 打开它一次（随便看看）→ ③ 完全退出（不是最小化）
+```
+
+否则 `dsh plugin --profile desktop add` 会直接报错：
+
+```text
+Open DeepSeek Harness Desktop once to initialize its profile,
+then fully quit it before running dsh plugin --profile desktop.
+```
+
+这是 DSH 对 `desktop` profile 的约定（`desktop` profile 由桌面应用创建，CLI 不许凭空造），
+不是本插件的限制。用 `--profile web` 不受此限（它会自己初始化）。
+
+#### 路线 A：图形界面（最省事，不碰命令行）
+
+```text
+设置 → 插件 → 添加插件
+  → 在「包名或地址」里粘贴整行（含 #path: 部分）：
+
+github:mengfanchun2017/dshplug#path:/dsh-gitok
+```
+
+装完会提示「已安装，请重启 DSH 加载它」—— **完全退出再打开**。
+这条路不需要 clone 仓库、不需要 `dsh` 在 PATH、不需要管引号。
+
+#### 路线 B：命令行
+
+```powershell
+# 引号不能省：spec 里带 #，PowerShell 裸写会把 # 之后当注释截掉
+dsh plugin --profile desktop add 'github:mengfanchun2017/dshplug#path:/dsh-gitok'
+```
+
+- `--profile desktop` 是桌面应用的 profile；纯 CLI 用户一般用 `--profile web`，按自己的改。
+- `#path:/dsh-gitok` **不能省**：本仓库是 monorepo，插件在子目录里，
+  不带 `path:` 就指向仓库根，而根 `package.json` 不是插件（没有 `dsh.bundle`）。
+- `dsh` 不在 PATH（提示「无法将 dsh 项识别为 cmdlet」）就用完整路径：
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd" `
+    plugin --profile desktop add 'github:mengfanchun2017/dshplug#path:/dsh-gitok'
+```
+
+三个常见错误改法：
+
+| 症状 | 原因 | 改法 |
+|---|---|---|
+| `ERR_PNPM_ADDING_TO_ROOT` / 装到了奇怪位置 | 没给 `--profile` | 补上 `--profile desktop`（或 `web`） |
+| `没有 dsh.bundle` / 工具能跑但界面没有 | 漏了 `#path:` | 本仓库是 monorepo，必须 `#path:/dsh-gitok` |
+| `ERR_PNPM_GIT_RESOLVE_FAILED` + `schannel` / `TLS connect error` | git 没走代理（pnpm 的代理配置对 git 无效） | `git config --global http.proxy http://127.0.0.1:7897` 与 `https.proxy` 同值 |
+
+#### 验证装对了没有
+
+```powershell
+# A) 依赖声明与 bundle 列表里都要有它（两者是不同东西，缺一不可）
+Get-Content "$env:USERPROFILE\.dsh\profiles\desktop\package.json"
+#   dependencies → "dsh-gitok": "github:mengfanchun2017/dshplug#path:/dsh-gitok"
+#   dsh.profile.bundles → 数组里有 "dsh-gitok"
+
+# B) 装下来的文件数（实测 17 个）
+(Get-ChildItem "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-gitok" -Recurse -File).Count
+#   17
+```
+
+**为什么不需要 `prepare` / `allowBuilds`**：git 安装取源码而不是构建产物，一般确实需要构建步骤。
+本插件是纯 ESM JavaScript，没有构建、没有 `postinstall`、没有运行时依赖，所以 pnpm 不会拦脚本，
+用户也不用改 `pnpm-workspace.yaml`。实测装下来 17 个文件（`lib/`、`locale/`、`cordis.patch.yml`、
+`icon.svg`、三份文档、`docs/`、`tools/`）、`dsh.bundle.patch` 在位、
+DSH 的 `evaluatePluginCompatibility()` 返回「无未满足要求」。
+
+### 1.2 本机开发装（`install.ps1`，需要仓库在本地）
+
+这一节**只在本机成立**，因为 `install.ps1` 依赖三样东西：
+
+```text
+1. 仓库已 clone 到本地（里面有 list.json）
+2. link: 会把绝对路径写进 profile 的 package.json
+3. Windows + 桌面版 DSH
+```
+
+换了机器 / 或机器上没有这份仓库，**回去看 §1.1**。
 
 ```powershell
 # ① 确认清单里有这个插件且 status=active
@@ -72,48 +169,11 @@
 不加 `-Force` 时，脚本看到已是 `link-junction` 就认为「无需操作」，**不会更新元数据**。
 加了 `-Force` 会先 remove 再 add，所以顺序是「先重装、再重启」，不要反过来。
 
-### 1.1 上面那套的适用范围（先说清楚，免得搬走就失效）
+### 1.3 两条路线共存，不冲突
 
-`install.ps1` 依赖三样**只在本机成立**的东西：
-
-1. 仓库在 `C:\dsh\dw-plugin`（里面有 `list.json`）；
-2. `link:` 会把**绝对路径**写进 profile 的 `package.json`；
-3. 本机是 Windows + 桌面版 DSH。
-
-换机器、或给别人的 DSH 装，不走 `install.ps1`，走下面 §1.2。
-
-### 1.2 新的 DSH 上安装（公开仓库路线，推荐给所有人）
-
-```powershell
-dsh plugin --profile desktop add github:mengfanchun2017/dshplug#path:/dsh-gitok
-```
-
-三个常见错误改法：
-
-| 症状 | 原因 | 改法 |
-|---|---|---|
-| `ERR_PNPM_ADDING_TO_ROOT` / 装到了奇怪位置 | 没给 `--profile` | 补上 `--profile desktop`（或 `web`） |
-| `没有 dsh.bundle` / 工具能跑但界面没有 | 漏了 `#path:` | 本仓库是 monorepo，必须 `#path:/dsh-gitok` |
-| `ERR_PNPM_GIT_RESOLVE_FAILED` + `schannel` / `TLS connect error` | git 没走代理（pnpm 的代理配置对 git 无效） | `git config --global http.proxy http://127.0.0.1:7897` 与 `https.proxy` 同值 |
-
-验证装对了没有：
-
-```powershell
-# A) 依赖声明里有一行 github:...#path:/dsh-gitok
-Get-Content "$env:USERPROFILE\.dsh\profiles\desktop\package.json" | Select-String dsh-gitok
-
-# B) 装下来的是 15 个文件（含 lib/、locale/、cordis.patch.yml、icon.svg、三份文档、tools/）
-Get-ChildItem "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-gitok" -Recurse -File |
-  Select-Object -Expand Name | Sort-Object
-```
-
-**为什么不需要 `prepare` / `allowBuilds`**：git 安装取源码而不是构建产物，一般确实需要构建步骤。
-本插件是纯 ESM JavaScript，没有构建、没有 `postinstall`、没有运行时依赖，所以 pnpm 不会拦脚本，
-用户也不用改 `pnpm-workspace.yaml`。实测装下来 15 个文件、`dsh.bundle.patch` 在位、
-DSH 的 `evaluatePluginCompatibility()` 返回「无未满足要求」。
-
-**什么时候仍然用 `install.ps1`**：在本机开发（要 `link:` 热更新、改完不重装）时。
-两条路线共存，不冲突。
+同一个 profile 里 `dependencies` 只能写一种形态：要么 `github:...#path:/dsh-gitok`，
+要么 `link:C:/...`。从一条切到另一条，装上就行（后装的覆盖声明）；
+回退用 §1.1 的地址重装一次即可。
 
 ## 2. 验证（三层，逐层加深）
 
@@ -455,7 +515,7 @@ Get-Command git-credential-manager -ErrorAction SilentlyContinue
 | 现象 | 根因 | 处理 |
 |---|---|---|
 | `无法将"gitok_doctor"项识别为 cmdlet` | 它是模型工具不是命令 | 在对话里让 AI 调，别在终端敲 |
-| 面板里没有「Mgitok」分区 | 加 `dsh.client` 后没重装 / 没重启 | `install.ps1 -Force` + 完全退出重开 |
+| 面板里没有「Mgitok」分区 | 加 `dsh.client` 后没重装 / 没重启 | 本机开发：`install.ps1 -Force`；公开仓库装的：重跑一次 `dsh plugin --profile <p> add '<地址>'`。两者都要完全退出重开 |
 | 面板报「状态接口不可用」 | `/plugins/gitok/status` 404 | 跑 §2.2 确认路由注册了；确认 `index.js` 修改早于进程启动 |
 | `/status` 一直转圈超 30s | `probeTimeoutMs` 太长或 pwsh 卡住 | `cordis.patch.yml` 把 `probeTimeoutMs` 降到 10000 |
 | **`/status` 返回 HTTP 500，正文 `XXX is not defined`** | 常量被误写进函数体内，路由在模块作用域取不到 → 运行时 `ReferenceError` | **`node --check` 查不出来**（只验语法、不验作用域）。必须真跑一次路由，见 §2.3b。v0.3.4 的 `DOCS_WSL` 就是此因，v0.3.7 修 |
@@ -533,11 +593,20 @@ OAuth 那条路做不到 —— 详见 ADR-014 的 v0.3.11 补遗。
 
 ### 9.1 三步走（推荐路径）
 
-```powershell
-# ① 装插件（只需一次）
-& C:\dsh\dw-plugin\install.ps1 -Only dsh-gitok
-# 然后完全退出 DSH 再打开
+> 这里的「全新机器」指**从没装过这个插件的 DSH**。
+> 第①步给的是**公开仓库地址**，不需要先把仓库下载下来（详见 §1.1）。
 
+```text
+# ① 装插件（只需一次）—— 给地址，不要去 clone
+#    A) 图形界面：设置 → 插件 → 添加插件，粘这一行：
+#       github:mengfanchun2017/dshplug#path:/dsh-gitok
+#    B) 或命令行：
+#       dsh plugin --profile desktop add 'github:mengfanchun2017/dshplug#path:/dsh-gitok'
+#    前置：桌面版已打开过一次并完全退出（否则会报 requireDesktopProfile）
+#    装完完全退出 DSH 再打开
+```
+
+```text
 # ② 在对话里让 AI 跑初始化（推荐先预演）
 #    gitok_bootstrap url="https://github.com/<你的仓库>" dryRun=true
 #    确认输出合理后，去掉 dryRun 再跑一次：
@@ -546,6 +615,12 @@ OAuth 那条路做不到 —— 详见 ADR-014 的 v0.3.11 补遗。
 # ③ 验证
 #    gitok_monitor
 ```
+
+> **为什么要先下载仓库才能装 —— 这是一个常见的误解。**
+> 不需要。`dsh plugin ... add <地址>` 会让 DSH/pnpm 自己去 GitHub 取源码，
+> 目标机器上不需要有 `C:\dsh\dw-plugin`。`install.ps1` 只在**本机开发**时才用
+> （它读本地的 `list.json`、建 `link:` Junction）。
+
 
 `gitok_bootstrap` 会按 S0→S4 顺序自己判断哪些该做、哪些跳过：
 
@@ -592,9 +667,10 @@ git -c http.proxy=http://127.0.0.1:7897 ls-remote https://github.com/<owner>/<re
 
 ### 9A.0 主机 B 第一步：把插件装上（B 上什么都还没有）
 
-先说清一件事，否则会卡在第一步：**你现在人在 B 的 DSH 里，而 B 上没有 `C:\dsh\dw-plugin` 这份仓库。**
-所以 §9A.2 第 1 步那条 `& <B 上仓库根>\install.ps1` 对「全新 B」**不成立** ——
-那是给「B 上已经有仓库」的情况用的。B 上什么都没有时走公开仓库路线，见下面。
+先说清最关键的一件事：**你现在人在 B 的 DSH 里，而 B 上没有 `C:\dsh\dw-plugin` 这份仓库。**
+所以 B 上**不要**跑 `install.ps1`（那个脚本读本地的 `list.json`，B 上根本没有），
+也**不需要**先把仓库 clone 下来 —— 直接把**公开仓库地址**给 DSH，它自己去取源码。
+完整两条路线（图形界面 / 命令行）见 **§1.1**，下面只保留 B 特有的部分。
 
 #### 唯一的前置条件：B 的 DSH 必须先打开过至少一次
 

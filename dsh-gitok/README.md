@@ -433,12 +433,22 @@ v0.1.0 时**没有** `lib/client.js`，是纯模型工具插件。v0.2.0 新增�
 
 ### 6.2~6.5 安装 / 开发 / 验证 / 发布
 
-这四节已整体移到 **[`BOOTSTRAP.md`](./BOOTSTRAP.md)**（命令行手册），这里只留最短版本：
+这四节已整体移到 **[`BOOTSTRAP.md`](./BOOTSTRAP.md)**（命令行手册），这里只留最短版本。
+
+**安装分两种，先看自己在哪种**：
+
+| 场景 | 装法 | 需要本地有仓库吗 |
+|---|---|---|
+| 另一台机器 / 给别人装 / 从零装 | `dsh plugin --profile desktop add 'github:mengfanchun2017/dshplug#path:/dsh-gitok'` | **不需要** |
+| 在本机改代码（要 `link:` 热更新） | `& C:\dsh\dw-plugin\install.ps1 -Only dsh-gitok` | 需要 |
 
 ```powershell
-# 装
-& C:\dsh\dw-plugin\install.ps1 -Only dsh-gitok
+# 【要给一台新 DSH 装】给地址就行，不要去 clone（详见 §6.6 与 BOOTSTRAP §1.1）
+dsh plugin --profile desktop add 'github:mengfanchun2017/dshplug#path:/dsh-gitok'
 # → 完全退出 DSH 再打开
+
+# 【本机开发装】仓库已在本机时才适用
+& C:\dsh\dw-plugin\install.ps1 -Only dsh-gitok
 
 # 改了 package.json 的 dsh.client / files（必须 -Force，否则不更新元数据）
 & C:\dsh\dw-plugin\install.ps1 -Only dsh-gitok -Force
@@ -517,7 +527,7 @@ git 安装取的是**源码，不是构建产物**，所以一般需要 `prepare
 | 无 `prepare` / `postinstall` | 所以不会触发 pnpm 的「脚本被阻止」拦截，也不需要往 `pnpm-workspace.yaml` 加 `allowBuilds` |
 | 无运行时依赖 | `dependencies` / `peerDependencies` 都是空，装完不会有依赖树要装 |
 
-实测：从 git 装下来拿到 15 个文件（`lib/`、`locale/`、`cordis.patch.yml`、`icon.svg`、三份文档、`tools/`），
+实测：从 git 装下来拿到 17 个文件（`lib/`、`locale/`、`cordis.patch.yml`、`icon.svg`、三份文档、`docs/`、`tools/`），
 `files` 白名单生效，`dsh.bundle.patch` 在，DSH 自己的 `evaluatePluginCompatibility()` 返回「无未满足要求」。
 
 ### 装完怎么验
@@ -1229,6 +1239,9 @@ $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\nod
 
 ### 9.1 取代码
 
+> **只是想用这个插件？别在这节。** 只要不是要在本机改代码，就不需要 clone：
+> 直接给 DSH 公开仓库地址即可（见 §6.6）。本节只适用于**要在本机开发/改代码**。
+
 ```powershell
 # 方式 A：本机已 clone（路径随意，本机当前是 C:\dsh\dw-plugin）
 cd C:\dsh\dw-plugin
@@ -1236,7 +1249,7 @@ cd C:\dsh\dw-plugin
 # 方式 B：新机器 clone（目录名可自选，不需要和旧机器一致）
 git clone https://github.com/mengfanchun2017/dshplug.git C:\dsh\dw-plugin
 
-# 两种方式 clone 完都跑一次，把 profile 里的 link: 指向新位置
+# clone 完跑一次，把 profile 里的 link: 指向新位置（本机开发形态）
 & .\install.ps1 -Only dsh-gitok -Force
 ```
 
