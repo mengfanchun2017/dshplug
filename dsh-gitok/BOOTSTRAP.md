@@ -3,7 +3,7 @@
 > 命令行手册：**装机、验证、排错、迁移**。全部命令可直接复制。
 > 代码怎么设计、为什么这么定 → 见 [`ADR.md`](./ADR.md)；面板长什么样 → 见 [`README.md`](./README.md)。
 >
-> 快照时间：**2026-11-16** ｜ 版本 **0.3.10** ｜ 宿主机 `REDMIPRO` ｜ profile `desktop`
+> 快照时间：**2026-11-22** ｜ 版本 **0.4.3** ｜ 宿主机 `REDMIPRO` ｜ profile `desktop`
 
 ---
 
@@ -590,6 +590,119 @@ git -c http.proxy=http://127.0.0.1:7897 ls-remote https://github.com/<owner>/<re
 > 这是**最常遇到的真实场景**，和 §9「从零开始的机器」不同：
 > 你已经有一台跑顺了的 A，现在要再加一台 B。
 
+### 9A.0 主机 B 第一步：把插件装上（B 上什么都还没有）
+
+先说清一件事，否则会卡在第一步：**你现在人在 B 的 DSH 里，而 B 上没有 `C:\dsh\dw-plugin` 这份仓库。**
+所以 §9A.2 第 1 步那条 `& <B 上仓库根>\install.ps1` 对「全新 B」**不成立** ——
+那是给「B 上已经有仓库」的情况用的。B 上什么都没有时走公开仓库路线，见下面。
+
+#### 唯一的前置条件：B 的 DSH 必须先打开过至少一次
+
+```powershell
+# 在 B 上，什么都别装，先照做：
+# ① 装好 DSH 桌面版  ② 打开它一次（随便看看就行）  ③ 完全退出（不是最小化）
+```
+
+**为什么必须先打开一次**：`dsh plugin --profile desktop` 有一条硬性检查 ——
+profile 目录下没有 `package.json` 就直接抛错（源码 `dsh/src/plugin.ts` 的 `requireDesktopProfile()`）：
+
+```text
+Open DeepSeek Harness Desktop once to initialize its profile,
+then fully quit it before running dsh plugin --profile desktop.
+```
+
+这不是本插件的限制，是 DSH 对 `desktop` profile 的约定：`desktop` profile 由**桌面应用自己创建**，
+CLI 不许凭空造一个。实测（把 `DSH_HOME` 指到空目录再跑 `add`）确认会报上面这句。
+
+> 桌面应用建 profile 时固定装上 `@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-web-app`
+> （源码 `lib/main.js` 的 `createPluginProfile()` 用的是 `PROFILE_TEMPLATES.web.bundles`）。
+> 这就是「设置页面存在」的前提 —— 见 9A.0.1。
+
+#### 路线 1（推荐）：图形界面，不碰命令行
+
+```text
+设置 → 插件 → 添加插件
+  → 在「包名或地址」里粘贴（整行，含 #path: 部分）：
+
+github:mengfanchun2017/dshplug#path:/dsh-gitok
+```
+
+装完界面会提示「已安装，请重启 DSH 加载它」—— **按提示完全退出再打开**。
+
+这条路对 B 最省事：不需要 clone 仓库、不需要 `dsh` 在 PATH、不需要管引号。
+
+#### 路线 2：命令行
+
+```powershell
+# 先确认 dsh 在 PATH（安装时通常已写入用户 PATH）：
+dsh --version
+
+# 不在 PATH 里（提示「无法将 dsh 项识别为 cmdlet」）就直接用完整路径：
+& "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd" `
+    plugin --profile desktop add 'github:mengfanchun2017/dshplug#path:/dsh-gitok'
+```
+
+**引号不能省**：spec 里带 `#`，PowerShell 里裸写会把 `#` 之后当注释截掉，
+结果变成装了仓库根（而根 `package.json` 不是插件，没有 `dsh.bundle`）。
+用单引号包住整条 spec，实测成功。
+
+其它报错对照见 §1.2 的表格（`--profile` 缺失 / 漏 `#path:` / 代理不通）。
+
+#### 装完的两条验证
+
+```powershell
+# ① 依赖声明与 bundle 列表里都要有它（两者是不同的东西，缺一不可）
+Get-Content "$env:USERPROFILE\.dsh\profiles\desktop\package.json"
+#   dependencies → "dsh-gitok": "github:mengfanchun2017/dshplug#path:/dsh-gitok"
+#   dsh.profile.bundles → 数组里有 "dsh-gitok"
+
+# ② 包内容完整（git 安装取源码，实测 17 个文件）
+(Get-ChildItem "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-gitok" -Recurse -File).Count
+#   17
+```
+
+**B 上不需要 clone 仓库**：git 安装会把源码取进 pnpm store 再链进 profile，
+`C:\dsh\dw-plugin` 只在本机开发（要 `link:` 热更新）时才需要。
+
+只有想在 B 上也改代码时才 clone：
+
+```powershell
+git clone https://github.com/mengfanchun2017/dshplug.git C:\dsh\dw-plugin
+& C:\dsh\dw-plugin\install.ps1 -Only dsh-gitok
+```
+
+注意这会把 profile 里的声明从 `github:...` 换成 `link:C:/...`（见 §0.1），两者只能选一个。
+
+#### 9A.0.1 装完之后，设置里就有吗？—— 有，已逐项确认
+
+用户装完最想知道的就是「界面在哪、是不是都齐了」。装好并**重启后**，B 上会出现：
+
+| 出现的东西 | 具体内容 | 依据（不是推测） |
+|---|---|---|
+| **设置 → Mgitok** | 状态面板（六个监控项、凭据列表、操作按钮） | `lib/client.js` 注册 `settings.section`，`id: 'gitok'`、`order: 200`、`label` 取 `locale/zh.json` 的 `nav` = `Mgitok` |
+| **9 个会话工具** | `gitok_doctor` `list` `verify` `login` `revoke` `adopt` `bootstrap` `rotate` `monitor` | `lib/index.js` 逐个注册 |
+| **5 条 HTTP 路由** | `/plugins/gitok/*`（面板的数据通路） | `lib/index.js` |
+| **侧边栏图标** | **没有 —— 设计如此，不是 bug** | ADR-011：功能全在设置里，侧栏是重复入口 |
+
+`order: 200` 的含义：Mgitok 排在**所有内置分区之后**，是 M\* 系列的第一个（201/202/203 依次给其他 M 插件）。
+所以「内置分区里翻不到」是正常的，往下滚。
+
+#### 设置里没有它？按这三条查，顺序不能颠倒
+
+| 症状 | 原因 | 查法 |
+|---|---|---|
+| 工具和设置**都没有** | 装完没重启 | 首次装 `dsh.client` 必须重启才加载。完全退出再打开，别只 `Ctrl+R` |
+| 工具能用、设置里**没有** | profile 的 `bundles` 里没有它 | 看 `package.json` 的 `dsh.profile.bundles`。只有 `dependencies` 不算数 |
+| 两样都在、仍是空白 | 浏览器半没注册成功 | 这是 `inject` 漏服务或 `exports` 缺 `"./client"`，见 §2.2 |
+
+> **还有一个前提容易被忽略**：`settings.section` 这个插槽由 `dsh-web-app` 提供。
+> 桌面版和无头 CLI 的 `web` profile 都自带它（实测 profile 的 bundles 是
+> `["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "dsh-gitok"]`）。
+> 但如果你给 B 用的是 `--profile headless` 这类没有 Web 界面的 profile，
+> **设置页面本身就不存在**，插件只剩工具那一半 —— 那不是装坏了。
+
+---
+
 ### 9A.1 先说清楚：哪些能带、哪些不能带
 
 主机 B 上做认证，最大的误区是想把 A 的东西「拷过去」。先看这张表：
@@ -608,14 +721,13 @@ git -c http.proxy=http://127.0.0.1:7897 ls-remote https://github.com/<owner>/<re
 ### 9A.2 主机 B：给 DSH 做 Windows 认证（4 步）
 
 ```powershell
-# ── 第 1 步：装插件（B 上只需一次）────────────────────────
-& <B 上仓库根>\install.ps1 -Only dsh-gitok
-#   例：& C:\dsh\dw-plugin\install.ps1 -Only dsh-gitok
-#   （install.ps1 就在仓库根，不在 dw-plugin 子目录里）
-# → 然后完全退出 DSH 再打开
+# ── 第 1 步：装插件（B 上只需一次，详见 §9A.0）──────
+# 全新 B 上没有仓库，所以不是 install.ps1，而是：
+#   设置 → 插件 → 添加插件 → 粘 github:mengfanchun2017/dshplug#path:/dsh-gitok
 #
-# 或者走公开仓库路线（不需要本仓库已 clone 到固定位置）：
-dsh plugin --profile desktop add github:mengfanchun2017/dshplug#path:/dsh-gitok
+# 命令行写法（= 号）：
+dsh plugin --profile desktop add 'github:mengfanchun2017/dshplug#path:/dsh-gitok'
+# → 然后完全退出 DSH 再打开（首次装 dsh.client 必须重启，刷新页面不够）
 ```
 
 ```powershell

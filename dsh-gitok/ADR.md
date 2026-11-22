@@ -794,7 +794,7 @@ awesome 条目按对方 `validateEntries()` + `slugFor()` 逐条自检无 proble
 **结论（2026-11-22，v0.4.1）**：插件不得假定「装在某一个固定目录」。所有路径运行时推导；
 文档里的绝对路径一律标注为「本机示例」。
 
-**背景（真实发生）**：仓库从 `C:\dsh\dw-plugin` 整体搬到 `C:\dsh\dw-plugin`。
+**背景（真实发生）**：仓库从 `C:\dsh\dshplug` 整体搬到 `C:\dsh\dw-plugin`。
 搬到之后逐层查了一遍，结论分成两半：
 
 | 层 | 是否硬编码 | 实测 |
@@ -835,4 +835,65 @@ Windows 的 Junction 在目标被移走/改名后，`Test-Path <链接>` **仍�
 
 **验收（v0.4.1）**：`smoke-route` `level=ok`（`docsPath` 跟随实际位置）；
 `render-check` 全绿；`install.ps1 -Check` 对健康仓库全绿、对人为断链正确报错；
-README/BOOTSTRAP 代码围栏配平（98 / 82，均偶数）；全库「必须固定」类错误陈述已清零。
+README/BOOTSTRAP 代码围栏配平（均偶数）；全库「必须固定」类错误陈述已清零。
+
+---
+
+## ADR-017 · 新机器安装先讲「怎么装上去」，且 desktop profile 不能由 CLI 创建
+
+**结论（2026-11-22，v0.4.3）**：BOOTSTRAP 的「新机器」章节必须以「插件还没装」为起点；
+`desktop` profile 必须由桌面应用先创建一次，否则 `dsh plugin --profile desktop` 直接报错。
+
+**背景（用户真实卡住的点）**：用户在主机 B 的 DSH 里说「你 bootstrap 里写的都是下载之后运行 PS 命令，
+但我现在在另一台终端上，首先得把它装上」。检查发现旧文本有两个连环问题：
+
+| 问题 | 具体 | 后果 |
+|---|---|---|
+| ① 假设仓库已存在 | §9A.2 第 1 步写 `& <B 上仓库根>\install.ps1` | 全新 B 上根本没有这份仓库，第一步就卡死 |
+| ② 未说明 profile 前置条件 | 没提「桌面版必须先打开一次」 | 照着 `dsh plugin --profile desktop add` 执行会报错，且报错未被解释 |
+
+**实测证据（不是推测）**：
+
+1. 把 `DSH_HOME` 指向空目录后执行 `dsh plugin --profile desktop add ...`，得到：
+   `Open DeepSeek Harness Desktop once to initialize its profile, then fully quit it before running dsh plugin --profile desktop.`
+2. 同一条命令换成 `--profile web` 则正常创建并安装成功（exit 0，17 个文件，`dsh-gitok 0.4.2`）。
+3. 报错源头：`dsh/src/plugin.ts` 的 `requireDesktopProfile()`，内容只是
+   `if (!existsSync(join(dir,'package.json'))) throw new Error(...)`。
+4. 桌面应用建 profile 走 `lib/main.js` 的 `createPluginProfile()` → `initProfile(dir, WEB_PROFILE.bundles)`，
+   而 `WEB_PROFILE = PROFILE_TEMPLATES.web` = `["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"]`。
+5. `PROFILE_TEMPLATES` 里**没有 `desktop` 这一项**（只有 acp/web/headless/sdk/sdk-minimal），
+   `DEFAULT_PROFILE_BUNDLES` 只有 `["@deepseek-ai/dsh-base"]`。所以 `desktop` 只能由桌面应用创建。
+6. `initProfile` 对已存在的 `package.json` 一律不碰（`if (!existsSync(manifestPath))`），重复安装无副作用。
+   实测第二次 `add` 输出 `Already up to date`。
+
+**顺带确认的第二个问题：「装完设置里就有吗」**
+
+用户明确问「这个设置中的这个页面应该就都有了吧」。逐项核对后结论是**有**，且能给出去处：
+
+| 界面元素 | 是否有 | 代码依据 |
+|---|---|---|
+| 设置 → Mgitok | 有（`order: 200`，排在所有内置分区之后） | `lib/client.js` 的 `slots.register({ name:'settings.section', id:'gitok', label:()=>t('nav') })` |
+| 侧边栏图标 | **没有，设计如此** | ADR-011：功能全在设置里 |
+| 9 个 `gitok_*` 工具 | 有 | `lib/index.js` |
+
+**一个真实前提**：`settings.section` 插槽由 `dsh-web-app` 提供。桌面版 profile 自带它，
+但 `--profile headless` 这类无 Web 界面的 profile 里**设置页面本身就不存在**，插件只剩工具那一半。
+这不是装坏了，是 profile 选错了。
+
+**反面代价**：
+- 多了一条用户必须知道的前置条件（先打开桌面版一次），多一步。
+- 文档要同时维护「图形界面」与「命令行」两条路线，有重复；已用「两条路线先选一条」小表压缩。
+- 「设置里有吗」这类 UI 断言与代码耦合，日后改 `order` 或改名必须同批改文档。
+
+**已否决的替代方案**：
+
+| 方案 | 为何否决 |
+|---|---|
+| 让用户手动 `mkdir` + 写 `package.json` 绕过检查 | 伪造 profile，缺 `dsh-web-app` 就永远没设置页面，比报错更难排查 |
+| 文档只写图形界面、删掉命令行 | CLI 用户和脚本化场景仍然需要；且图形界面背后就是同一条命令 |
+| 让插件自己 bootstrap profile | 插件要跑起来才能调工具，而跑起来的前提就是 profile 存在 —— 循环依赖 |
+| 改 `--profile web` 当默认推荐 | 桌面应用用的是 `desktop` profile，改成 `web` 会装到另一个 profile 里，装了但界面看不到 |
+
+**验收（v0.4.3）**：空 `DSH_HOME` 下 `--profile desktop` 报错文案与文档一致；
+`--profile web` 安装成功（17 文件 / 0.4.2）；重复 `add` 输出 `Already up to date`；
+代码围栏配平（README / BOOTSTRAP / ADR 均偶数）。

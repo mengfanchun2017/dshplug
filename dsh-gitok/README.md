@@ -473,16 +473,36 @@ $node = "$env:USERPROFILE\AppData\Local\Programs\DeepSeek Harness\resources\runt
 上面 §6.2 的 `install.ps1` 只在本机（`C:\dsh\dw-plugin` 存在 + `list.json` 存在）成立。
 换一台机器、或者给别人的 DSH 装，走下面这条路。
 
-### 一行命令
+### 两条路线，先选一条
+
+| 路线 | 适合谁 | 命令 |
+|---|---|---|
+| **图形界面（最省事）** | 新机器上还什么都没 clone、不想碰命令行 | 设置 → 插件 → 添加插件 → 粘下面那行 |
+| **命令行** | 已有终端环境、要脚本化 | `dsh plugin --profile desktop add ...` |
+
+图形界面里的「包名或地址」就填这一行（**整行，含 `#path:` 部分**）：
+
+```text
+github:mengfanchun2017/dshplug#path:/dsh-gitok
+```
+
+命令行版：
 
 ```powershell
-dsh plugin --profile desktop add github:mengfanchun2017/dshplug#path:/dsh-gitok
+# 引号不能省：spec 里带 #，PowerShell 裸写会把 # 之后当注释截掉
+dsh plugin --profile desktop add 'github:mengfanchun2017/dshplug#path:/dsh-gitok'
 ```
 
 - `--profile desktop` 是本机 profile 名；CLI 用户一般用 `--profile web`，按自己的改。
 - `#path:/dsh-gitok` **不能省**：本仓库是 monorepo，`dsh-gitok` 在子目录里，
   不带 `path:` 就指向仓库根，而根 `package.json` 不是插件（没有 `dsh.bundle`）。
-- 装完**完全退出 DSH 再打开**（宿主半必须重启才加载）。
+- 装完**完全退出 DSH 再打开**（首次装带 `dsh.client` 的插件必须重启，`Ctrl+R` 不够）。
+
+> **`desktop` profile 有个前提**：必须先把 DSH 桌面版打开过至少一次。
+> 否则 `dsh plugin --profile desktop` 会直接报
+> `Open DeepSeek Harness Desktop once to initialize its profile…` ——
+> 因为 `desktop` profile 由桌面应用创建，CLI 不允许凭空造一个。
+> 用 `--profile web` 不受此限（会自己初始化）。完整情景见 `BOOTSTRAP.md` §9A.0。
 
 先确认版本满足：`dsh --version`。本插件要求 `engines.dsh: >=0.2.0-rc.1 <0.4.0-0`。
 
