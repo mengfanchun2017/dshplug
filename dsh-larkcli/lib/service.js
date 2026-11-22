@@ -531,6 +531,30 @@ export class LarkService {
     } catch {
       /* 清不掉不影响授权 */
     }
+    /*
+     * 回收 CLI 自己不管的 scope 快照缓存。
+     * 实测：CLI 每次 auth login 都会往 <configDir>/cache/auth_login_scopes/ 写一份
+     * ~5KB 的 JSON（完整 requested_scope 字符串），**从来不删**。
+     * 本插件反复发起授权就会无限累积（实测两天 20 个文件 / 103KB，且看不出何时该清）。
+     * 因为每次 login-start 都会产生一个新快照，旧的对后续流程毫无用处，可以放心回收。
+     * 只删 >1 天的：当天可能还有并发请求在读，给一天宽限足够安全。
+     */
+    try {
+      const scopeDir = path.join(ap.dir, 'cache', 'auth_login_scopes')
+      if (fs.existsSync(scopeDir)) {
+        const now = Date.now()
+        for (const name of fs.readdirSync(scopeDir)) {
+          const fp = path.join(scopeDir, name)
+          try {
+            if (now - fs.statSync(fp).mtimeMs > 24 * 3600 * 1000) fs.unlinkSync(fp)
+          } catch {
+            /* 单个删不掉不影响其他 */
+          }
+        }
+      }
+    } catch {
+      /* 清不掉不影响授权 */
+    }
     return {
       account: acc.id,
       verificationUrl: j.verification_url,

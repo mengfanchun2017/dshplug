@@ -1163,8 +1163,18 @@ window.__ModuleLoader__.load({
         react.createElement(
           'div',
           { style: { display: 'flex', gap: 8, alignItems: 'center' } },
-          react.createElement('button', { style: S.btnPrimary, disabled: !!busy || !id.trim(), onClick: create }, busy || '创建'),
-          react.createElement('span', { style: { ...S.hint, margin: 0 } }, 'App Secret 不在面板填写（走 lark_account_set_secret，值不回显）'),
+          react.createElement(
+            'button',
+            { style: S.btnPrimary, disabled: !!busy || !id.trim() || !appId.trim(), onClick: create },
+            busy || '创建',
+          ),
+          react.createElement(
+            'span',
+            { style: { ...S.hint, margin: 0 } },
+            !appId.trim()
+              ? 'App ID 必填：一个账户 = 一个飞书应用，没有它就不知道接哪个应用。'
+              : 'App Secret 不在面板填写（走 lark_account_set_secret，值不回显）',
+          ),
         ),
         msg ? react.createElement('pre', { style: S.pre }, msg.text) : null,
       );
