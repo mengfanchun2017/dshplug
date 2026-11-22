@@ -52,7 +52,7 @@ const dataA = fs.mkdtempSync(path.join(os.tmpdir(), 'larkcli-tools-a-'))
 const { ctx: ctxA, tools: toolsA } = makeCtx()
 apply(ctxA, { dataDir: dataA, autoMigrate: false, statusTtlMs: 0 })
 console.log('注册工具：', [...toolsA.keys()].join(', '))
-assert.equal(toolsA.size, 13)
+assert.equal(toolsA.size, 15)
 
 console.log('\n== A1. 初始态：无账户 ==')
 const docEmpty = await runTool(toolsA, 'lark_doctor')

@@ -348,6 +348,26 @@ assert.ok(/公司主账号/.test(tNamed), `卡片标题应显示 label（显示�
 assert.ok(/id default/.test(tNamed), '技术 id 应以小字形式保留在卡片上（认人/对日志用）')
 console.log('多账户标题：OK（大字显示名 + 小字技术 id）')
 
+// 缺 appId 的分支：必须明说 + 给出浏览器接入入口
+const accNoAppId = { ...fullAcc, appId: '', hasSecret: false }
+hookState[6] = null
+hookIdx = 0
+try {
+  const treeNoApp = cardFn({ acc: accNoAppId, onChanged: () => {}, alive: { current: true } })
+  const tNoApp = harvest(treeNoApp)
+  assert.ok(/还没有 appId/.test(tNoApp), `缺 appId 时应明说，实际：${tNoApp.slice(0, 220)}`)
+  const btnsNoApp = flat(treeNoApp)
+    .filter((n) => n && n.type === 'button')
+    .map((n) => (n.children || []).filter((c) => typeof c === 'string').join(''))
+  assert.ok(
+    btnsNoApp.some((t) => /用浏览器新建应用/.test(t)),
+    `缺 appId 时必须给浏览器接入入口（现有：${btnsNoApp.join(' / ')}）`,
+  )
+  console.log('缺 appId 分支：OK（明说 + 给浏览器入口）')
+} catch (e) {
+  throw new Error('缺 appId 渲染失败：' + String((e && e.message) || e))
+}
+
 /*
  * 授权流程的行为契约（静态）。
  * 假 react 的 useEffect 不执行，所以轮询与“授权后自动刷新”**无法用渲染树断言**，
@@ -363,6 +383,30 @@ assert.ok(/timeoutMs:\s*5000/.test(srcClient), '自动轮询未使用短超时�
 assert.ok(/刷新状态/.test(srcClient), '缺少「刷新状态」手动刷新入口')
 assert.ok(/登录到.*飞书账号/.test(srcClient), '授权前缺少“先在浏览器登录目标账号”的提醒')
 console.log('授权契约：OK（domain all / 自动轮询 / 短超时 / 手动刷新 / 账号提醒）')
+
+/*
+ * 「接的是哪个应用」与「浏览器建应用」的行为契约。
+ * 对应本轮的两条硬要求：
+ *   1) 授权按钮**上面**必须先摆明接的是哪个飞书应用（appId 可拿去后台对照）
+ *   2) 不靠手填 appId/secret，走浏览器一条链接就完事
+ * 这两个块都是盲区：schema 是对的、渲染也不报错，但一旦被重构掉用户就回到“对应不上”。
+ */
+assert.ok(/这个账户接入的飞书应用/.test(srcClient), '面板缺少“接入的是哪个飞书应用”身份横幅')
+assert.ok(/connBox/.test(srcClient), '身份横幅样式（connBox）不在了')
+assert.ok(
+  /拿这个 appId 去飞书开放平台/.test(srcClient),
+  '横幅未说明 appId 可以拿去开放平台后台对照',
+)
+assert.ok(/appLabelOf/.test(srcClient), '缺少应用名解析（appLabelOf）')
+assert.ok(/\/plugins\/larkcli\/app-init/.test(srcClient), '面板没有接浏览器建应用的接口（app-init）')
+assert.ok(/建账户并接飞书应用/.test(srcClient), '新增账户按钮未改为浏览器一步完成')
+assert.ok(/用浏览器新建应用/.test(srcClient), '已有账户缺 appId/secret 时没有浏览器接入入口')
+// 反向断言：手填 App ID 的输入框必须已经拿掉
+assert.ok(
+  !/placeholder:\s*'cli_xxxxxxxx'/.test(srcClient),
+  '新增账户里又出现了手填 appId 的输入框（不该再有：浏览器流程会自己写）',
+)
+console.log('浏览器接入契约：OK（身份横幅 / 免手填 appId / 两条入口）')
 
 console.log('组件接线：OK（安装卡 / 身份 / 权限清单 都已在树里）')
 

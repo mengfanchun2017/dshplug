@@ -33,7 +33,7 @@ const fakeCtx = {
 mod.apply(fakeCtx, {})
 console.log('\n注册工具数 =', tools.length)
 for (const t of tools) console.log(' -', t.name)
-assert.equal(tools.length, 13)
+assert.equal(tools.length, 15)
 
 // 每个工具必须有 description / parameters / execute
 for (const t of tools) {
@@ -44,7 +44,7 @@ for (const t of tools) {
 console.log('\n注册路由数 =', routes.length)
 for (const p of routes) console.log(' -', p)
 
-// 10 条路由一条都不能少：少了界面就 404，而界面上只是“按钮没反应”
+// 12 条路由一条都不能少：少了界面就 404，而界面上只是“按钮没反应”
 const WANT_ROUTES = [
   '/plugins/larkcli/status',
   '/plugins/larkcli/account',
@@ -56,6 +56,8 @@ const WANT_ROUTES = [
   '/plugins/larkcli/scopes',
   '/plugins/larkcli/qrcode',
   '/plugins/larkcli/login-finish',
+  '/plugins/larkcli/app-init',
+  '/plugins/larkcli/app-init-status',
 ]
 for (const w of WANT_ROUTES) {
   assert.ok(routes.includes(w), `路由未注册：${w}`)

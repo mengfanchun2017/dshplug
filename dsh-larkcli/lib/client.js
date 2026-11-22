@@ -29,6 +29,16 @@ window.__ModuleLoader__.load({
     const API = '/plugins/larkcli/status';
     const NS = 'larkcli.settings';
 
+    /**
+     * 这个账户到底接的是哪个飞书应用——取第一个能拿到的名字。
+     *
+     * 顺序故意是「飞书后台里的真名 > 用户自己写的显示名 > id」：
+     * 用户拿 appId 去后台对照时，看的是**后台那个名字**；
+     * 而 panel 里的大字（label）是他自己起的，两者对不上时以平台为准。
+     */
+    const appLabelOf = (acc, ident) =>
+      (ident && ident.app && ident.app.appName) || (acc && acc.label) || (acc && acc.id) || '?';
+
     // ── 数据 ────────────────────────────────────────────────────────
     // Host 侧要真起 lark-cli 子进程（每账户一次 ~300ms），超时给宽一点。
     /*
@@ -195,6 +205,18 @@ window.__ModuleLoader__.load({
         width: 28, height: 28, borderRadius: 6, background: C.layer2, color: C.dim,
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
         fontSize: 13, fontWeight: 600, flex: '0 0 auto',
+      },
+      /*
+       * 「接的是哪个应用」的身份横幅。
+       * 用左边一条竖线把它和前后的行区分开：这块是“确认身份”，不是“展开详情”，
+       * 不靠外框卡片（卡片已经有一层，再套一层太碎）。
+       */
+      connBox: {
+        borderLeft: `3px solid ${C.brand}`,
+        background: C.layer2,
+        borderRadius: '0 6px 6px 0',
+        padding: '8px 10px',
+        margin: '2px 0 10px',
       },
       grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 8, marginTop: 8 },
       meter: { height: 4, borderRadius: 2, background: C.layer2, overflow: 'hidden', marginTop: 4 },
@@ -453,6 +475,34 @@ window.__ModuleLoader__.load({
         }
       };
 
+      /**
+       * 浏览器新建/接管飞书应用（免手填 appId/secret）。
+       * 与 login 的区别：login 是给**已存在的应用**授权 user 身份；
+       * 这里是连**应用本身**都没有（或没 secret）时，去浏览器把应用建出来/绑上去。
+       */
+      const browseSetup = async () => {
+        setBusy('正在向飞书要接入链接…');
+        setMsg(null);
+        setAuthUrl(null);
+        try {
+          const d = await postAction('/plugins/larkcli/app-init', { account: acc.id });
+          if (!alive.current) return;
+          if (!d.ok || !d.verificationUrl) throw new Error(d.error || '没有拿到接入链接');
+          setAuthUrl({ url: d.verificationUrl, expiresIn: 600, requestedAt: Date.now(), mode: 'app-init' });
+          setMsg({
+            ok: true,
+            text:
+              '打开下面的链接完成飞书应用接入（不用手填 appId / secret）：\n' +
+              '  1. 先在浏览器登录到你要接入的那个飞书账号\n' +
+              '  2. 打开链接，按页面提示完成\n' +
+              '  3. 完成后点「刷新状态」，appId 与 secret 会自动出现',
+          });
+        } catch (e) {
+          if (alive.current) setMsg({ ok: false, text: String((e && e.message) || e) });
+        } finally {
+          if (alive.current) setBusy(null);
+        }
+      };
       /*
        * 授权后的自动刷新。
        * 用户原话：「我点击了 user 身份授权，到网页授权完成了，但是这里没有刷新，还是 user 未授权状态」。
@@ -589,6 +639,37 @@ window.__ModuleLoader__.load({
           'div',
           { style: { ...S.hint, margin: '0 0 8px', fontFamily: mono } },
           'id ' + acc.id + (acc.appId ? '  ·  ' + acc.appId : ''),
+        ),
+
+        /*
+         * 「我到底接了谁」—— 必须常驻，而且必须在授权按钮**上面**。
+         * 用户原话：「你授权给 user 身份前面应该先展示说你接了哪个飞书账户，
+         *   就是你接的这个的 app id 还有那个给我列出来，这样起码能对应上」。
+         * 所以这里不是“点开才看得到的信息”，而是摆在前面的身份横幅：
+         * 应用名 + appId + secret 状态，拿去开放平台后台能一眼对上。
+         */
+        react.createElement(
+          'div',
+          { style: S.connBox },
+          react.createElement('div', { style: { ...S.hint, margin: '0 0 4px' } }, '这个账户接入的飞书应用'),
+          react.createElement(
+            'div',
+            { style: { display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' } },
+            react.createElement('strong', { style: { fontSize: 13 } }, appLabelOf(acc, ident)),
+            acc.appId
+              ? react.createElement('span', { style: { ...S.hint, fontFamily: mono } }, acc.appId)
+              : react.createElement('span', { style: { ...S.hint, color: C.warn } }, '还没有 appId'),
+            acc.hasSecret
+              ? react.createElement('span', { style: S.badge('ok') }, 'secret 已就绪')
+              : react.createElement('span', { style: S.badge('warn') }, '缺 secret'),
+          ),
+          react.createElement(
+            'div',
+            { style: { ...S.hint, margin: '4px 0 0' } },
+            acc.appId
+              ? '拿这个 appId 去飞书开放平台（开发者后台）就能找到它，可在那里改名或加备注。'
+              : '还没有 appId：点下面的「用浏览器新建应用」，不用手填任何 ID。',
+          ),
         ),
 
         /*
@@ -834,6 +915,14 @@ window.__ModuleLoader__.load({
                 acc.isDefault
                   ? null
                   : react.createElement('button', { style: S.btn, disabled: !!busy, onClick: makeDefault }, '设为默认'),
+                /*
+                 * 还没接上应用（缺 appId 或缺 secret）时，提供“浏览器里接”的入口。
+                 * 这条按钮的存在理由：用户已经有账户了（比如迁移进来的空账户），
+                 * 但不想去后台拄 appId/secret —— 这是最手重的一步。
+                 */
+                acc.appId && acc.hasSecret
+                  ? null
+                  : react.createElement('button', { style: S.btn, disabled: !!busy, onClick: browseSetup }, '用浏览器新建应用'),
                 acc.user
                   ? null
                   : react.createElement('button', { style: S.btnPrimary, disabled: !!busy, onClick: login }, '授权 user 身份'),
@@ -1096,30 +1185,43 @@ window.__ModuleLoader__.load({
       const [label, setLabel] = useState('');
       const [desc, setDesc] = useState('');
       const [tags, setTags] = useState('');
-      const [appId, setAppId] = useState('');
       const [busy, setBusy] = useState(null);
       const [msg, setMsg] = useState(null);
+      const [authUrl, setAuthUrl] = useState(null);
 
+      /*
+       * 建账户 + 浏览器配置 一步到位。
+       * 用户原话：「我不明白这个的逻辑……只要这个人想增加，他就自己去扫二维码或点网页链接，
+       *   到网页端他自己本身登录着呢，这个配置就都做完了，不用手动去填这些号」。
+       * 所以：只填一个名字（id）→ 点一下 → 浏览器里确认，appId/secret 都由 CLI 写。
+       */
       const create = async () => {
-        setBusy('创建中…');
+        setBusy('正在向飞书要授权链接…');
         setMsg(null);
+        setAuthUrl(null);
         try {
+          const acctId = id.trim().toLowerCase();
           await postAction('/plugins/larkcli/account', {
-            id: id.trim().toLowerCase(),
+            id: acctId,
             label: label.trim() || undefined,
             description: desc.trim() || undefined,
             tags: tags.split(',').map((s) => s.trim()).filter(Boolean),
-            appId: appId.trim() || undefined,
             makeDefault: true,
           });
           if (!alive.current) return;
-          setId('');
-          setLabel('');
-          setDesc('');
-          setTags('');
-          setAppId('');
-          setMsg({ ok: true, text: '已创建。下一步：在会话里让 AI 调 lark_account_set_secret 写入该账户的 App Secret（面板不接收密钥）。' });
           onChanged();
+          const r = await postAction('/plugins/larkcli/app-init', { account: acctId });
+          if (!alive.current) return;
+          if (!r.ok || !r.verificationUrl) throw new Error(r.error || '没有拿到授权链接');
+          setAuthUrl({ url: r.verificationUrl, account: acctId });
+          setMsg({
+            ok: true,
+            text:
+              '账户已建好。现在打开下面的链接完成飞书应用接入：\n' +
+              '  1. 先在浏览器登录到你要接入的飞书账号\n' +
+              '  2. 打开链接，按页面提示建应用 / 授权\n' +
+              '  3. 完成后回到这里，appId 与 secret 会自动出现（不用手填）',
+          });
         } catch (e) {
           if (alive.current) setMsg({ ok: false, text: String((e && e.message) || e) });
         } finally {
@@ -1137,10 +1239,6 @@ window.__ModuleLoader__.load({
           react.createElement('div', null,
             react.createElement('div', { style: { ...S.hint, margin: '0 0 3px' } }, '账户 id（小写，会变成目录名）'),
             react.createElement('input', { style: S.input, placeholder: 'work', value: id, onChange: (e) => setId(e.target.value) }),
-          ),
-          react.createElement('div', null,
-            react.createElement('div', { style: { ...S.hint, margin: '0 0 3px' } }, 'App ID'),
-            react.createElement('input', { style: S.input, placeholder: 'cli_xxxxxxxx', value: appId, onChange: (e) => setAppId(e.target.value) }),
           ),
         ),
         react.createElement('div', { style: { marginBottom: 6 } },
@@ -1165,18 +1263,39 @@ window.__ModuleLoader__.load({
           { style: { display: 'flex', gap: 8, alignItems: 'center' } },
           react.createElement(
             'button',
-            { style: S.btnPrimary, disabled: !!busy || !id.trim() || !appId.trim(), onClick: create },
-            busy || '创建',
+            { style: S.btnPrimary, disabled: !!busy || !id.trim(), onClick: create },
+            busy || '建账户并接飞书应用',
           ),
           react.createElement(
             'span',
             { style: { ...S.hint, margin: 0 } },
-            !appId.trim()
-              ? 'App ID 必填：一个账户 = 一个飞书应用，没有它就不知道接哪个应用。'
-              : 'App Secret 不在面板填写（走 lark_account_set_secret，值不回显）',
+            '不需要手填 appId / App Secret：点上面这个按钮，去浏览器里点几下就接好了。',
           ),
         ),
-        msg ? react.createElement('pre', { style: S.pre }, msg.text) : null,
+        msg ? react.createElement('pre', { style: S.pre, borderColor: msg.ok ? C.ok : C.err }, msg.text) : null,
+        /* 浏览器里点完就算接好——链接必须给得显眼，并能一键复制 */
+        authUrl && authUrl.url
+          ? react.createElement(
+              'div',
+              { style: { marginTop: 8 } },
+              react.createElement('div', { style: { ...S.hint, margin: '0 0 4px' } }, '打开这个链接完成接入：'),
+              react.createElement(Copyable, { text: authUrl.url, id: 'new-acc-url' }),
+              react.createElement(
+                'div',
+                { style: { display: 'flex', gap: 8, marginTop: 6 } },
+                react.createElement(
+                  'button',
+                  { style: S.btn, onClick: () => window.open(authUrl.url, '_blank', 'noopener,noreferrer') },
+                  '打开授权页',
+                ),
+                react.createElement(
+                  'button',
+                  { style: S.btn, disabled: !!busy, onClick: () => onChanged() },
+                  '已完成，刷新',
+                ),
+              ),
+            )
+          : null,
       );
     }
 

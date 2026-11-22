@@ -86,10 +86,11 @@ cd C:\dsh\dw-plugin\dsh-larkcli
 
 & $node test/run.mjs      # 38 项：纯函数 + 数据层 + 失败态
 & $node test/client.mjs   # 浏览器半形态与 slot 注册
-& $node test/smoke.mjs    # 宿主半结构 + 13 个工具 + 10 条路由都要齐全
+& $node test/smoke.mjs    # 宿主半结构 + 15 个工具 + 12 条路由都要齐全
 & $node test/tools.mjs    # 27 项：真实 CLI + 真实凭据跑每个工具
 & $node test/v2.mjs       # 76 项：scopes / resolver / install + 故障回归
 & $node test/activate.mjs  # apply() 在 5 种 ctx 下都不崩（无 webServer / config 缺失 / 垃圾 config）
+& $node test/sync-merge.mjs # 14 项：config.json 只能合并 —— user token / 未知字段 / currentApp 不得被抹
 ```
 
 全绿再往下。当前实测：**38 + 27 + 76 + client + smoke + activate 全通过**。
@@ -146,7 +147,8 @@ Invoke-WebRequest -Uri 'http://127.0.0.1:64594/plugins/larkcli/status' -UseBasic
 | 二维码显示不出来 / 生成二维码失败 | **配置目录是 CLI 的保护区**，`--output` 不能落在 `LARKSUITE_CLI_CONFIG_DIR` 里 | 插件已改用 `mkdtemp`（cwd 也跟着换）；若手改过请抄回这一模式 |
 | 面板说「token 存在（未验证）」 | 这是故意的不假装健康 | 点「验证 token」/ `lark_identity verify=true`（~1.1s/账户） |
 | 点「我已完成授权」后说「还没检测到你确认授权」 | `auth login --device-code` 是**长轮询**，没点确认就干等；手动按钮等 8s、自动轮询等 5s 就返回 | 先去手机/浏览器点「同意」；device_code 在 10 分钟内仍有效，重复兑换实测幂等（连试 3 次均正常），不会“第二次必败” |
-| **授权完成但面板还是「user 未授权」** | 光在浏览器点「同意」**不会**自动生效，必须有人拿 device_code 去兑换（0.2.2 前只能靠手动点按钮） | 0.2.2 起已自动轮询（4s/次，10 分钟上限）；若超时或跨机点的，点「刷新状态」 |
+| **授权完成但面板还是「user 未授权」** | 两个完全不同的原因，先分清：<br>① 光在浏览器点「同意」**不会**自动生效，必须拿 device_code 去兑换（0.2.2 前只能手动兑换）；<br>② **0.2.2 及之前有一个致命 bug：`syncCliConfig` 每次都用新对象整份覆盖 `config.json`，把 CLI 刚写进去的 `users`（也就是 user token）抹掉了。** 这才是「点了很多次都没用」的真凶，已存 0.2.3 修复 | ① 已自动轮询（4s/次，10 分钟上限），或点「刷新状态」；<br>② 升到 0.2.3+。**自检办法**：看 `auth status` 里 `user.status`。如果它是 `missing` 且账户目录里粘着一个 `refresh_<appId>_ou_<openid>.lock`，那就是“token 曾经存在过、随后被抹掉”的典型痕迹 |
+| **`config.json` 里的 user token 会不会再被抹掉** | 不可能无条件乐观 | `test/sync-merge.mjs` 专守这一条：连续同步 5 次后断言 `users` / `open_id` / `access_token` / 未知字段 / `currentApp` 全在。已做变异测试：把实现改回整份覆盖，该测试**立即变红** |
 | 面板一直「等待你在浏览器/手机上确认…」不停 | 那份 `login-pending.json` 已过期但还在被拿去兑换（0.2.2 前会死循环空转） | 0.2.2 起 `loginFinish` 先校 `expiresAt`，过期就删文件并直说「请重新拿一条新的」 |
 | 授权链接过期 / 扫码报错 | 每个 `login-start` 生成新 `flow_id`，旧码只能用一次 | 重新 `lark_login_start`（面板「授权 user 身份」）拿新链接 |
 | 面板「状态接口不可用」 | Host 半没加载 | 完全退出 DSH 重开（不是刷页面） |

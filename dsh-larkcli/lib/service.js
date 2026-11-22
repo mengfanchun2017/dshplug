@@ -31,6 +31,50 @@ import {
 
 export const CLI_REL = path.join('lark-cli-win', 'lark-cli.exe')
 
+/**
+ * 把 CLI 自己写进 config.json 的 secret 抄回本插件标准的 appsecret.txt。
+ *
+ * 背景：`config init --new` 在浏览器里完成后，CLI 会直接把 appId + secret 写进
+ * `<accountDir>/config.json`，**不会**生成 appsecret.txt（那是本插件的约定）。
+ * 两种存法都要能读：
+ *   - `appSecret: {source:'file', id:'<绝对路径>'}`  → 读那个文件
+ *   - `appSecret: '<明文>'` 或 `{value:'…'}`          → 直接取
+ *
+ * @returns {{ok:boolean, reason?:string}}
+ */
+/** 从 CLI 的 config.json 里取真 appId（浏览器新建流程写的就是它）。 */
+function appIdFromCliConfig(ap) {
+  const cfg = readJson(ap.configFile, null)
+  const app = Array.isArray(cfg?.apps) ? cfg.apps[0] : null
+  const id = String(app?.appId || '').trim()
+  return /^cli_[A-Za-z0-9]{6,}$/.test(id) ? id : ''
+}
+
+function adoptSecretFromCliConfig(ap) {
+  const cfg = readJson(ap.configFile, null)
+  const app = Array.isArray(cfg?.apps) ? cfg.apps[0] : null
+  if (!app) return { ok: false, reason: 'config.json 里没有 apps[0]（浏览器流程可能还没完成）' }
+
+  const s = app.appSecret
+  let secret = ''
+  if (typeof s === 'string') secret = s.trim()
+  else if (s && typeof s === 'object') {
+    if (typeof s.value === 'string') secret = s.value.trim()
+    else if (s.source === 'file' && s.id) {
+      try {
+        secret = fs.readFileSync(String(s.id), 'utf8').trim()
+      } catch (e) {
+        return { ok: false, reason: `config.json 指向的 secret 文件读不到：${s.id}` }
+      }
+    }
+  }
+  if (!secret) return { ok: false, reason: 'config.json 里的 appSecret 为空或格式不认得' }
+
+  ensureDir(ap.dir)
+  fs.writeFileSync(ap.secretFile, secret, { encoding: 'utf8', mode: 0o600 })
+  return { ok: true }
+}
+
 /** 找不到 exe 时的提示：给可执行的下一步，而不是一句「失败」。 */
 export class CliMissingError extends Error {
   constructor(exePath) {
@@ -114,14 +158,42 @@ export class LarkService {
    * 保证账户目录里有一份「本机正确」的 secret + config.json。
    * secret 只从数据目录读；不复制、不回显。
    */
-  prepareAccount(account) {
+  prepareAccount(accountIn) {
+    let account = accountIn
     const ap = accountPaths(this.dataDir, account.id)
     ensureDir(ap.dir)
+    /*
+     * 浏览器新建的账户（config init --new）在登记表里可能还没有 appId：
+     * 真 appId 是 CLI 写进 config.json 的。这里回填一次，
+     * 否则面板上「接的是哪个飞书应用」就永远是空的 —— 而正是用户要拿去后台对照的那个值。
+     */
+    if (!account.appId) {
+      const adoptedAppId = appIdFromCliConfig(ap)
+      if (adoptedAppId) {
+        this.store.upsert({ id: account.id, appId: adoptedAppId })
+        account = this.store.get(account.id)
+      }
+    }
     if (!fs.existsSync(ap.secretFile)) {
-      throw new Error(
-        `账户 ${account.id} 缺少 appsecret.txt：${ap.secretFile}\n` +
-          '用 lark_account_upsert 传 appSecret 写入（值不会回显），或手动放置该文件。',
-      )
+      /*
+       * 浏览器新建的账户（config init --new）没有 appsecret.txt：
+       * CLI 自己把 secret 写进了 config.json（source:'file' 或内联）。
+       * 这里把 secret **从 config.json 抄回 appsecret.txt**，之后一切路径统一。
+       * 这是 0.2.3 「不用手填 appId/secret」的关键一环 —— 否则浏览器建完账户，
+       * 下一次调用就报「缺少 appsecret.txt」，用户得再去后台抄一遍 secret。
+       */
+      const adopted = adoptSecretFromCliConfig(ap)
+      if (!adopted.ok) {
+        throw new Error(
+          `账户 ${account.id} 还没有 App Secret：${ap.secretFile}\n` +
+            (adopted.reason ? `（${adopted.reason}）\n` : '') +
+            '三条路任选一条：\n' +
+            '  ① 面板上点「用浏览器新建应用」—— 不用手填任何 ID（推荐）\n' +
+            '  ② 工具 lark_app_init —— 同上，走会话\n' +
+            '  ③ 工具 lark_account_set_secret 直接写入（值不会回显）；' +
+            '    也可以用 lark_account_upsert 补 appId 后再写 secret',
+        )
+      }
     }
     const secret = fs.readFileSync(ap.secretFile, 'utf8').trim()
     if (!secret) throw new Error(`账户 ${account.id} 的 appsecret.txt 是空的：${ap.secretFile}`)
@@ -563,6 +635,156 @@ export class LarkService {
       deviceCodeLength: String(j.device_code || '').length,
       hint: j.hint,
       pendingFile,
+    }
+  }
+
+  // -- 新建应用（浏览器完成，免手填 appId/secret） -------------------------
+
+  /**
+   * 用 `config init --new` 在浏览器里新建/绑定一个飞书应用，用户**不需要手填** appId 与 secret。
+   *
+   * 为什么必须有这条路（用户原话：
+   *   「我不明白这个的逻辑……只要这个人想增加，他就自己去扫二维码或点网页链接，
+   *     到网页端他自己本身登录着呢，这个配置就都做完了，不用手动去填这些号」）。
+   * 把 appId / appSecret 手动抄进面板，是最重的心理负担，也是最容易抄错的一步。
+   *
+   * 实现要点：
+   *   - 命令是**阻塞**的（等用户在浏览器点完才退出），所以必须后台跑 + 从输出里抓链接；
+   *   - 链接和二维码打的是 **stderr**（不是 stdout），所以两个流都重定向到同一份日志；
+   *   - 不能用 `run()`：它固定 stdio 到临时文件并等进程结束，而我们要在中途读输出。
+   *
+   * @returns {Promise<{account:string, verificationUrl:string, child:any}>}
+   */
+  async configInitStart({ account } = {}) {
+    const exe = this.ensureBinary()
+    const acc = this.resolveAccount(account)
+    if (!acc) {
+      throw new Error('先建一个空账户（id 与显示名即可，appId 可留空）再接浏览器授权。')
+    }
+    const ap = accountPaths(this.dataDir, acc.id)
+    ensureDir(ap.dir)
+
+    if (!this.initRuns) this.initRuns = new Map()
+    const prev = this.initRuns.get(acc.id)
+    if (prev && !prev.done) {
+      throw new Error(
+        `账户 ${acc.id} 已有一个进行中的浏览器新建流程（${Math.round((Date.now() - prev.startedAt) / 1000)}s 前发起）。` +
+          '先去浏览器完成它，或等它超时。',
+      )
+    }
+
+    const env = {
+      ...process.env,
+      LARKSUITE_CLI_CONFIG_DIR: ap.dir,
+      LARKSUITE_CLI_NO_UPDATE_CHECK: '1',
+      NO_COLOR: '1',
+      // config init 在 Agent 环境下会拒绝执行；本插件就是要在 Agent 里代跑，
+      // 所以把这两个 signal 清掉（它们是 openclaw/hermes 的接入标记）。
+      OPENCLAW_HOME: '',
+      HERMES_HOME: '',
+    }
+
+    const outFile = path.join(os.tmpdir(), `lark-init-${process.pid}-${Date.now()}.log`)
+    // stdout+stderr 写同一个文件：CLI 的链接与二维码都在 stderr
+    const fd = fs.openSync(outFile, 'w')
+    const child = spawn(exe, ['config', 'init', '--new'], {
+      env,
+      cwd: ap.dir,
+      windowsHide: true,
+      stdio: ['ignore', fd, fd],
+    })
+
+    const run = { child, startedAt: Date.now(), outFile, done: false }
+    this.initRuns.set(acc.id, run)
+
+    const url = await new Promise((resolve) => {
+      let settled = false
+      const finish = (v) => {
+        if (settled) return
+        settled = true
+        clearInterval(poll)
+        clearTimeout(bail)
+        resolve(v)
+      }
+      const readUrl = () => {
+        try {
+          const txt = fs.readFileSync(outFile, 'utf8')
+          const m = txt.match(/https:\/\/[^\s"']+\/page\/cli\?[^\s"']+/)
+          return m ? m[0] : ''
+        } catch {
+          return ''
+        }
+      }
+      const poll = setInterval(() => {
+        const u = readUrl()
+        if (u) finish(u)
+      }, 250)
+      const bail = setTimeout(() => finish(readUrl()), 25000)
+      child.on('error', () => finish(''))
+      child.on('close', () => finish(readUrl()))
+    })
+
+    if (!url) {
+      this.initRuns.delete(acc.id)
+      try {
+        child.kill('SIGKILL')
+      } catch {
+        /* already gone */
+      }
+      let tail = ''
+      try {
+        tail = fs
+          .readFileSync(outFile, 'utf8')
+          .replace(/[\u2588\u2580\u2584]+/g, '')
+          .trim()
+          .slice(-400)
+      } catch {
+        /* ignore */
+      }
+      throw new Error(
+        '没能从 CLI 输出里抓到「打开以下链接配置应用」的地址。原始输出尾部：\n' + (tail || '（空）'),
+      )
+    }
+
+    // 进程退出即表示浏览器端已完成（成功会由 CLI 自己写 config.json，含真 appId 与 secret）
+    child.on('close', () => {
+      run.done = true
+      run.finishedAt = Date.now()
+      this.invalidateStatus(acc.id)
+      try {
+        fs.unlinkSync(outFile)
+      } catch {
+        /* ignore */
+      }
+    })
+
+    try {
+      fs.closeSync(fd)
+    } catch {
+      /* 子进程持有一份，父进程的这份可关 */
+    }
+
+    return { account: acc.id, verificationUrl: url, child }
+  }
+
+  /** 浏览器新建流程的当前状态（面板轮询用）。 */
+  configInitStatus({ account } = {}) {
+    const acc = this.resolveAccount(account)
+    if (!acc) throw new Error('尚未配置账户')
+    const ap = accountPaths(this.dataDir, acc.id)
+    const run = this.initRuns && this.initRuns.get(acc.id)
+    const cfg = readJson(path.join(ap.dir, 'config.json'), null)
+    const app = Array.isArray(cfg?.apps) ? cfg.apps[0] : null
+    return {
+      account: acc.id,
+      running: !!(run && !run.done),
+      done: !!(run && run.done),
+      startedAt: run ? new Date(run.startedAt).toISOString() : '',
+      // 浏览器端完成后 CLI 会把真 appId/secret 写进 config.json
+      appId: String(app?.appId || ''),
+      hasSecret: !!(app && app.appSecret),
+      hasUserToken: !!(app && Array.isArray(app.users) && app.users.length),
+      secretFile: ap.secretFile,
     }
   }
 

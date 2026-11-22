@@ -7,7 +7,7 @@
 |---|---|---|
 | **README.md**（本文） | **怎么用**：工具清单、面板长什么样、多账户模型、日常例子 | 想用它做点什么 |
 | [BOOTSTRAP.md](BOOTSTRAP.md) | **怎么做**：安装、验证、排错、换机、升级、改哪要重启 | 装不上 / 坏了 / 换机器 |
-| [ADR.md](ADR.md) | **为什么**：17 条决策 + 反面代价 + 已否决方案 | 想改设计、或质疑某个选择 |
+| [ADR.md](ADR.md) | **为什么**：19 条决策 + 反面代价 + 已否决方案 | 想改设计、或质疑某个选择 |
 
 ---
 
@@ -22,10 +22,10 @@
 
 ---
 
-## 1. 13 个工具
+## 1. 15 个工具
 
-装好后模型直接能看到这些工具。**工具数量刻意压在 13 个**：工具 schema 每轮都进上下文，
-注册 200 个命令等于每轮白烧 token。v0.2.0 新增 4 个（安装、身份、权限、按链接读文档）。
+装好后模型直接能看到这些工具。**工具数量刻意压在 15 个**：工具 schema 每轮都进上下文，
+注册 200 个命令等于每轮白烧 token。v0.2.3 新增 2 个（浏览器新建应用、查其进度）。
 
 | 工具 | 干什么 | 调 CLI？ |
 |---|---|---|
@@ -36,6 +36,8 @@
 | `lark_account_search` | **按任务本地找账户**（零 CLI 调用、零配额） | **否** |
 | `lark_account_upsert` | 建/改账户：描述、标签、appId、默认 | 否 |
 | `lark_account_set_secret` | 写 App Secret（唯一收密钥的入口，**永不回显**） | 否 |
+| `lark_app_init` | **浏览器新建应用**：不用手填 appId/secret，给一条链接让用户点 | 是（后台跑） |
+| `lark_app_init_status` | 查上面那步的进度：appId/secret/user token 是否已就位 | 否 |
 | `lark_login_start` | 发起 user 设备流授权，给链接 | 是 |
 | `lark_login_finish` | 用户确认后完成授权 | 是 |
 | `lark_install` | **装/升级 CLI**：`action="check"` 只查，`action="install"` 下载+校验+替换 | 否（自己下载） |
@@ -206,15 +208,45 @@ C:\dsh\data-larkcli\                 ← 仓库外，不进 Git、不进插件�
 一个 DSH 终端可以同时接多个飞书应用（例：一个看本公司、一个看客户公司），
 **各自有自己的 appSecret 与 user 授权，互不影响**。
 
-- 要几个就在面板里「新增账户」建几个（填 id / App ID / 描述 / 标签），
-  再在会话里用 `lark_account_set_secret` 写各自的 App Secret。
-- AI 按**描述与标签**选账户（本地加权，不把全量描述塞给模型）；
-  不指定就用「默认」那个。
+### 新增一个账户：不用手填 appId / secret
+
+**这是一个账户 = 一个飞书应用。** 新建只要一步：
+
+1. 面板「新增账户」里只填一个名字（id，小写，会变成目录名），点「建账户并接飞书应用」。
+2. 面板给你一条链接。**先在浏览器里登录到你要接入的那个飞书账号**，再打开它。
+3. 在网页上点几下（建应用 / 确认）。
+4. 回到面板点「刷新状态」—— appId 与 secret **已经自动就位**，不用去开放平台后台抄任何东西。
+
+背后发生的事（想对账时看）：`config init --new` 把 appId + secret 写进该账户目录的
+`config.json`，插件在下次用到这个账户时自动把它们接管：appId 回填到账户表、
+secret 抄成标准的 `appsecret.txt`。所以即便你从没手输过，面板上也能看到 appId。
+
+> 已经存在的账户如果缺 appId 或 secret，卡片上会出现「用浏览器新建应用」，走的是同一条路。
+
+### 账户怎么被选中、怎么“激活”
+
+AI 按**描述与标签**选账户（本地加权，不把全量描述塞给模型）；
+不指定就用「默认」那个。
+
+**激活模型：全部长期有效、可同时使用，不做全局单选。**
+
+这一点专门实测过，不是选型偏好：
+
+- `config.json` 里 `users[]` 挂在**每个 app 下面**（不是顶层），所以 A 应用与 B 应用
+  可以**同时各自持有有效的 user 授权**，互不覆盖 —— 这是「全激活」能成立的结构前提。
+- CLI 原生支持全局 `--profile <name>`，`whoami --profile beta` 实测返回对应的 appId，
+  所以「多应用并发使用」不需要本插件发明任何机制。
+
+为什么不做「同一时刻只有一个激活」：真实场景是「研发群用 A、客户群用 B」，两者要能在
+同一轮对话里先后被用到。强制单选就多一次状态、多一处能忘；而忘了切的表现是
+**读到了错误租户的数据** —— 静默且危险。
+
+> 卡片上那个「默认」徒标只影响**省略 `account` 参数时选谁**，不影响其他账户可用性。
+
 - 为什么不做「同一个应用下多个用户」：两条理由 ——
   ① CLI 虽然支持 `apps[].users` 数组，但**没有提供“指定用哪个已登录用户”的命令/参数**；
   ② 即便能选，一个账户的「描述/标签」也无法同时描述“这是谁”和“这能看什么”，
   按任务选账户就失效了（ADR-003）。
-
 ### 授权 user 身份（一次开全）
 
 1. **先确认浏览器里登的是哪个飞书账号** —— 授权是发给「当前浏览器/手机飞书里登着的那个他」的，登错了会落到别人身上。
@@ -239,16 +271,25 @@ C:\dsh\data-larkcli\                 ← 仓库外，不进 Git、不进插件�
 ```
 0) lark_install action="install"        # 没装过才需要；升级用 action="check" 看有没有新版
 1) lark_doctor               # 先看缺什么
-2) lark_identity             # 看接入的是哪个飞书应用（名/描述/头像/owner）
-3) lark_account_upsert      id="work" label="公司主账号" appId="cli_xxx"
+
+# —— 建账户（推荐路线：浏览器里点几下，不用手填 appId/secret）——
+2) lark_account_upsert      id="work" label="公司主账号"
                             description="研发群、周报文档、项目A 多维表格" tags=["研发","周报","项目A"]
-4) lark_account_set_secret account="work" appSecret="..."      # 只回长度
-5) lark_status               # bot ✅ 就能干活了
-6) lark_scopes profile="read"   # 缺哪些权限？给一条预填好的申请链接，打开点确认
-7) lark_login_start qrcode=true
-   （拿到链接 + 一张二维码：桌面点「打开授权页」直接跳，手机扫码就完事；
-     完成后回来 lark_login_finish）
+3) lark_app_init            account="work"     # 拿到链接 / 二维码，去浏览器里完成
+4) lark_app_init_status     account="work"     # 看 appId 与 secret 是否已自动就位
+
+# —— 授权 user 身份（要读“你自己的”文档/邮件时必须）——
+5) lark_login_start qrcode=true   # 一次申请全部业务域权限
+6) lark_login_finish              # 网页上同意后完成兑换
+
+7) lark_identity             # 确认：接入的是哪个应用、登的是谁
+8) lark_status               # bot ✅ 就能干活了
+9) lark_scopes profile="read"   # 缺哪些权限？给一条预填好的申请链接
 ```
+
+> 也有手填路线（已有 appId/secret，不想走浏览器）：
+> `lark_account_upsert appId="cli_xxx"` → `lark_account_set_secret account="work" appSecret="..."`。
+> 两条路线最后落到的磁盘布局完全一样。
 
 装完之后**不用记账户**：把文档链接丢给它就行。
 
@@ -298,7 +339,7 @@ user token 约 2 小时过期，CLI 自动用 refresh token 续（refresh 约 7 
 
 这是最初的三条要求之一（「增加速度降低消耗」），具体落在五处：
 
-1. **13 个工具**，不是 200 个 —— 工具 schema 每轮都进上下文。
+1. **15 个工具**，不是 200 个 —— 工具 schema 每轮都进上下文。
    v0.2.0 新增的 4 个都做了“零杂音”设计：`lark_scopes` 纯本地（零 API）、`lark_identity` 按需拉（不自动）、
    `lark_install` 只在你要拍的时候跑、`lark_read_doc` 一个参数就把多账户试完。
 2. **`lark_schema` 全量 1.5 MB 只在本地**，进上下文的只有索引（几百字）或单方法（约 2 KB）。
@@ -326,11 +367,12 @@ user token 约 2 小时过期，CLI 自动用 refresh token 续（refresh 约 7 
 $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
 cd C:\dsh\dw-plugin\dsh-larkcli
 & $node test\run.mjs     # 38 项：核心逻辑与错误路径
-& $node test\tools.mjs   # 27 项：13 个工具的注册与描述
+& $node test\tools.mjs   # 27 项：15 个工具的注册与描述
 & $node test\client.mjs  # 浏览器半：初始态 / 带数据 / 身份块 / 按钮 / 缺权限
-& $node test\smoke.mjs   # 结构与 10 条路由（少一条界面就 404）
+& $node test\smoke.mjs   # 结构与 12 条路由（少一条界面就 404）
 & $node test\v2.mjs      # 76 项：scopes / resolver / install + 回归
 & $node test\activate.mjs # apply() 在 5 种 ctx 下都不崩（无 webServer / config 缺失 / 垃圾 config）
+& $node test\sync-merge.mjs # config.json 只能合并 —— user token 不得被抹（变异测试已验证它真能抓 bug）
 ```
 
 `test/e2e.mjs` **不在上面**：它是人工诊断脚本（真实凭据跑一遍并打印原始输出，无断言）。

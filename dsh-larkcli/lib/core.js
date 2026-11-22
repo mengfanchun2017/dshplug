@@ -364,13 +364,49 @@ export function buildCliConfig(account, secretFile) {
   }
 }
 
-/** 只在内容真的变了才写，避免每次调用都动磁盘。 */
+/**
+ * 把「我们负责的那三个字段」合并进 config.json，而不是整份重写。
+ *
+ * **为什么不能整份覆盖**（0.2.3 修的真实事故）：
+ * lark-cli 在浏览器授权成功后会往 `apps[i].users` 里写入 user token。
+ * 早期实现是 `writeFileAtomic(file, buildCliConfig(...))` —— 整份覆盖，
+ * 只写 appId/appSecret/brand，于是把用户刚授权拿到的 `users` 连同 token 一起抹掉。
+ *
+ * 症状极具误导性：浏览器里明明点了同意、服务端也返回了 200，
+ * 面板却永远是「user 未授权」，`lark-cli auth list` 也查不到人 ——
+ * 因为下一个 API 调用把 token 删了。实测证据：
+ *   config.json mtime 16:54:25.782，紧跟 oauth/v3/token 200（16:54:25.458）之后，
+ *   同目录还留下了 refresh_<appId>_ou_<openid>.lock —— token 确实写入过，随后被覆盖。
+ *
+ * 合并规则：
+ *   1. 同 appId 的条目：只覆盖 appId / appSecret / brand，其余字段（含 users）原样保留
+ *   2. 没有同 appId、且数组只有一条无 token 的旧条目：替换（账户换了 appId 的情形）
+ *   3. 其余：追加，绝不动数组里别的 app（为多应用留路）
+ *   4. 顶层未知字段一律保留
+ */
 export function syncCliConfig(account, secretFile) {
-  const want = buildCliConfig(account, secretFile)
+  const wantApp = buildCliConfig(account, secretFile).apps[0]
   const file = accountPathsFor(secretFile).configFile
   const have = readJson(file, null)
-  if (have && JSON.stringify(have) === JSON.stringify(want)) return { file, changed: false }
-  writeFileAtomic(file, JSON.stringify(want, null, 2) + '\n')
+
+  let next
+  if (!have || typeof have !== 'object' || !Array.isArray(have.apps)) {
+    next = { apps: [wantApp] }
+  } else {
+    const apps = have.apps.slice()
+    const idx = apps.findIndex((a) => a && a.appId === wantApp.appId)
+    if (idx >= 0) {
+      apps[idx] = { ...apps[idx], ...wantApp }
+    } else {
+      const stale = apps.findIndex((a) => a && !(Array.isArray(a.users) && a.users.length))
+      if (stale >= 0 && apps.length === 1) apps[stale] = wantApp
+      else apps.push(wantApp)
+    }
+    next = { ...have, apps }
+  }
+
+  if (have && JSON.stringify(have) === JSON.stringify(next)) return { file, changed: false }
+  writeFileAtomic(file, JSON.stringify(next, null, 2) + '\n')
   return { file, changed: true }
 }
 

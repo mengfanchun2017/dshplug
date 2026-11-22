@@ -66,7 +66,7 @@ console.log('[完整 ctx] 工具数 =', tools2.length)
 console.log('[完整 ctx] 路由 =', JSON.stringify(routes))
 assert.equal(err2, null, '完整 ctx 下 apply 不应抛异常')
 assert.ok(tools2.length >= 13, `完整 ctx 下工具也应至少 13 个（当前 ${tools2.length}）`)
-assert.ok(routes.length >= 10, `应至少注册 10 条路由（当前 ${routes.length}：${routes.join(', ')}）`)
+assert.ok(routes.length >= 12, `应至少注册 12 条路由（当前 ${routes.length}：${routes.join(', ')}）`)
 
 // 场景 3：config 为 undefined（行里没写 config）—— 不能崩
 let err3 = null

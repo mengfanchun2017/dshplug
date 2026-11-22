@@ -508,3 +508,94 @@ CLI 自己不删。实测两天积了 20 个文件 / 103KB，且随授权次数�
 - 自动 `window.open` 授权页（弹窗需要用户手势，`setTimeout` 里开会被浏览器拦）。
 - 把 `default` 改名成中文（id 会变成目录名与 `configDir` 路径，改了对已装用户是破坏性变更）。
 ---
+
+## ADR-018：`config.json` 只能合并、绝不整份重写（user token 就是被这个抹掉的）
+
+**结论**：`syncCliConfig` 从「生成完整对象再覆盖」改为「读出已有 → 按 appId 定向合并 → 未变则不动笔」。
+
+**理由**：这是本轮排查出的**唯一真凶**，也是用户反复「授权成功但面板还是 user 未授权」的原因。
+
+`syncCliConfig` 原先每次 `prepareAccount` 都写：
+
+```js
+writeFileAtomic(file, JSON.stringify(buildCliConfig(account, secretFile)))
+```
+
+而 `buildCliConfig` 只产出 `{apps:[{appId, appSecret, brand}]}` —— **没有 `users`**。
+于是每次面板刷新 / 每次工具调用，都会把 CLI 刚写进去的 user token 连同 `users` 数组一起删掉。
+用户的感受就是「我授权了十几次，每次进去还是黄的」。
+
+证据链（可复现，不是推测）：
+
+1. `config.json` 的 mtime `16:54:25.782` 比日志里 `oauth/v3/token status=200`（`16:54:25.458`）
+   晚 **324ms** —— token 写入后先成功了 324ms，随后被本插件覆盖。
+2. 账户目录里留下 `refresh_<appId>_ou_<openid>.lock`，`ou_2ff5e6…` 这个 open_id
+   证明**确实存在过**一个 user 身份，且被刷新过。
+3. 修复后全盘搜索：`ou_2ff5e6…` 在 `C:\dsh\data-larkcli` 下已不存在（只剩临时测试文件）。
+4. 单元级复现：修复前 `users preserved: false` / `extra preserved: false`；
+   修复后 `true` / `true`。服务级复现：连调 `describeAccount` + 3 次 `prepareAccount`
+   后 open_id 与 access_token 均原样保留。
+
+**合并规则**（三条，覆盖所有真实场景）：
+
+1. 同 `appId` 条目：只覆盖 `appId` / `appSecret` / `brand`，**其余字段（含 `users`）原样保留**。
+2. 无同 `appId` 且数组里只有一条无 token 的旧条目：替换它（账户换了应用的情形，
+   否则会留下一条永远登不上的僵尸应用）。
+3. 其余情况：`push` 新条目。另：内容未变则**不写盘**（返回 `changed:false`），避免无意义 mtime 抖动。
+
+**反面代价**：
+
+- 合并逻辑要能容忍脏 `config.json`（顶层不是对象、`apps` 不是数组）——现在退化为 `{apps:[wantApp]}`，
+  即“损坏时优先保证能用”，会丢已有内容。这是个有意的取舍：宁可丢一份坏配置，也不要整个插件不可用。
+- 不写盘分支让「文件内容是否正确」无法靠 mtime 判断，排查时要看内容而不是时间戳。
+
+**已否决**：
+
+- 把 `users` 也纳入 `buildCliConfig` 一起生成 —— 本插件根本不知道 token 值，凭空生成只会写坏。
+- 只在 `prepareAccount` 里跳过已有文件 —— 那么改 `appsecret.txt` 后 secret 永远不生效。
+
+---
+
+## ADR-019：多飞书应用「各自独立、同时可用」，不做全局唯一激活
+
+**结论**：账户 = 一个飞书应用（独立 configDir），**每个账户各自持有自己的 user 授权，全部长期有效，
+可同时使用**；不引入「同一时刻只有一个激活」的概念。切换用 CLI 原生的 `--profile`，
+由本插件按账户注入，用户不需要理解它。
+
+**理由**（先实测，再定架构）：
+
+1. **token 是按应用隔离的**。实测一个配置目录里 `profile add` 两个应用后，`config.json` 是：
+
+   ```
+   { currentApp, previousApp,
+     apps: [ {name, appId, appSecret, brand, users: []},   ← 各自的 users
+             {name, appId, appSecret, brand, users: []} ] }
+   ```
+
+   `users` 挂在**每个 app 下面**，不是顶层。所以「A 应用授权了 / B 应用也授权了」
+   可以同时为真，互不覆盖 —— 这是让「全激活」成立的结构性前提。
+2. **CLI 原生支持按调用选应用**：全局 `--profile <name>`，`whoami --profile beta` 实测返回
+   `appId: cli_bbb222222`。所以「多应用并发使用」不需要本插件发明任何机制。
+3. **本插件的账户目录已经是独立 configDir**（`LARKSUITE_CLI_CONFIG_DIR` 每账户一个），
+   天然就是最强的隔离；在此之上再叠加一层「全局激活」反而会**削弱**已有能力。
+
+**为什么不要「全局唯一激活」**：用户真实场景是「研发群用 A、客户群用 B」，
+两者要能**在同一轮对话里先后被用到**。若强制全局单选，读一个文档前就得先切一次，
+既多一次状态、又多一处能忘；而忘记切的表现是「读到了错误租户的数据」——静默且危险。
+
+**反面代价**：
+
+- 面板上所有账户都会显示「user 已授权」，没有单一的「当前账户」概念。
+  因此卡片必须**各自写明 appId**（本轮已加身份横幅），否则用户无从判断这条消息是谁发的。
+- 每个账户一个 configDir，磁盘上 N 份 `config.json` + N 份 token。
+  这是隔离的代价，换来的是「A 的授权不会因 B 的操作而失效」。
+- `default` 账户 id 有特殊含义（目录名 + 历史迁移入口），不能重命名 —— 见 ADR-017 已否决项。
+  「哪个是默认账户」只影响**省略 account 参数时选谁**，不影响可用性。
+
+**已否决**：
+
+- **全局唯一激活（单选）**：多一次状态、多一处能忘，忘了就静默读错租户。
+- **一个应用下挂多个 user**：CLI 没有「在多用户之间选择」的参数，`users[]` 只会累积，
+  无法在调用时指定用哪个；且卡片的「描述/标签」无法同时描述身份与范围。
+- **同 configDir 放多个 profile 当多账户**：能跑通，但会让 N 个应用的 token 挤在一个
+  `config.json` 里，任一次写坏就全丢；现有「一账户一目录」隔离更强，不动。

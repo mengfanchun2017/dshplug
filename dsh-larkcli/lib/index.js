@@ -429,6 +429,84 @@ export function apply(ctx, config) {
   )
 
   // -------------------------------------------------------------------------
+  // 4.5) lark_app_init / lark_app_init_status —— 浏览器新建应用（免手填）
+  // -------------------------------------------------------------------------
+  register(
+    {
+      name: 'lark_app_init',
+      description:
+        '在浏览器里新建/绑定一个飞书应用并完成配置，**不需要手填 appId 与 appSecret**。' +
+        '先在 lark_account_upsert 建一个只有 id + 显示名的空账户（appId 可留空），再调本工具，' +
+        '把返回的 verificationUrl 给用户打开（或扫码）。用户在网页端登录着的那个飞书账号就是被接入的账号。' +
+        '完成后 CLI 自己写入 appId/secret，本插件会自动接管（appId 回填、secret 抄进 appsecret.txt）。',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          account: { type: 'string', description: '账户 id。省略 = 默认账户。' },
+        },
+      },
+      output: textOutput(),
+      timeoutMs: 60000,
+      async execute(args) {
+        try {
+          const r = await service.configInitStart({
+            account: args?.account ? String(args.account) : undefined,
+          })
+          return {
+            ok: true,
+            text: [
+              `已开始用浏览器配置账户 ${r.account}（不用填 appId / secret）：`,
+              '',
+              '把下面这条链接原样发给用户打开（不要改写、不要编码），或先生成二维码再发：',
+              r.verificationUrl,
+              '',
+              '用户在网页端登录的那个飞书账号，就是被接入的账号。',
+              '完成后用 lark_app_init_status 查进度（或在面板上看到 appId 自动出现）。',
+            ].join('\n'),
+          }
+        } catch (e) {
+          return { ok: false, text: `发起失败：${String((e && e.message) || e)}` }
+        }
+      },
+    },
+    'app init',
+  )
+
+  register(
+    {
+      name: 'lark_app_init_status',
+      description:
+        '查 lark_app_init 的进度：CLI 进程是否还在跑、config.json 里是否已有 appId 与 secret、是否已有 user token。',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          account: { type: 'string', description: '账户 id。省略 = 默认账户。' },
+        },
+      },
+      output: textOutput(),
+      timeoutMs: 20000,
+      async execute(args) {
+        try {
+          const r = service.configInitStatus({ account: args?.account ? String(args.account) : undefined })
+          const lines = [
+            `账户：${r.account}`,
+            `浏览器流程：${r.running ? '进行中' : r.done ? '已完成' : '未开始'}`,
+            `appId：${r.appId || '（还没有）'}`,
+            `App Secret：${r.hasSecret ? '已就绪' : '还没有'}`,
+            `user token：${r.hasUserToken ? '已就绪' : '还没有（需要再走 auth login）'}`,
+          ]
+          return { ok: true, text: lines.join('\n') }
+        } catch (e) {
+          return { ok: false, text: `查询失败：${String((e && e.message) || e)}` }
+        }
+      },
+    },
+    'app init status',
+  )
+
+  // -------------------------------------------------------------------------
   // 5) lark_login_start / 6) lark_login_finish —— 设备流授权
   // -------------------------------------------------------------------------
   register(
@@ -1141,7 +1219,58 @@ export function apply(ctx, config) {
       'larkcli: default route',
     )
 
-    // 写：发起授权（返回链接，供面板划出）
+    /*
+     * 用浏览器新建/绑定一个飞书应用（免手填 appId / secret）。
+     *
+     * 用户原话：「只要这个人想增加，他就自己去扫二维码或点网页链接，
+     *   到网页端他自己本身登录着呢，这个配置就都做完了，不用手动去填这些号」。
+     * 之前要 4 步（建账户→填 appId→工具写 secret→授权 user），其中两步纯手工。
+     * 现在只剩：建一个空账户（一个名字）→ 点一下 → 浏览器里确认。
+     */
+    webCtx.effect(
+      () =>
+        webCtx.webServer.register({
+          kind: 'exact',
+          path: '/plugins/larkcli/app-init',
+          handler: async (req, res) => {
+            if (!guard(req, res)) return
+            if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'POST only' })
+            try {
+              const body = await readBody(req)
+              const r = await service.configInitStart({
+                account: body.account ? String(body.account) : undefined,
+              })
+              // child 是进程句柄，不可序列化，不能随响应发出去
+              json(res, 200, { ok: true, account: r.account, verificationUrl: r.verificationUrl })
+            } catch (err) {
+              json(res, 500, { ok: false, error: String((err && err.message) || err) })
+            }
+          },
+        }),
+      'larkcli: app-init route',
+    )
+
+    // 轮询上面的进度：CLI 进程退出 + config.json 有 appId 就算完成
+    webCtx.effect(
+      () =>
+        webCtx.webServer.register({
+          kind: 'exact',
+          path: '/plugins/larkcli/app-init-status',
+          handler: async (req, res) => {
+            if (!guard(req, res)) return
+            try {
+              const url = new URL(req.url, 'http://localhost')
+              const account = url.searchParams.get('account') || undefined
+              const r = service.configInitStatus({ account })
+              json(res, 200, { ok: true, ...r })
+            } catch (err) {
+              json(res, 500, { ok: false, error: String((err && err.message) || err) })
+            }
+          },
+        }),
+      'larkcli: app-init-status route',
+    )
+
     webCtx.effect(
       () =>
         webCtx.webServer.register({
