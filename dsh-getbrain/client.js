@@ -868,7 +868,6 @@ window.__ModuleLoader__.load({
         }
       }, [])
 
-      React.useEffect(() => {
       // ── 知识管理体检：ID 表 + 工作内容提纯包 ──
       // 两个都是纯本地、不耗配额，所以进「笔记现状」页时拉一次就行。
       // 为何合在一起：它们回答同一个问题「这个库能不能拿给 AI 用」。
@@ -1000,6 +999,8 @@ window.__ModuleLoader__.load({
       }, [])
 
 
+      // 切到某个页时才补拉它的数据：首屏只拉当前页，避免一进面板就打 4 个本地扫描。
+      React.useEffect(() => {
         if (view === 'structure' && inv.phase === 'loading' && !inv.__tried) {
           setInv((x) => ({ ...x, __tried: true }))
           loadInv()
@@ -1449,6 +1450,9 @@ window.__ModuleLoader__.load({
         onAutoPlan, autoPlan,
         drag: [drag, setDrag], dropOn: [dropOn, setDropOn], onDropToKb,
         undo: undos, onUndo, undoResult, undoBusy, undoArmed, setUndoArmed,
+        // 「分类调整」页的目标选择器直接读这几个键。
+        // act 是 renderXxx 的唯一入参：新增 render 用到的键必须在这里同步，
+        // 漏了就是默认视图一渲染就 throw（被平台错误边界吞成一片空白）。
         targetKind, setTargetKind, topicId, setTopicId, tagName, setTagName,
         newKbName, setNewKbName,
         del: { open: [delOpen, setDelOpen], noteId: [delNoteId, setDelNoteId],
@@ -3549,12 +3553,63 @@ window.__ModuleLoader__.load({
           locale: NS,
         }, GetnoteIcon))), 'getnote: sidebar icon')
 
+        // 包一层**真正的**错误边界。
+        //
+        // 为什么必须这样：平台的 SlotErrorBoundary 会把渲染期异常吞掉，界面只剩
+        // 一片空白，原因只在 DevTools 里。用户看到的就是「点了没反应/空白」。
+        // 要拿到真实栈，只能用 React 认的类组件 componentDidCatch ——
+        // 不能用 try/catch 包住函数式组件调用：GetnoteWorkbench 内部有
+        // useState/useEffect，直接当函数调会把 hooks 挂到错误组件上
+        // （报 "Rendered more hooks than during the previous render"），
+        // 反而制造新故障。类组件不参与 hooks 规则，是唯一安全位置。
+        class GetnoteErrorBoundary extends React.Component {
+          constructor(props) {
+            super(props)
+            this.state = { err: null }
+          }
+          static getDerivedStateFromError(err) {
+            return { err }
+          }
+          componentDidCatch(err, info) {
+            try {
+              fetch('/plugins/getnote/report', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({
+                  ts: __probe.ts,
+                  renderError: String(err && (err.stack || err.message) || err),
+                  componentStack: String(info && info.componentStack || ''),
+                }),
+              }).catch(() => {})
+            } catch { /* 上报失败不影响界面 */ }
+          }
+          render() {
+            if (this.state.err) {
+              return h('div', { style: { padding: 24, fontSize: 12.5, lineHeight: 1.7 } },
+                h('h2', { style: { margin: '0 0 10px', fontSize: 15 } }, 'Mgetbrain 面板渲染失败'),
+                h('pre', {
+                  style: {
+                    margin: '0 0 10px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                    color: 'var(--dsw-alias-state-error-primary)', font: 'inherit',
+                  },
+                }, String(this.state.err && (this.state.err.stack || this.state.err.message) || this.state.err)),
+                h('p', { style: { margin: 0, color: 'var(--dsw-alias-label-secondary)' } },
+                  '这条信息已报给宿主：GET /plugins/getnote/report'))
+            }
+            return this.props.children
+          }
+        }
+        // 无状态外壳：把边界和真实组件用 createElement 组合，不直接调用组件。
+        function GetnoteWorkbenchSafe(props) {
+          return h(GetnoteErrorBoundary, null, h(GetnoteWorkbench, props))
+        }
         ctx.effect(() => ctx.slots.inject('main', () => __mark('main', () => ctx.slots.register({
           name: 'main',
           key: PANEL_ID,
           locale: NS,
           inject: () => ({ t }),
-        }, GetnoteWorkbench))), 'getnote: main panel')
+        }, GetnoteWorkbenchSafe))), 'getnote: main panel')
 
         // 上报注册结果，给 Agent 做黑盒验证用（失败了不影响界面）。
         //
