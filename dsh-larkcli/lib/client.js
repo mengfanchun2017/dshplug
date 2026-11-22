@@ -20,7 +20,11 @@ window.__ModuleLoader__.load({
     const react = require('react');
     const { useState, useEffect, useCallback, useRef } = react;
 
-    const inject = ['slots'];
+    // 铁律：apply 里每出现一次 ctx.xxx，这里就要列一个 xxx。
+    // 漏列 = Cordis 给 undefined = apply 首行抛错 = 整个浏览器半不注册，
+    // 且**控制台干净、设置里就是什么都没有**（本插件 0.2.0 实际踩过：
+    // 用了 ctx.locale 却只写 ['slots']，设置面板一直不出现）。
+    const inject = ['slots', 'locale'];
 
     const API = '/plugins/larkcli/status';
     const NS = 'larkcli.settings';

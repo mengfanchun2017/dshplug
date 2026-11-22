@@ -65,7 +65,33 @@ const mod = loaded.factory(fakeRequire)
 console.log('name   =', mod.name)
 console.log('inject =', JSON.stringify(mod.inject))
 assert.equal(mod.name, 'dsh-larkcli')
-assert.deepEqual(mod.inject, ['slots'])
+assert.deepEqual(mod.inject, ['slots', 'locale'])
+
+// ── inject 完整性守卫（回归：0.2.0 设置"里";什么都没有） ──
+// 真实事故：apply 里用了 ctx.locale，inject 却只写 ['slots']。
+// Cordis 只注入声明过的服务，没列就是 undefined，apply 首行抛 TypeError，
+// 整个浏览器半不注册——控制台干净、不报错、设置里凭空蒸发。
+// 这里不针对 locale 写死，而是把源码里所有 ctx.xxx 抽出来逐个核。
+// 先剥注释与字符串字面量，否则注释里的 "ctx.xxx" 这类示例文字会被当成真用法扫进来。
+const codeOnly = src
+  .replace(/\/\*[\s\S]*?\*\//g, ' ')
+  .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ')
+  .replace(/'(?:[^'\\\n]|\\.)*'/g, "''")
+  .replace(/"(?:[^"\\\n]|\\.)*"/g, '""')
+  .replace(/`(?:[^`\\]|\\.)*`/g, '``')
+const ctxServices = [...new Set(
+  [...codeOnly.matchAll(/\bctx\.([A-Za-z_$][\w$]*)/g)].map((m) => m[1]),
+)].filter((s) => !['effect'].includes(s)); // effect 是 ctx 自带方法，不是注入的服务
+for (const svc of ctxServices) {
+  assert.ok(
+    mod.inject.includes(svc),
+    `apply 用了 ctx.${svc}，但 inject 里没有 '${svc}' —— Cordis 会传 undefined，整个浏览器半会静默不注册`,
+  )
+}
+assert.ok(
+  ctxServices.includes('locale') && ctxServices.includes('slots'),
+  `取样失败：应从源码里找到 ctx.locale 与 ctx.slots，实际得到 ${JSON.stringify(ctxServices)}`,
+)
 assert.equal(typeof mod.apply, 'function')
 
 // ── 跑 apply，检查 slot 注册 ────────────────────────────────────────────────

@@ -53,7 +53,7 @@
 # ④ 完全退出 DSH 再打开（首次加载新 bundle 必须重启）
 ```
 
-`-Check` 应该显示 `dsh-larkcli  v0.2.0  status=active  link-junction`。
+`-Check` 应该显示 `dsh-larkcli  v0.2.1  status=active  link-junction`。
 
 ### 1.1 幂等：重复执行不会坏
 
@@ -148,6 +148,7 @@ Invoke-WebRequest -Uri 'http://127.0.0.1:64594/plugins/larkcli/status' -UseBasic
 | 点「我已完成授权」后说「还没检测到你确认授权」 | `auth login --device-code` 是**长轮询**，没点确认就干等；插件只等 30s 就返回 | 先去手机/浏览器点「同意」，再点一次；device_code 在 10 分钟内仍有效，重复点不坏 |
 | 授权链接过期 / 扫码报错 | 每个 `login-start` 生成新 `flow_id`，旧码只能用一次 | 重新 `lark_login_start`（面板「授权 user 身份」）拿新链接 |
 | 面板「状态接口不可用」 | Host 半没加载 | 完全退出 DSH 重开（不是刷页面） |
+| **设置里完全找不到「Mlarkcli」，且右键/工具都正常** | **`client.js` 的 `inject` 漏列了 `apply` 里用到的服务**（本插件 0.2.0 真实踩过：用了 `ctx.locale` 却只写 `['slots']`）。Cordis 只注入声明过的服务，没列就是 `undefined`，`apply` 首行抛 `TypeError`，**整个浏览器半静默不注册** | 不是重启问题也不是缓存问题。打桩 ctx 只放声明过的服务跑一遍 `apply`，会直接抛 `Cannot read properties of undefined`；`test/client.mjs` 已加静态守卫，把源码里所有 `ctx.xxx` 与 `inject` 逐个核 |
 | 工具超时 | 大查询没分页 | `--page-limit` / `--page-size`，或 `timeoutMs` 加大 |
 | `lark_scopes` 说缺权限但开放平台看着已给 | 改完权限没发布 | 开放平台「创建版本并发布」 |
 | 结果被截断 | 默认 24000 字符上限 | 分页；或 `maxChars` 参数 / 配置调大 |

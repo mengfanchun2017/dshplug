@@ -2895,6 +2895,11 @@ window.__ModuleLoader__.load({
           warn: { borderColor: 'var(--dsw-alias-state-warn-primary)' },
           ok: { borderColor: 'var(--dsw-alias-state-success-primary)' },
         },
+        // 状态文字样式。之前 renderPkmSearch / renderOwnerDist 直接写了 P.ok / P.warn，
+        // 但这两个键从来没定义过 —— 取到 undefined，样式被静默忽略（不报错、只是没颜色）。
+        // 这类「用了不存在的键」不崩却也不生效，正是最难看出来的一种缺陷。
+        ok: { margin: 0, fontSize: 12.5, lineHeight: 1.6, color: 'var(--dsw-alias-state-success-primary)' },
+        warn: { margin: 0, fontSize: 12.5, lineHeight: 1.6, color: 'var(--dsw-alias-state-warn-primary)' },
         statValue: { fontSize: 22, fontWeight: 600, lineHeight: 1.2, fontVariantNumeric: 'tabular-nums' },
         statLabel: { marginTop: 2, fontSize: 11.5, color: txt2 },
         statHint: { marginTop: 1, fontSize: 10.5, color: txt2, opacity: 0.75 },
@@ -3484,16 +3489,45 @@ window.__ModuleLoader__.load({
         const creds = pickCreds()
         const injected = () => ({ t, form, creds })
 
+        // ── 注册自检 ───────────────────────────────────────────────
+        // 旧探针把 ok 写死成 true，于是「无论注册成没成，报表都是 ok」——
+        // 只能证明代码跑到了那一行，不能证明任何注册事实，属于自欺。
+        // 现在如实记录：register() 有没有抛错、返回的是不是 disposer。
+        const __probe = {
+          ts: new Date().toISOString(),
+          panelId: PANEL_ID,
+          slotsApi: {
+            inject: typeof ctx.slots.inject === 'function',
+            register: typeof ctx.slots.register === 'function',
+            entriesOfSlot: typeof ctx.slots.entriesOfSlot === 'function',
+            entries: typeof ctx.slots.entries === 'function',
+            spec: typeof ctx.slots.spec === 'function',
+          },
+          locale: NS,
+          hasT: typeof t === 'function',
+          reg: {},
+        }
+        const __mark = (key, fn) => {
+          try {
+            const r = fn()
+            __probe.reg[key] = { ok: true, returnsDisposer: typeof r === 'function' }
+            return r
+          } catch (e) {
+            __probe.reg[key] = { ok: false, error: String((e && e.message) || e) }
+            throw e
+          }
+        }
+
         // 顶层设置侧边栏分区（与「通用」「插件」同级）。
         // 用 ctx.effect 包裹，卸载时注销（与 dsh-rag client.js 一致的写法）。
-        ctx.effect(() => ctx.slots.inject('settings.section', () => ctx.slots.register({
+        ctx.effect(() => ctx.slots.inject('settings.section', () => __mark('settings', () => ctx.slots.register({
           name: 'settings.section',
           id: 'getnote',
           order: 201,
           label: () => t('nav'),
           locale: NS,
           inject: injected,
-        }, GetnoteSettingsSection)), 'getnote: settings section')
+        }, GetnoteSettingsSection))), 'getnote: settings section')
 
         // ── 左侧边栏工作台 ───────────────────────────────────────
         // 两个 slot 必须用**同一个 id**：
@@ -3507,54 +3541,64 @@ window.__ModuleLoader__.load({
         // 两个关键点之前没做对：
         //   1) 都要带 locale，否则 label 的 thunk 不会被重读，且导航行拿不到文字；
         //   2) main 的 inject 要展开成对象（不是函数只返回 t），否则 props 结构不对。
-        ctx.effect(() => ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
+        ctx.effect(() => ctx.slots.inject('sidebar.panellist', () => __mark('sidebar', () => ctx.slots.register({
           name: 'sidebar.panellist',
           id: PANEL_ID,
           order: 55,
           label: () => t('panelName'),
           locale: NS,
-        }, GetnoteIcon)), 'getnote: sidebar icon')
+        }, GetnoteIcon))), 'getnote: sidebar icon')
 
-        ctx.effect(() => ctx.slots.inject('main', () => ctx.slots.register({
+        ctx.effect(() => ctx.slots.inject('main', () => __mark('main', () => ctx.slots.register({
           name: 'main',
           key: PANEL_ID,
           locale: NS,
           inject: () => ({ t }),
-        }, GetnoteWorkbench)), 'getnote: main panel')
+        }, GetnoteWorkbench))), 'getnote: main panel')
 
         // 上报注册结果，给 Agent 做黑盒验证用（失败了不影响界面）。
-        // 能看到这条 GET /plugins/getnote/report 返回 sidebar.ok=true，
-        // 就说明 slot 注册这件事在浏览器端真的执行了。
-        try {
-          const probe = {
-            ts: new Date().toISOString(),
-            panelId: PANEL_ID,
-            sidebar: { attempted: true, ok: true },
-            main: { attempted: true, ok: true },
-            slotsApi: {
-              inject: typeof ctx.slots.inject === 'function',
-              register: typeof ctx.slots.register === 'function',
-              entriesOfSlot: typeof ctx.slots.entriesOfSlot === 'function',
-            },
-            locale: NS,
-            hasT: typeof t === 'function',
-          }
-          // 顺手报一下 sidebar.panellist 里现在有几项（含官方的），
-          // 这样能区分“我没注册上”和“注册上了但没渲染”。
+        //
+        // 为什么要采两次：slots.inject 的回调可能在槽被声明之前就跑，
+        // 此时 entriesOfSlot 返回空数组是正常的（槽还不存在）。只有等平台把
+        // sidebar 槽树声明完再采，才能区分「我没注册上」和「时机太早」。
+        const __sample = (tag) => {
+          __probe[tag] = {}
           try {
-            const list = ctx.slots.entriesOfSlot && ctx.slots.entriesOfSlot('sidebar.panellist')
-            probe.sidebar.totalEntries = Array.isArray(list) ? list.length : null
-            probe.sidebar.ids = Array.isArray(list)
-              ? list.map((e) => e && e.options && e.options.id).filter(Boolean)
-              : null
-          } catch (e2) { probe.sidebar.entriesError = String((e2 && e2.message) || e2) }
-          fetch('/plugins/getnote/report', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            credentials: 'same-origin',
-            body: JSON.stringify(probe),
-          }).catch(() => {})
-        } catch { /* 上报失败不能影响插件 */ }
+            const list = ctx.slots.entriesOfSlot('sidebar.panellist')
+            __probe[tag].panellist = {
+              total: list.length,
+              ids: list.map((e) => e && e.options && e.options.id).filter(Boolean),
+              mine: list.some((e) => e && e.options && e.options.id === PANEL_ID),
+            }
+          } catch (e) {
+            __probe[tag].panellistError = String((e && e.message) || e)
+          }
+          try {
+            __probe[tag].hasSpec = !!ctx.slots.spec('sidebar.panellist')
+            const mains = ctx.slots.entries('main')
+            __probe[tag].main = {
+              total: mains.length,
+              keys: mains.map((e) => e && e.options && e.options.key).filter(Boolean),
+              mine: mains.some((e) => e && e.options && e.options.key === PANEL_ID),
+            }
+          } catch (e) {
+            __probe[tag].mainError = String((e && e.message) || e)
+          }
+        }
+        const __send = (tag) => {
+          try {
+            __sample(tag)
+            fetch('/plugins/getnote/report', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              credentials: 'same-origin',
+              body: JSON.stringify(__probe),
+            }).catch(() => {})
+          } catch { /* 上报失败不能影响插件 */ }
+        }
+        __send('atApply')
+        // 平台声明槽树通常在首帧之后；1.5s 后再采一次，覆盖「晚声明」的情况。
+        try { setTimeout(() => __send('at1500ms'), 1500) } catch { /* no timer */ }
       },
     }
   },

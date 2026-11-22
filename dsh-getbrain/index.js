@@ -743,7 +743,15 @@ export function apply(ctx, config) {
             raw += chunk
             if (raw.length > 16384) break
           }
-          clientReport.data = JSON.parse(raw || '{}')
+          const incoming = JSON.parse(raw || '{}')
+          // 两次采样（atApply / at1500ms）都要留：后者覆盖前者就把「注册那一刻」
+          // 的事实丢了，而这两次之差正是判断「注册没上」还是「时机太早」的唯一依据。
+          if (clientReport.data && typeof clientReport.data === 'object'
+              && clientReport.data.ts === incoming.ts) {
+            clientReport.data = { ...clientReport.data, ...incoming }
+          } else {
+            clientReport.data = incoming
+          }
           clientReport.at = Date.now()
           res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
           res.end(JSON.stringify({ ok: true }))

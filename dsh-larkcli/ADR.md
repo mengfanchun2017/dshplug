@@ -372,6 +372,37 @@ ResourceUnavailable: Access to the path '\\.\pipe\LOCAL\dotnet_...' is denied
 - 保留 180s（面板卡三分钟，体验崩）。
 - 面板轮询 `login-finish`（会把 device_code 反复拿去兑换，而兑换是**一次性**的，第二次必败）。
 - 只靠工具、不给按钮（不满足目标④的“零点击”）。
+---
+## ADR-016：浏览器半的 `inject` 必须穷举 `apply` 里用到的服务
+
+**结论**：`lib/client.js` 的 `inject` 从 `['slots']` 改为 `['slots', 'locale']`；
+`test/client.mjs` 增加一条**静态守卫**：从源码剔掉注释与字符串字面量后，
+把所有 `ctx.xxx` 抽出来逐个比对 `inject`，缺一个就红。
+
+**理由**：
+
+1. 0.2.0 发布后现象是「**设置里完全没有 Mlarkcli**，但工具能用、HTTP 路由全部 200」。
+   这组现象极易被误判成「没重启」或「缓存」，实际是浏览器半**根本没注册**。
+2. 根因是 Cordis 的依赖注入语义：`ctx` 上只有 `inject` 声明过的服务。
+   `apply` 里写了 `ctx.locale.register(...)`，而 `inject` 只有 `['slots']`
+   → `ctx.locale` 是 `undefined` → 首行抛 `TypeError: Cannot read properties of undefined (reading 'register')`。
+3. 这个错误**不会让任何东西变红**：宿主半照常工作、控制台干净、无 toast。
+   打桩复现（只把已声明的服务放上 ctx）：
+   `漏声明 locale: TypeError: Cannot read properties of undefined (reading 'register')` / `声明 [slots,locale]: apply 正常完成`。
+4. 原测试没抓到，是因为 `test/client.mjs` 手搓的 `fakeCtx` **无条件带了 locale**，
+   等于把被验证的约束自己给放宽了。守卫改成从源码抽真用法，不依赖测试作者的记忆。
+
+**反面代价**：
+
+- 静态守卫会误判 —— 注释/字符串里出现的 `ctx.xxx` 会被当成真用法，
+  所以必须先剥注释与字符串字面量（初版就是被自己注释里的 `ctx.xxx` 扫红的）。
+- 守卫只能查「声明了没用」，查不了「用了但拼错服务名」（拼错时两边都不匹配，仍需打桩跑真 apply）。
+
+**已否决**：
+
+- 只把 `['slots']` 改成 `['slots','locale']` 了事：同一类错误下次换个服务还会再犯，且依旧静默。
+- 改成 `inject: ['*']` 全量注入：Cordis 不支持通配，且就算支持也丢掉了「依赖即声明」的可见性。
+- 让 `apply` 里 `ctx.locale?.register` 可选链兜底：会让面板静默失去翻译（导航栏显示 key 而非名字），把错误变成更难查的半坏状态。
 
 ---
 ## 附：实测数据（2026-11-21 本机）
@@ -393,6 +424,10 @@ ResourceUnavailable: Access to the path '\\.\pipe\LOCAL\dotnet_...' is denied
 | HTTP 路由 | 10 条（2026-11-21 新增 `/qrcode`、`/login-finish`） |
 | `auth status --verify` | 1137ms，多返回 `verified:true` + bot `openId` / `appName` |
 | 二维码 PNG | 871 字节（真实 flow）| 416 字节（无效 URL 占位） |
+| 浏览器半 `apply` 打桩（2026-11-22） | 只给 `inject` 声明的服务时：`['slots']` → `TypeError: Cannot read properties of undefined (reading 'register')`；`['slots','locale']` → 正常完成并注册 `settings.section` id=`larkcli` order=202 |
+| 静态守卫扫到的 `ctx.*` | `locale` / `slots`（剥注释与字符串后），无杂音 |
+| 工具数（从 `apply` 真实注册数出） | **13**（`lark_status` … `lark_read_doc`） |
+| `install.ps1 -Check` | `dsh-larkcli v0.2.1 status=active link-junction`，全部为 link: 形态 |
 
 **已知平台事实**（实测，别再猜）：
 - `lark-cli auth status --format json` 会报 `unknown flag`；该命令只认 `--json`。
