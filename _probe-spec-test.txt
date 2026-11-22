@@ -1,6 +1,0 @@
-OK   github:mengfanchun2017/dshplug#path:/dsh-gitok  =>  {"kind":"git","spec":"github:mengfanchun2017/dshplug#path:/dsh-gitok","host":"github.com"}
-OK   github:mengfanchun2017/dshplug#path:/dsh-synchub  =>  {"kind":"git","spec":"github:mengfanchun2017/dshplug#path:/dsh-synchub","host":"github.com"}
-OK   github:mengfanchun2017/dshplug#path:dsh-gitok  =>  {"kind":"git","spec":"github:mengfanchun2017/dshplug#path:dsh-gitok","host":"github.com"}
-OK   https://github.com/mengfanchun2017/dshplug#path:dsh-synchub  =>  {"kind":"git","spec":"https://github.com/mengfanchun2017/dshplug#path:dsh-synchub","host":"github.com"}
-OK   https://github.com/mengfanchun2017/dshplug.git#path:dsh-synchub  =>  {"kind":"git","spec":"https://github.com/mengfanchun2017/dshplug.git#path:dsh-synchub","host":"github.com"}
-pinnedGitOrigin = github.com/mengfanchun2017/dshplug#dsh-gitok
