@@ -21,6 +21,20 @@ const j = src.indexOf(endMark, i)
 if (j < 0) throw new Error('找不到组件结尾标记')
 const compSrc = src.slice(i, j)
 
+// StatusRows：GCM 路径/来源/找过哪里这一组行。
+// 【为什么要在这里也验】0.4.5 起面板会把 gcmHow / gcmTried / gcmHint 画出来，
+// 而这三项是宿主新增字段 —— 渲染时取 undefined 不会报错，只会静默变空。
+const srStart = src.indexOf('function StatusRows(props) {')
+if (srStart < 0) throw new Error('找不到 StatusRows')
+const srEnd = src.indexOf('// 六项持续监控', srStart)
+if (srEnd < 0) throw new Error('找不到 StatusRows 结尾标记')
+const statusSrc = src.slice(srStart, srEnd)
+
+// Row 是 StatusRows 的依赖，单独抽出来
+const rowStart = src.indexOf('const Row = ({ k, v, mono = true }) =>')
+const rowEnd = src.indexOf('const LEVEL_TEXT', rowStart)
+if (rowStart < 0 || rowEnd < 0) throw new Error('找不到 Row')
+const rowSrc = src.slice(rowStart, rowEnd)
 // C 对象
 const cStart = src.indexOf('const C = {')
 const cEnd = src.indexOf('\n    };', cStart)
@@ -48,16 +62,27 @@ function useState(init) { return react.useState(init) }
 const factory = new Function('react', 'useState', `
 ${cSrc}
 ${sSrc}
+${rowSrc}
+${statusSrc}
 ${compSrc}
-return CredAccountCard
+return { CredAccountCard, StatusRows }
 `)
-const CredAccountCard = factory(react, useState)
+const { CredAccountCard, StatusRows } = factory(react, useState)
+
+// StatusRows 只读字段、无 hook，直接当函数调即可（无需 createElement）
+function renderStatus(st) {
+  return textOf(StatusRows({ st }))
+}
 
 // ---- 3. 渲染成纯文本，便于断言 ----
 function textOf(node) {
   if (node == null || node === false || node === true) return ''
   if (typeof node === 'string' || typeof node === 'number') return String(node)
   if (Array.isArray(node)) return node.map(textOf).join('')
+  // 【坑】createElement(Row, { k, v }) 生成的是「待渲染的函数组件」节点，
+  // children 为空、文本全在 props 里。不在这里展开就会把 Row 的内容当成空 ——
+  // 表象是断言「缺少 GCM 路径」，而组件其实渲染得完全正确。
+  if (typeof node.type === 'function') return textOf(node.type(node.props))
   const own = node.children.map(textOf).join('')
   return own
 }
@@ -125,25 +150,68 @@ const cases = [
   },
 ]
 
+// ---- StatusRows 的用例：GCM 路径三态 ----
+// 这三个用例直接对应本次 bug：旧版只 push 一个 st.gcmPath，
+// 找不到时既不说「找过哪里」也不说下一步做什么。
+const statusCases = [
+  {
+    name: 'StatusRows：GCM 找到时带来源',
+    st: {
+      store: '(default = wincredman)', helper: 'manager', scoped: '(无)',
+      gcmPath: 'C:\\Program Files\\Git\\ucrt64\\bin\\git-credential-manager.exe',
+      gcmHow: 'git --exec-path',
+    },
+    must: ['GCM 路径', 'git-credential-manager.exe', 'git --exec-path'],
+    mustNot: ['undefined', '已找过'],
+  },
+  {
+    name: 'StatusRows：GCM 找不到时列出找过哪里',
+    st: {
+      store: 'wincredman', helper: 'manager-core', scoped: '(无)',
+      gcmPath: '',
+      gcmTried: ['PATH 逐目录（18 个目录）', 'git --exec-path = C:/Program Files/Git/ucrt64/libexec/git-core'],
+      gcmHint: 'gitconfig 里 credential.helper 写的是 `manager-core`，GCM 2.3.0 起已删除该别名',
+    },
+    must: ['❌ 未找到', '已找过', 'PATH 逐目录', 'git --exec-path', '诊断', 'manager-core'],
+    mustNot: ['undefined'],
+  },
+  {
+    // 旧宿主（没重启）返回的 status 没有新字段：必须静默降级，不能报错也不能出 undefined
+    name: 'StatusRows：旧宿主无新字段（降级）',
+    st: { store: 'wincredman', helper: 'manager', scoped: '(无)', gcmPath: 'C:\\gcm.exe' },
+    must: ['GCM 路径', 'C:\\gcm.exe'],
+    mustNot: ['undefined', '（undefined）', '已找过', '诊断'],
+  },
+]
+
 let bad = 0
-for (const c of cases) {
-  let out = ''
-  try {
-    out = render(c.st, c.opened)
-  } catch (err) {
-    console.log(`❌ ${c.name} —— 渲染抛错: ${err.message}`)
-    bad++
-    continue
-  }
-  const missing = c.must.filter((s) => !out.includes(s))
-  const leaked = c.mustNot.filter((s) => out.includes(s))
-  if (missing.length || leaked.length) {
-    bad++
-    console.log(`❌ ${c.name}`)
-    if (missing.length) console.log('   缺少:', missing)
-    if (leaked.length) console.log('   不该出现:', leaked)
-  } else {
-    console.log(`✅ ${c.name}`)
+
+// 统一跑法：renderer 决定这类用例调哪个组件
+const suites = [
+  { cases, render: (c) => render(c.st, c.opened) },
+  { cases: statusCases, render: (c) => renderStatus(c.st) },
+]
+
+for (const suite of suites) {
+  for (const c of suite.cases) {
+    let out = ''
+    try {
+      out = suite.render(c)
+    } catch (err) {
+      console.log(`❌ ${c.name} —— 渲染抛错: ${err.message}`)
+      bad++
+      continue
+    }
+    const missing = c.must.filter((s) => !out.includes(s))
+    const leaked = c.mustNot.filter((s) => out.includes(s))
+    if (missing.length || leaked.length) {
+      bad++
+      console.log(`❌ ${c.name}`)
+      if (missing.length) console.log('   缺少:', missing)
+      if (leaked.length) console.log('   不该出现:', leaked)
+    } else {
+      console.log(`✅ ${c.name}`)
+    }
   }
 }
 

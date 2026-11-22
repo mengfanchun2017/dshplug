@@ -3,7 +3,7 @@
 > 命令行手册：**装机、验证、排错、迁移**。全部命令可直接复制。
 > 代码怎么设计、为什么这么定 → 见 [`ADR.md`](./ADR.md)；面板长什么样 → 见 [`README.md`](./README.md)。
 >
-> 快照时间：**2026-11-22** ｜ 版本 **0.4.3** ｜ 宿主机 `REDMIPRO` ｜ profile `desktop`
+> 快照时间：**2026-11-23** ｜ 版本 **0.4.5** ｜ 宿主机 `REDMIPRO` ｜ profile `desktop`
 
 ---
 
@@ -492,14 +492,20 @@ cd C:\dsh\dw-plugin
 | Windows 凭据管理器里的 token | **带不走**（DPAPI 绑机器）。新机跑一次 `gitok_login` |
 | `C:\dsh\data-*` 等技能数据目录 | 不在本插件范围。数据不进仓库、不进插件包；到新机后由插件首次运行自动重建（或手动拷贝） |
 | profile 里的 `link:` 绝对路径 | **不要求新机路径相同**。路径随便挑，装完跑 `install.ps1 -Force` 把 `link:` 重新指向新位置即可（搬仓后 `-Check` 会报「链接已断」提醒你） |
-| 本机特定的 GCM 路径 | 检查 `cordis.patch.yml` 的 `gcmPath`；留空则自动探测 |
+| 本机特定的 GCM 路径 | 不需要改：`gcmPath` 留空就会自动探测（PATH → 安装根 → 注册表 / `git --exec-path` / `credential.helper`）。只有自动探测都落空时才需填；面板会显示「已找过哪些来源」 |
 
 ### 5.6 新机器第一次跑，可能缺的三样
 
 ```powershell
-# ① GCM 是否在
-Get-Command git-credential-manager -ErrorAction SilentlyContinue
-# 找不到就填 cordis.patch.yml 的 gcmPath，指向 git-credential-manager.exe 绝对路径
+# ① GCM 是否在 —— 注意：where.exe 找不到 ≠ 没装！
+# PATH 里只有 ...\MinGit\cmd 时 where 会落空，但 git 自己是能找到的：
+git --exec-path                 # 例：.../MinGit/ucrt64/libexec/git-core
+git credential-manager --version  # 有版本号 = GCM 在（实测 2.9.1 / 3.0.2）
+
+# 要看真实路径，去 exec-path 同级的 bin 里找：
+#   ...\ucrt64\bin\git-credential-manager.exe   ← Git for Windows 2.56 起的主布局
+#   ...\mingw64\bin\...                          ← 老布局
+# 都找不到才需要填 cordis.patch.yml 的 gcmPath
 
 # ② git 的 schannel 可能报 SEC_E_NO_CREDENTIALS（MinGit 已知问题）
 & git config --global http.sslBackend openssl
@@ -811,7 +817,9 @@ dsh plugin --profile desktop add 'github:mengfanchun2017/dshplug#path:/dsh-gitok
 # 在 DSH 对话里说：「跑一下 gitok_doctor」
 #
 # 重点看三行：
-#   GCM 路径      —— 有 ❌ 就先装 Git for Windows，或在设置里填 gcmPath
+#   GCM 路径      —— 有 ❌ 时先看「已找过 / 诊断」那两行：
+#                    能跑 `git credential-manager --version` = GCM 在，填 gcmPath 即可
+#                    报 not a git command = 真没装，或 helper 名写成了 manager-core
 #   credential.helper —— 看看在系统级还是用户级（两处都查才算查了）
 #   已存凭据      —— 有「0 条」是正常的，B 还没登过
 ```

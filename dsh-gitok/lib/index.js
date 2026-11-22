@@ -218,19 +218,318 @@ function probeTcp(host, port, timeoutMs = 1200) {
 // GCM 定位与命令封装
 // ---------------------------------------------------------------------------
 
-const GCM_CANDIDATES = [
-  'C:\\Users\\franc\\AppData\\Local\\Programs\\MinGit\\ucrt64\\bin\\git-credential-manager.exe',
-  'C:\\Program Files\\Git\\mingw64\\bin\\git-credential-manager.exe',
-  'C:\\Program Files (x86)\\Git\\mingw64\\bin\\git-credential-manager.exe',
-  'C:\\Program Files\\Git\\mingw64\\bin\\git-credential-manager-core.exe',
+/**
+ * GCM 定位。
+ *
+ * 【为什么不再用一张写死的绝对路径表】
+ * v0.4.4 及之前是 4 条硬编码路径，其中第一条还是开发机的用户目录
+ * （`C:\Users\franc\...`）。后果有两个：
+ *   1. 换一台机器，Git for Windows 装在默认位置、或用了 ucrt64 新布局、
+ *      或 GCM 是单独装的（官方安装包 / `dotnet tool install -g`），表里一条都不命中
+ *      → 面板报「❌ 未找到 GCM，无法管理凭据」，而该机 git 认证其实完全正常。
+ *      实测反例：`where.exe git-credential-manager` 找不到，
+ *      但 `git credential-manager --version` 正常返回 2.9.1 —— 可见
+ *      「PATH 里没有」绝不能推出「没装」。
+ *   2. 开发机路径混进公共代码，违反 ADR-016（路径一律运行时推导）。
+ *
+ * 现在的口径：**先问 git，再问文件系统，最后才下结论**。四类来源都不含用户名/盘符：
+ *   ① 配置 gcmPath（用户显式指定，最高优先）
+ *   ② PATH 逐目录（等价 where.exe，但不起子进程）
+ *   ③ %ProgramFiles% / %LOCALAPPDATA% / %USERPROFILE% 推导出的安装根
+ *   ④ 一次 pwsh 探针：注册表 InstallPath、`git --exec-path`、`credential.helper` 的值
+ *
+ * 【为什么以 git 的口径为准】
+ * 决定「认证能不能用」的不是插件能否找到 exe，而是 **git 能否解析 credential.helper**。
+ * `git --exec-path` 报的 `.../ucrt64/libexec/git-core` 及其同级 `bin` 就是 git 自己搜索
+ * helper 的目录，比任何猜测都准；`credential.helper` 里若直接写了绝对路径，那更是原文。
+ */
+
+/** GCM 可执行文件名。`-core` 是 2.3.0 之前的旧名（见 GCM docs/rename.md），保留兼容。 */
+const GCM_EXE_NAMES = ['git-credential-manager.exe', 'git-credential-manager-core.exe']
+
+/**
+ * GCM 在「安装根」下的常见相对位置。
+ * Git for Windows 2.56 起主布局从 mingw64 迁到 ucrt64（两套并存了一段），
+ * 单独安装的 GCM / .NET tool 则直接落在根上，所以空串也要有。
+ */
+const GCM_SUBDIRS = [
+  'ucrt64\\bin',
+  'mingw64\\bin',
+  'bin',
+  'ucrt64\\libexec\\git-core',
+  'mingw64\\libexec\\git-core',
+  '',
 ]
 
-function resolveGcm(config) {
-  const explicit = cfg(config, 'gcmPath', '')
-  if (explicit && existsSync(explicit)) return explicit
-  for (const p of GCM_CANDIDATES) if (existsSync(p)) return p
+/** 拆 PATH（Windows 用分号），顺手去掉包在目录外的引号。 */
+function splitPathEnv(v) {
+  return String(v || '')
+    .split(';')
+    .map((s) => s.trim().replace(/^"/, '').replace(/"$/, ''))
+    .filter(Boolean)
+}
+
+/** 在给定目录里找 GCM 可执行文件（同步、无子进程）。 */
+function findGcmIn(dirs) {
+  for (const dir of dirs) {
+    if (!dir) continue
+    for (const exe of GCM_EXE_NAMES) {
+      const p = path.join(dir, exe)
+      if (existsSync(p)) return p
+    }
+  }
   return ''
 }
+
+/** PATH 逐目录找。 */
+function findGcmOnPath() {
+  return findGcmIn(splitPathEnv(process.env.PATH || process.env.Path || ''))
+}
+
+/**
+ * 由系统环境变量推导「可能装了 Git / GCM 的根」，再拼 GCM_SUBDIRS。
+ * 只用 %ProgramFiles% / %ProgramFiles(x86)% / %LOCALAPPDATA% / %USERPROFILE%，
+ * 不写死用户名与盘符 —— 这是本函数存在的全部意义。
+ */
+function gcmInstallRootDirs() {
+  const pf = process.env.ProgramFiles || process.env.ProgramW6432 || ''
+  const pf86 = process.env['ProgramFiles(x86)'] || ''
+  const lad = process.env.LOCALAPPDATA || ''
+  const up = process.env.USERPROFILE || ''
+  const bases = [pf, pf86, lad ? path.join(lad, 'Programs') : ''].filter(Boolean)
+
+  const roots = []
+  for (const base of bases) {
+    roots.push(path.join(base, 'Git'))
+    roots.push(path.join(base, 'MinGit'))
+    // 官方独立安装包（gcmuser-win，用户级免管理员）默认落这里
+    roots.push(path.join(base, 'Git Credential Manager'))
+  }
+  // `dotnet tool install -g git-credential-manager` 的落地目录
+  if (up) roots.push(path.join(up, '.dotnet', 'tools'))
+
+  const dirs = []
+  for (const r of roots) for (const sub of GCM_SUBDIRS) dirs.push(sub ? path.join(r, sub) : r)
+  return dirs
+}
+
+/** 把 `git --exec-path` 的输出反推成候选目录。 */
+function gcmDirsFromExecPath(execPath) {
+  const raw = String(execPath || '').trim().replace(/^"/, '').replace(/"$/, '')
+  if (!raw) return []
+  const norm = raw.replace(/\//g, '\\')
+  const out = []
+  // 典型：...\MinGit\ucrt64\libexec\git-core → ...\MinGit\ucrt64\bin
+  const m = /^(.*)\\libexec\\git-core$/i.exec(norm)
+  if (m) {
+    out.push(path.join(m[1], 'bin'))
+    out.push(path.join(m[1], 'libexec', 'git-core'))
+  }
+  out.push(norm)
+  return out
+}
+
+/**
+ * 从 helper 配置值里抠出可用的 GCM 路径。
+ * 值可能是四种形态，全部都要认：
+ *   `manager`                                 裸名（交给 git 解析）
+ *   `!/mnt/c/.../git-credential-manager.exe`  WSL 接管后的命令行形式
+ *   `!"C:/Program Files/.../x.exe"`           带引号的命令行形式
+ *   `C:/tools/gcm/git-credential-manager.exe` 直接写绝对路径
+ * 只有最后一种能直接当 exe 路径用。
+ */
+function gcmPathFromHelperValue(value) {
+  let v = String(value || '').trim()
+  if (!v) return ''
+  if (v.startsWith('!')) v = v.slice(1).trim()
+  v = v.replace(/^"/, '').replace(/"$/, '').trim()
+  if (!/\.exe$/i.test(v)) return ''
+  if (!path.isAbsolute(v)) return ''
+  return existsSync(v) ? v : ''
+}
+
+/** helper 值是否为裸名（交给 git 解析，不是路径）。 */
+function helperBareName(value) {
+  const v = String(value || '').trim()
+  if (!v || v.startsWith('!') || /[\\/]/.test(v) || /\.exe$/i.test(v)) return ''
+  return v
+}
+
+/**
+ * 那次唯一的外部件探针：注册表 + exec-path + helper 值。
+ * 输出前缀行，JS 侧解析；沿用 probeWindows 的 `KEY: value` 风格。
+ * 注意本段在 JS 普通字符串数组里，正则的 `\.` 要写成 `\\.`（同 probeWindows 的坑）。
+ */
+function gcmProbeCommand() {
+  return [
+    '$ErrorActionPreference = "SilentlyContinue"',
+    '"REG_HKLM: " + ((Get-ItemProperty "HKLM:\\SOFTWARE\\GitForWindows" -ErrorAction SilentlyContinue).InstallPath)',
+    '"REG_HKCU: " + ((Get-ItemProperty "HKCU:\\SOFTWARE\\GitForWindows" -ErrorAction SilentlyContinue).InstallPath)',
+    '$ep = (git --exec-path 2>$null) -join ""',
+    '"EXECPATH: " + $ep',
+    'foreach ($h in @(git config --show-origin --get-all credential.helper 2>$null)) { "HELPER: " + $h }',
+    'foreach ($h in @(git config --global --get-regexp "^credential\\..*\\.helper$" 2>$null)) { "SCOPED: " + $h }',
+  ].join('\n')
+}
+
+/** 解析 gcmProbeCommand 的输出。 */
+function parseGcmProbe(text) {
+  const pickAll = (prefix) => {
+    const re = new RegExp('^' + prefix + ':[ \\t]*(.*)$', 'gm')
+    return [...String(text || '').matchAll(re)].map((m) => m[1].trim())
+  }
+  const first = (prefix) => {
+    const m = new RegExp('^' + prefix + ':[ \\t]*(.*)$', 'm').exec(String(text || ''))
+    return m && m[1] ? m[1].trim() : ''
+  }
+  // SCOPED 行是 `credential.https://github.com.helper <值>`，key 与值之间是空白
+  const scopedValues = pickAll('SCOPED').map((line) => {
+    const sp = line.search(/[ \t]/)
+    return sp === -1 ? '' : line.slice(sp).trim()
+  })
+  return {
+    regHklm: first('REG_HKLM'),
+    regHkcu: first('REG_HKCU'),
+    execPath: first('EXECPATH'),
+    helperValues: [...pickAll('HELPER'), ...scopedValues].filter(Boolean),
+  }
+}
+
+/** 探测结果缓存。面板一次渲染会多次读它，别每次起子进程。 */
+let gcmCache = { key: '', at: 0, value: null }
+
+/**
+ * 定位 GCM，返回结构化结果（不是字符串 —— 面板要说明「怎么找到的」）。
+ *   { path, how, tried[], helperBare[], managerCoreBroken, hint }
+ * 找不到时 path 为空字符串，但 tried 一定非空，供面板展示「到底找过哪里」。
+ */
+async function resolveGcm(config) {
+  const explicit = String(cfg(config, 'gcmPath', '') || '').trim()
+  const key = explicit + '::' + (process.env.PATH || '')
+  const now = Date.now()
+  if (gcmCache.value && gcmCache.key === key && now - gcmCache.at < 60000) return gcmCache.value
+
+  const finding = {
+    path: '',
+    how: '',
+    tried: [],
+    helperBare: [],
+    managerCoreBroken: false,
+    hint: '',
+    probeFailed: false,
+    probeError: '',
+  }
+  const done = () => {
+    gcmCache = { key, at: Date.now(), value: finding }
+    return finding
+  }
+
+  // ① 显式配置。配了就信它，只在文件不存在时继续往下探（并留下痕迹）。
+  if (explicit) {
+    finding.tried.push('配置 gcmPath = ' + explicit)
+    if (existsSync(explicit)) {
+      finding.path = explicit
+      finding.how = '配置 gcmPath'
+      return done()
+    }
+  }
+
+  // ② PATH
+  finding.tried.push('PATH 逐目录（' + splitPathEnv(process.env.PATH || process.env.Path || '').length + ' 个目录）')
+  const onPath = findGcmOnPath()
+  if (onPath) {
+    finding.path = onPath
+    finding.how = 'PATH'
+    return done()
+  }
+
+  // ③ 环境变量推导出的安装根
+  finding.tried.push('%ProgramFiles%\\Git|MinGit|Git Credential Manager、%LOCALAPPDATA%\\Programs\\*、~/.dotnet/tools')
+  const inRoots = findGcmIn(gcmInstallRootDirs())
+  if (inRoots) {
+    finding.path = inRoots
+    finding.how = '常见安装目录'
+    return done()
+  }
+
+  // ④ 唯一一次外部位探针：注册表 / exec-path / helper 值
+  const probe = await exec('pwsh', ['-NoProfile', '-NonInteractive', '-Command', gcmProbeCommand()], {
+    timeoutMs: Number(cfg(config, 'probeTimeoutMs', 20000)) || 20000,
+  })
+  const info = parseGcmProbe(probe.stdout || '')
+  finding.helperBare = info.helperValues.map(helperBareName).filter(Boolean)
+  // 【为什么要把探针失败单独记下来】探针跑不起来时 info 三项全空，
+  // 后面的 tried 会显示成「git 读不到」—— 用户会去查 git，而真正的原因是
+  // 子进程被宿主限制。不区分这两者，又是同一个“准确但误导”的坑。
+  if (!probe.ok) {
+    finding.probeFailed = true
+    finding.probeError = (probe.stderr || '').trim() || probe.code
+    finding.tried.push('外部探针未跑完（' + finding.probeError + '）—— 因此注册表 / git --exec-path / helper 值三项均未取到')
+  }
+
+  // ④a 注册表 InstallPath：Git 装在自定义位置时这是最权威的来源
+  for (const [label, root] of [['注册表 HKLM InstallPath', info.regHklm], ['注册表 HKCU InstallPath', info.regHkcu]]) {
+    if (!root) continue
+    finding.tried.push(label + ' = ' + root)
+    const hit = findGcmIn(GCM_SUBDIRS.map((sub) => (sub ? path.join(root, sub) : root)))
+    if (hit) {
+      finding.path = hit
+      finding.how = label
+      return done()
+    }
+  }
+
+  // ④b git --exec-path 反推目录（git 自己搜 helper 的地方）
+  if (info.execPath) {
+    finding.tried.push('git --exec-path = ' + info.execPath)
+    const hit = findGcmIn(gcmDirsFromExecPath(info.execPath))
+    if (hit) {
+      finding.path = hit
+      finding.how = 'git --exec-path'
+      return done()
+    }
+  } else {
+    finding.tried.push('git --exec-path（读不到：git 不在 PATH 或不可执行）')
+  }
+
+  // ④c helper 配置里直接写的绝对路径
+  for (const v of info.helperValues) {
+    const hit = gcmPathFromHelperValue(v)
+    if (hit) {
+      finding.tried.push('credential.helper = ' + v)
+      finding.path = hit
+      finding.how = 'credential.helper 配置'
+      return done()
+    }
+  }
+
+  // ⑤ 全部落空。若 helper 写的是 manager-core，那是**另一个**问题（不是没装 GCM）。
+  if (info.helperValues.some((v) => {
+    const bare = helperBareName(v)
+    return bare === 'manager-core' || /git-credential-manager-core\.exe$/i.test(v)
+  })) {
+    finding.managerCoreBroken = true
+    finding.hint =
+      'gitconfig 里 credential.helper 写的是 `manager-core`，而 GCM 2.3.0 起已删除该别名' +
+      '（官方 docs/rename.md）。若 git 报 `git: \'credential-manager-core\' is not a git command`，' +
+      '执行 `git config --global credential.helper manager` 即可修好。'
+  } else if (finding.helperBare.length) {
+    finding.hint =
+      'gitconfig 里 credential.helper = `' + finding.helperBare.join('`, `') + '`，' +
+      '但插件在常见位置没找到对应的可执行文件 —— 在设置里把 gcmPath 填成该 exe 的绝对路径即可（`git --exec-path` 同级 bin 目录里通常就有）。'
+  }
+  // 探针没跑起来时，上面的 hint 都不可信（info 三项全空）。用探针失败覆盖它，
+  // 否则用户会被引去查 git，而真正原因是插件在这个环境里起不了子进程。
+  if (finding.probeFailed) {
+    finding.hint =
+      '未能向 git 发问（' + finding.probeError + '），所以「注册表 / exec-path / helper 值」三项没查到。' +
+      '这通常是插件所处环境不允许起子进程，不是 GCM 或 git 的故障。' +
+      '请在普通终端里手动确认：`git credential-manager --version`，有版本号就把该 exe 路径填进 gcmPath。'
+  }
+
+  return done()
+}
+
 
 /** 把 Windows 绝对路径转成 WSL 里的 /mnt/c/... 形式。 */
 function toWslPath(winPath) {
@@ -442,16 +741,38 @@ async function listWslDistros() {
  */
 async function runDoctor(api, listArg) {
   const list = Array.isArray(listArg) && listArg.length ? listArg.map(String) : await api.resolveTargets()
-  const g = api.gcm()
+  const gcmFinding = await api.gcmInfo()
+  const g = gcmFinding.path
   const lines = []
 
   lines.push('# git 认证体检')
   lines.push('')
-  lines.push(`- GCM 路径：${g || '❌ 未找到（请设置 gcmPath）'}`)
   if (g) {
+    // 把「怎么找到的」写出来：用户换机器时第一句就要能判断「它是不是又退回硬编码了」
+    lines.push(`- GCM 路径：${g}${gcmFinding.how ? `（来源：${gcmFinding.how}）` : ''}`)
     const ver = await exec(g, ['--version'], { timeoutMs: api.probeTimeout() })
-    lines.push(`- GCM 版本：${(ver.stdout || ver.stderr || '').trim() || '(未知)'}`)
+    // 【为什么不能直接把 stderr 当成版本】实测在受限沙箱里跑得到的是
+    //   `- GCM 版本：spawn EPERM`
+    // 那不是 GCM 坏了，而是宿主进程不允许插件起子进程（DSH 沙箱的命名管道限制）。
+    // 把它当版本号展示会让人去查一个不存在的 GCM 故障。
+    if (ver.ok) {
+      lines.push(`- GCM 版本：${(ver.stdout || ver.stderr || '').trim() || '(未知)'}`)
+    } else if (ver.code === 'SPAWN_FAILED') {
+      lines.push(`- GCM 版本：(本次未能执行 —— 子进程被限制：${(ver.stderr || '').trim()}；路径存在不等于可执行，可在外部终端跑 \`"${g}" --version\` 确认)`)
+    } else {
+      lines.push(`- GCM 版本：(执行失败 ${ver.code}：${(ver.stderr || '').trim() || '(无输出)'})`)
+    }
+  } else {
+    lines.push('- GCM 路径：❌ 未找到')
+    // 不只报「没找到」，要把「找过哪里」全部列出来 ——
+    // 否则用户无法判断是「真没装」还是「插件没找对」。
+    if (gcmFinding.tried.length) {
+      lines.push('- 已尝试的来源：')
+      for (const t of gcmFinding.tried) lines.push(`  - ${t}`)
+    }
+    if (gcmFinding.hint) lines.push(`- 诊断：${gcmFinding.hint}`)
   }
+
   lines.push('')
 
   for (const target of list) {
@@ -488,7 +809,7 @@ async function runDoctor(api, listArg) {
  *
  * 返回 level ∈ ok | warn | error | unknown，并附带六项持续监控的逐项结果。
  */
-function parseStatus(text, gcmPath, extra = {}) {
+function parseStatus(text, gcm, extra = {}) {
   // 【坑】这里必须用 [ \t]* 而不是 \s*：\s 包含换行符，
   // 目标行值为空时 \s* 会吃掉换行，.+ 转而抓到下一行内容。
   // 实测：helper(scoped): 为空时，regex 抓到了 "credentialStore: (default = wincredman)"。
@@ -702,15 +1023,53 @@ function parseStatus(text, gcmPath, extra = {}) {
   }
 
   // ---- f：依赖漂移（GCM / 代理 / 端点可达） ----
+  // gcm 形参兼容两种入参：结构化 finding（新）或纯路径字符串（旧调用点）。
+  const gcmFinding = gcm && typeof gcm === 'object'
+    ? gcm
+    : { path: String(gcm || ''), how: '', tried: [], helperBare: [], managerCoreBroken: false, hint: '' }
+  const gcmPath = gcmFinding.path || ''
   const gcmMissing = !gcmPath
   // undefined = 本次没探（没使用代理）；true/false 才是真实结果。
   // 不能把 undefined 当成 ok 的旁证 —— 它只意味着「没查」，不等于「查了没问题」。
   const proxyStr = extra.proxyReachable
   let depLevel = 'ok'
   let depDetail = 'GCM 就位，端点探测正常'
-  if (gcmMissing) { depLevel = 'error'; depDetail = '未找到 GCM，无法管理凭据' }
+  // `manager-core` 是 GCM 2.3.0 之前的旧名，官方已删该别名（docs/rename.md）。
+  // 【为什么即使 GCM 找到了也要提】找到 exe ≠ git 能解析 helper：
+  // 旧别名能在 GCM 2.x 上工作（还有 `-core.exe` 兼容文件），但升到 3.x 就会变成
+  // `git: 'credential-manager-core' is not a git command` —— 那是一个“伏雷”，
+  // 现在不报，将来报的时候用户已经完全不知道怎么回事了。
+  const coreHelper = [helper, scoped]
+    .filter(Boolean)
+    .some((v) => /(^|[\s|!"'])manager-core([\s"']|$)/i.test(v) || /git-credential-manager-core\.exe/i.test(v))
+  if (gcmMissing) {
+    // 【关键】探针没跑起来时，「未找到」是一个无法验证的结论 ——
+    // 这和本次 bug 是同一类错误：把「我没查到」说成「它不存在」。
+    // 此时给 unknown，并在 detail 里说清「哪一项没查、下一步手工确认什么」。
+    depLevel = gcmFinding.probeFailed ? 'unknown' : 'error'
+    // 【为什么要分三种文案】旧版只有一句「未找到 GCM，无法管理凭据」，
+    // 而真实世界有三种完全不同的情况，对应的下一步也完全不同：
+    //   ① helper 写了 manager-core → GCM 装着，只是名字被删了 → 一条命令就能修
+    //   ② git 能解析 helper 但插件没找到 exe → 填 gcmPath
+    //   ③ 真没装 → 去装
+    // 把它们归并成一句「未找到」= 用户除了重装什么也做不了。
+    if (gcmFinding.managerCoreBroken || coreHelper) {
+      depDetail = 'GCM 已装但 helper 名写错：`manager-core` 在 GCM 2.3.0 被删除，改成 `manager` 即可（git config --global credential.helper manager）'
+    } else if (gcmFinding.helperBare.length) {
+      depDetail = `git 已配 helper \`${gcmFinding.helperBare.join('`, `')}\`，但插件没找到对应 exe；把它的绝对路径填进 gcmPath 即可`
+    } else if (gcmFinding.probeFailed) {
+      // 注意措辞：是「没能确认」而不是「未找到」
+      depDetail = `无法确认 GCM 是否已装（${gcmFinding.probeError}）：插件在这个环境里起不了子进程，注册表 / git --exec-path / helper 值都没查到。在普通终端跑 \`git credential-manager --version\` 确认；有版本号就把该 exe 路径填进 gcmPath。`
+    } else {
+      depDetail = `未找到 GCM（已找过 ${gcmFinding.tried.length} 个来源）：先跑 \`git credential-manager --version\`，有输出版本号就把该 exe 路径填进 gcmPath`
+    }
+  }
   else if (endpointTimeout) { depLevel = 'error'; depDetail = '有端点探测超时或失败（WSL 可能未启动）' }
   else if (proxyStr === false) { depLevel = 'warn'; depDetail = '代理端口连不上，git 可能超时' }
+  else if (coreHelper) {
+    depLevel = 'warn'
+    depDetail = 'GCM 就位，但 credential.helper 还是旧名 `manager-core`（GCM 2.3.0 已删除该别名，升到 3.x 会直接报 not a git command）；改成 `manager` 即可'
+  }
   else if (proxyStr === true) { depDetail = 'GCM 就位，端点探测正常，代理端口可连' }
   else { depDetail = 'GCM 就位，端点探测正常（本次未走代理，未探代理端口）' }
   add('deps', '依赖与网络', depLevel, depDetail)
@@ -727,7 +1086,11 @@ function parseStatus(text, gcmPath, extra = {}) {
     if (c.id === 'heartbeat' && c.level === 'unknown') continue
     if (rank[c.level] > rank[level]) level = c.level
   }
-  if (gcmMissing) level = 'error'
+  // 【为什么这里不再强行拉成 error】旧写法是 `if (gcmMissing) level = 'error'`，
+  // 但它和 deps 自己的等级重复，而且会把「本次没查成」也涂成无法处理的红色。
+  // 现在 deps 已经按情况给出 error（真没装）或 unknown（未能确认），
+  // 上面的 rank 比较会自动把它抬到整体徽标 —— 不需要第二遍强制。
+  // 与 heartbeat 的处理一致：unknown 不能凭空把徽标拉低，除非确实可处理。
 
   const summary =
     level === 'error' ? (checks.find((c) => c.level === 'error')?.detail || '存在必须处理的问题')
@@ -740,6 +1103,12 @@ function parseStatus(text, gcmPath, extra = {}) {
 
   return {
     level, summary, checks, gcmPath: gcmPath || '',
+    // 面板要把「怎么找到的 / 找过哪里 / 下一步做什么」全部展示出来。
+    // 只给一个空字符串时，用户无法区分「插件没找」与「真没装」。
+    gcmHow: gcmFinding.how || '',
+    gcmTried: gcmFinding.tried || [],
+    gcmHint: gcmFinding.hint || '',
+    gcmManagerCoreBroken: Boolean(gcmFinding.managerCoreBroken),
     helper: helper || '(未配置)',
     scoped: scoped || '(无)',
     store: store || '(默认 wincredman)',
@@ -797,7 +1166,7 @@ async function toolVerify(api, args) {
 
 async function toolList(api, args) {
   const list = Array.isArray(args?.targets) && args.targets.length ? args.targets.map(String) : await api.resolveTargets()
-  const g = api.gcm()
+  const g = await api.gcm()
   const lines = ['# 已存 git 凭据', '']
 
   lines.push('## Windows 凭据管理器')
@@ -833,7 +1202,7 @@ echo "ssh keys:       $(ls ~/.ssh/id_* 2>/dev/null | xargs -r -n1 basename | tr 
 
 /** 触发 GCM 登录。密钥由 GCM 直接写入 Windows 凭据管理器，本插件不接触。 */
 async function doLogin(api, host, username) {
-  const g = api.gcm()
+  const g = await api.gcm()
   if (!g) return { ok: false, text: '❌ 未找到 git-credential-manager，请先在设置里配置 gcmPath。' }
 
   // 用 GCM 的 get 触发一次交互：仓库没凭据时它会弹浏览器/设备码。
@@ -912,7 +1281,7 @@ async function toolRevoke(api, args) {
 
   const host = String(args?.host ?? 'github.com').trim() || 'github.com'
   const repoPath = args?.path ? String(args.path) : ''
-  const g = api.gcm()
+  const g = await api.gcm()
   if (!g) return '❌ 未找到 git-credential-manager。'
 
   const input = `protocol=https\nhost=${host}\n${repoPath ? `path=${repoPath}\n` : ''}\n`
@@ -940,7 +1309,7 @@ async function toolRevoke(api, args) {
  * dryRun=true 时只报「将执行什么」，不改任何文件。
  */
 async function toolAdopt(api, args) {
-  const g = api.gcm()
+  const g = await api.gcm()
   if (!g) return '❌ 未找到 git-credential-manager，无法接管。'
   const gWsl = toWslPath(g)
   const dryRun = args?.dryRun === true
@@ -1021,7 +1390,7 @@ async function toolRotate(api, args) {
   const url = args?.url ? String(args.url).trim() : ''
   const username = args?.username ? String(args.username) : ''
   const dryRun = args?.dryRun === true
-  const g = api.gcm()
+  const g = await api.gcm()
   if (!g) return '❌ 未找到 git-credential-manager，无法轮换。'
 
   const lines = [`# 轮换凭据 ${host}` + (dryRun ? '（预演）' : ''), '']
@@ -1103,17 +1472,28 @@ async function toolBootstrap(api, args) {
   const url = args?.url ? String(args.url).trim() : ''
   const cleanPlaintext = args?.cleanPlaintext === true
   const list = Array.isArray(args?.targets) && args.targets.length ? args.targets.map(String) : await api.resolveTargets()
-  const g = api.gcm()
+  // bootstrap 的 S0 要能把「找过哪里」全部列出来，所以这里拿结构化的 finding。
+  const gcmFinding = await api.gcmInfo()
+  const g = gcmFinding.path
 
   const out = ['# 初始化 git 认证' + (dryRun ? '（预演，不写入）' : ''), '']
 
   // ── S0 环境自检 ────────────────────────────────────────────────
   out.push('## S0 环境自检')
   const envLines = []
-  envLines.push(`- GCM：${g ? '✅ `' + g + '`' : '❌ 未找到（在配置里填 gcmPath）'}`)
   if (g) {
+    envLines.push(`- GCM：✅ \`${g}\`${gcmFinding.how ? `（来源：${gcmFinding.how}）` : ''}`)
     const ver = await exec(g, ['--version'], { timeoutMs: api.probeTimeout() })
-    envLines.push(`- GCM 版本：${(ver.stdout || ver.stderr || '').trim() || '(未知)'}`)
+    // 同 runDoctor：子进程被限制时不能把 stderr 当版本号
+    if (ver.ok) envLines.push(`- GCM 版本：${(ver.stdout || ver.stderr || '').trim() || '(未知)'}`)
+    else envLines.push(`- GCM 版本：(本次未能执行 ${ver.code}：${(ver.stderr || '').trim() || '(无输出)'})`)
+  } else {
+    envLines.push('- GCM：❌ 未找到')
+    if (gcmFinding.tried.length) {
+      envLines.push('- 已尝试的来源（这说明插件真的找过了，不是没找）：')
+      for (const t of gcmFinding.tried) envLines.push(`  - ${t}`)
+    }
+    if (gcmFinding.hint) envLines.push(`- 诊断：${gcmFinding.hint}`)
   }
 
   // 关键：必须同时看系统级与用户级 gitconfig。
@@ -1173,7 +1553,26 @@ async function toolBootstrap(api, args) {
   out.push('')
 
   if (!g) {
-    out.push('> ❌ 没有 GCM 就无法继续。请先装 Git for Windows / MinGit（自带 GCM），或在配置里指定 gcmPath。')
+    // 【为什么不再一句话打发】旧文案只说「去装 Git for Windows / 填 gcmPath」，
+    // 而真正报错的那台机器 git 是好的、GCM 也是装着的 —— 它只是不在插件那张表里。
+    // 所以分两种情况给出互斥的下一步，并明确「能不能直接用 git 确认」。
+    out.push('> ❌ 没有 GCM 就无法继续。两种可能，先分清是哪种：')
+    if (gcmFinding.managerCoreBroken) {
+      out.push('>')
+      out.push('> ① **GCM 已装，但 helper 名写错了**（`manager-core` 在 GCM 2.3.0 被删）')
+      out.push('>    先跑 `git config --global credential.helper manager`，然后重跑本工具。')
+    } else {
+      out.push('>')
+      out.push('> ① **GCM 确实没装**：装 Git for Windows / MinGit（自带 GCM）即可。')
+    }
+    out.push('>')
+    out.push('> ② **装了但不在常规位置**：先用 `git --exec-path` 看 git 自己的目录，')
+    out.push('>    在它的同级 `bin` 里找 `git-credential-manager.exe`，把绝对路径填进设置里的 gcmPath。')
+    out.push('>')
+    out.push('> 判断依据：`git credential-manager --version` 能打印版本 = GCM 在，只是插件没找到；')
+    out.push('> 报 `not a git command` = 真没装或 helper 名写错。')
+    out.push('>')
+    out.push('> （设置 → Mgitok → gcmPath；留空才会自动探测。）')
     return out.join('\n')
   }
 
@@ -1322,14 +1721,18 @@ async function toolMonitor(api, args) {
   }
 
   // 代理可达（监控项 f 的一部分）
-  const p = api.proxy()
+  // 【必须用 effectiveProxy，不能用 proxy】panel 路由那边早就改过了，这里当时漏了：
+  // proxy() 只读插件配置，而它默认为空（多机可移植），于是 if (p) 永远不成立。
+  // 实测本机：git http.proxy=http://127.0.0.1:7897，但插件 proxy=空 → 旧写法直接漏报。
+  const proxyInfo = await api.effectiveProxy(null)
+  const p = proxyInfo.value
   let proxyReachable
   if (p) {
     const m = /^(?:https?:\/\/)?([^:/]+):(\d+)/.exec(p)
     if (m) proxyReachable = await probeTcp(m[1], Number(m[2]))
   }
 
-  const st = parseStatus(text, api.gcm(), { heartbeat, proxyReachable })
+  const st = parseStatus(text, await api.gcmInfo(), { heartbeat, proxyReachable, proxySource: proxyInfo.source })
   const lines = [`# 监控（${st.level}：${st.summary}）`, '']
   lines.push('| 项 | 状态 | 说明 |')
   lines.push('|---|---|---|')
@@ -1374,7 +1777,12 @@ export function apply(ctx, config) {
     return [...new Set(merged)]
   }
 
-  const gcm = () => resolveGcm(config)
+  // GCM 定位是 async（来源④要起一次 pwsh 探针），所以这里拆成两个入口：
+  //   gcmInfo() —— 结构化结果，面板/体检需要它说明「怎么找到的 / 找过哪里」
+  //   gcm()     —— 只要路径字符串，给「拼命令」用
+  // 两者共用同一个 60s 缓存（见 resolveGcm 里的 gcmCache），不会重复起子进程。
+  const gcmInfo = () => resolveGcm(config)
+  const gcm = async () => (await resolveGcm(config)).path
   const proxy = () => cfg(config, 'proxy', '')
   const probeTimeout = () => Number(cfg(config, 'probeTimeoutMs', 20000)) || 20000
 
@@ -1406,7 +1814,7 @@ export function apply(ctx, config) {
     return { value: '', source: 'none' }
   }
 
-  const api = { targets: rawTargets, resolveTargets, gcm, proxy, effectiveProxy, probeTimeout, config }
+  const api = { targets: rawTargets, resolveTargets, gcm, gcmInfo, proxy, effectiveProxy, probeTimeout, config }
 
   // -------------------------------------------------------------------------
   // 1) gitok_doctor —— 只读体检
@@ -1678,7 +2086,7 @@ export function apply(ctx, config) {
       }
 
       const text = await runDoctor(api)
-      const status = parseStatus(text, gcm(), { heartbeat, proxyReachable })
+      const status = parseStatus(text, await gcmInfo(), { heartbeat, proxyReachable, proxySource: proxyInfo.source })
       cache.at = now
       cache.text = text
       cache.status = status

@@ -1,5 +1,5 @@
 # dsh-gitok bundle patch
-# 安装：& C:\dsh\dshplug\install.ps1 -Only dsh-gitok -RepoRoot 'C:\dsh\dshplug'
+# 安装：& C:\dsh\dw-plugin\install.ps1 -Only dsh-gitok
 #
 # 一个插件行：宿主半运行 lib/index.js，注册 9 个 gitok_* 工具 + 5 条 HTTP 路由；
 # 浏览器半 lib/client.js 在「设置 → Mgitok」里画状态面板（见 package.json 的 dsh.client）。
@@ -13,8 +13,11 @@
     - id: gitok
       name: dsh-gitok
       config:
-        # Windows 侧 GCM 可执行文件路径。留空 = 自动探测 MinGit / Git for Windows 常见位置。
-        # 换机器时保持空即可，不要让本机路径跟着同步过去。
+        # Windows 侧 GCM 可执行文件路径。留空 = 自动探测，四层依次尝试：
+        #   ① 本项（若你手填了） ② PATH 逐目录 ③ %ProgramFiles%/%LOCALAPPDATA% 推出的安装根
+        #   （含 ucrt64 / mingw64 / bin 三种布局，以及独立安装包与 ~/.dotnet/tools）
+        #   ④ 一次 pwsh 探针：注册表 InstallPath → git --exec-path → credential.helper 里的路径
+        # 换机器时保持空即可，不要让本机路径跟着同步过去；面板会显示「来源」与「已找过哪些」。
         gcmPath: ''
         # 需要管理的端点：windows = 本机 Windows；其余字符串视为 WSL 发行版名；
         # 填 auto = 运行时自动发现本机全部 WSL 发行版（只用于「看」，不会自动改它们）。

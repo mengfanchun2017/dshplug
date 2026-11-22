@@ -123,7 +123,7 @@ Claude 报告里最有价值的是 `ccconfig` 那套**初始化/监控的工程�
 
 | 阶段 | 做什么 | 写操作 | 失败行为 |
 |---|---|---|---|
-| **S0 环境自检** | GCM 是否在（自动探测/读 `gcmPath`）、git 版本、**系统级+用户级** gitconfig（§1.1）、代理可达、MinGit schannel 是否需要 `sslBackend=openssl`、WSL interop 是否可用、本机有哪些 WSL 发行版 | 无 | 出结构化报告，标 `unknown` 项，不继续 |
+| **S0 环境自检** | GCM 是否在（**四层探测**：`gcmPath` → PATH → 环境变量推出的安装根 → pwsh 探针查注册表 / `git --exec-path` / `credential.helper`；并输出「来源」与「已找过哪些」）、git 版本、**系统级+用户级** gitconfig（§1.1）、代理可达、MinGit schannel 是否需要 `sslBackend=openssl`、WSL interop 是否可用、本机有哪些 WSL 发行版 | 无 | 出结构化报告，标 `unknown` 项（**探针跑不起来时不得写成「未找到」**），不继续 |
 | **S1 幂等配置** | 只补缺失项；helper 一律 `--unset-all` 再 `--add`（README §8.1）；飞书 `lark-cli` 那条 helper **保持不动** | 有（先备份 `~/.gitconfig.bak.gitok-<ts>`） | 校验回读行数 > 1 即告警 |
 | **S2 登录** | 已就绪→**跳过**（借鉴 `gh_auth()` 第 1 步）；否则 `gitok_login` 触发 GCM | 有（GCM 自己写 wincredman，插件不接触密钥） | 非交互环境给明确错误 + 设备码指引，**不卡住**（等价 `GIT_TERMINAL_PROMPT=0`） |
 | **S3 验收** | `gitok_verify` 端到端 + 回读 helper/凭据条目 | 无 | 不通就回到 S0 报告，不假装成功 |
@@ -226,7 +226,7 @@ Claude 报告里最有价值的是 `ccconfig` 那套**初始化/监控的工程�
 ```yaml
 proxy: 'http://127.0.0.1:7897'   # ← 本机端口，B 机不适用；应改 ''（代码已支持自动读系统代理）
 targets: [ windows ]              # ← 各机 WSL 发行版名不同；提交里只留基线，运行时自动发现
-gcmPath: ''                       # ← 已正确，保持自动探测
+gcmPath: ''                       # ← 已正确，保持自动四层探测（v0.4.5 起不再靠硬编码路径表）
 useHttpPath: false                # ← 注释「推荐 true」与值矛盾，统一
 ```
 

@@ -44,12 +44,17 @@ WSL 的 git  ──fork──►  /mnt/c/.../git-credential-manager.exe  ──�
 
 ### 3. 三条命令的手工版
 
-先在 Windows 侧确认 GCM 存在（`gitok_doctor` 的 `gcmPath` 字段就是这个路径）：
+先在 Windows 侧确认 GCM 在哪（`gitok_doctor` 打印的 `gcmPath` 就是它，面板上还会标明「来源」）：
 
 ```powershell
-# Windows PowerShell 里
-where.exe git-credential-manager.exe
-# 典型输出：C:\Users\<你>\AppData\Local\Programs\MinGit\ucrt64\bin\git-credential-manager.exe
+# ⚠️ 不要用 where.exe 找：PATH 里往往只有 ...\MinGit\cmd，
+#    实测会报「找不到」而 GCM 其实好好装着。让 git 自己回答：
+git --exec-path
+#   例：C:/Users/<你>/AppData/Local/Programs/MinGit/ucrt64/libexec/git-core
+#   → 同级的 bin 目录里就是 git-credential-manager.exe
+
+git credential-manager --version
+#   有版本号（如 2.9.1 / 3.0.2）= GCM 在且 git 能用它
 ```
 
 把它换算成 WSL 路径：`C:\Users\franc\...` → `/mnt/c/Users/franc/...`

@@ -902,3 +902,90 @@ README/BOOTSTRAP 代码围栏配平（均偶数）；全库「必须固定」类
 **验收（v0.4.3）**：空 `DSH_HOME` 下 `--profile desktop` 报错文案与文档一致；
 `--profile web` 安装成功（17 文件 / 0.4.2）；重复 `add` 输出 `Already up to date`；
 代码围栏配平（README / BOOTSTRAP / ADR 均偶数）。
+
+---
+
+## ADR-018 · GCM 定位改成「先问 git，再问文件系统」，并且「没查到」不得写成「不存在」
+
+**结论（2026-11-23，v0.4.5）**：删掉硬编码的 `GCM_CANDIDATES` 路径表，改成四层来源依次尝试：
+
+| 顺序 | 来源 | 为什么排在这一层 |
+|---|---|---|
+| ① | 配置 `gcmPath` | 用户显式指定，永远最高优先 |
+| ② | PATH 逐目录 | 等价 `where.exe` 但不起子进程，最快 |
+| ③ | `%ProgramFiles%` / `%ProgramFiles(x86)%` / `%LOCALAPPDATA%\Programs` / `~/.dotnet/tools` 推出的安装根 | 只靠环境变量推导，不写用户名与盘符 |
+| ④ | 一次 pwsh 探针：注册表 `InstallPath` → `git --exec-path` 反推目录 → `credential.helper` 里的绝对路径 | 最准，但最慢，所以只做一次并用 60 s 缓存 |
+
+同时定下两条文案规则：
+
+1. **`manager-core` 不是「没装 GCM」**。它是 GCM 2.3.0 之前的旧别名（官方 `docs/rename.md`），
+   应提示「改写成 `manager`」，而不是让用户去重装 Git。
+2. **探针跑不起来时给 `unknown`，不给 `error`**，措辞用「无法确认」而不是「未找到」。
+   把「我没查到」当「它不存在」，就是本次 bug 的同一个错误。
+
+**背景（用户在另一台机器实测报错）**：面板与 bootstrap S0 同时报
+
+```
+❌ 依赖与网络 未找到 GCM，无法管理凭据
+- GCM：❌ 未找到（在配置里填 gcmPath）
+> ❌ 没有 GCM 就无法继续。请先装 Git for Windows / MinGit（自带 GCM）…
+```
+
+但同一台机器的其它输出完全健康：`helper file:C:/Program Files/Git/etc/gitconfig manager-core`、
+`已存凭据 1 条：mengfanchun2017`、`gh CLI installed`、`代理 http://127.0.0.1:7897 ✅ 可连`。
+即 **git 认证是能用的，只是插件没找对路**。
+
+**根因（代码级）**：`resolveGcm()` 只看 4 条写死的绝对路径，而且第一条是开发机用户目录
+`C:\Users\franc\AppData\Local\Programs\MinGit\ucrt64\bin\...`。它不查询 git，也不看注册表。
+只要 GCM 不在那 4 个位置（Git 装在自定义目录 / 只用 `ucrt64` 新布局 / GCM 是独立安装包 / `dotnet tool`），
+就必然误报。
+
+**实测反例（证明「PATH 里没有」≠「没装」）**：
+
+| 探法 | 结果 |
+|---|---|
+| `where.exe git-credential-manager` | ❌ 找不到（PATH 里只有 `...\MinGit\cmd`） |
+| `git credential-manager --version` | ✅ `2.9.1+6760f0ef069c994aa2bb1d703fb374986ee82a3e` |
+| `git --exec-path` | `C:/Users/…/MinGit/ucrt64/libexec/git-core` → 同级 `bin` 里就是 exe |
+| `cmd /c "git credential-manager-core --version"` | ❌ `git: 'credential-manager-core' is not a git command`（exit 1） |
+
+最后一行正是 `manager-core` 那条伏雷的源码级证据：别名已删，但存量 gitconfig 里仍可能写着它。
+
+**上游事实（写文案时引用，均已查证）**：
+
+- GCM 当前 **3.0.2**（2026-10-26），Git for Windows 2.56.1 起随附 v3.0.2，
+  且发行说明明确提示 v3 有破坏性变更 —— [GCM 3.0.2 release](https://github.com/git-ecosystem/git-credential-manager/releases/tag/v3.0.2)、
+  [Git for Windows ReleaseNotes](https://github.com/git-for-windows/build-extra/blob/main/ReleaseNotes.md)。
+- `manager-core` 别名自 **2.3.0** 起移除 —— [docs/rename.md](https://github.com/git-ecosystem/git-credential-manager/blob/main/docs/rename.md)。
+- 安装位置三种形态（随 Git 附带 / 独立安装包 / `.NET tool`），新 Release 主布局从 `mingw64` 迁到 **`ucrt64`** ——
+  [docs/install.md](https://github.com/git-ecosystem/git-credential-manager/blob/main/docs/install.md)、
+  [MINGW-packages PR #224](https://github.com/git-for-windows/MINGW-packages/pull/224)。
+
+**附带修掉的两个真 bug（同在 `toolMonitor` 里）**：
+
+| bug | 后果 | 修法 |
+|---|---|---|
+| `toolMonitor` 用 `api.proxy()` 判代理 | 插件 `proxy` 默认为空 → `if (p)` 永不成立 → 代理项恒为「没查」，而 git 明明配了 `http.proxy` | 改用 `api.effectiveProxy(null)`，与 `/status` 路由保持一致 |
+| 版本行直接吐 stderr | 受限环境里显示 `- GCM 版本：spawn EPERM`，看着像 GCM 坏了 | 按 `ver.code` 分支：`SPAWN_FAILED` 单独措辞，不再冒充版本号 |
+
+**反面代价**：
+- 多起一次 pwsh 子进程（约 0.3–1 s）。已用 60 s 缓存 + 只在 ①②③ 全落空时才跑探针来压住成本。
+  正常情况下本机命中第③层，探针根本不跑。
+- 判定分支从 1 条变成 4 条（真没装 / helper 名错 / 有 helper 无 exe / 未能确认），代码与测试都变长。
+  已在 `tools/render-check.mjs` 里补了三个 `StatusRows` 用例覆盖三态。
+- 「来源」会写进面板，暴露具体安装路径。这是有意取舍：换机器时**没有这一行就无法判断是插件没找还是真没装**。
+
+**已否决的替代方案**：
+
+| 方案 | 为何否决 |
+|---|---|
+| 继续扩充硬编码路径表（把 `ucrt64`、`bin`、独立安装包都加进去） | 只是把「4 条漏」变成「12 条漏」。下一版 Git 换布局或用户装到 D 盘又会误报，且永远存在开发机路径混进公共代码的风险（违反 ADR-016） |
+| 只靠 `where.exe` / PATH | **实测已经否掉**：本机 GCM 在、`where` 找不到。PATH 由安装器决定，不是可靠事实源 |
+| 只靠 `git credential-manager --version` 探测 | 方向对，但它是**间接**证据：只知道 git 能解析，拿不到 exe 路径，而 `login` / `adopt` / `rotate` 都需要绝对路径拼命令 |
+| 让用户必须手填 `gcmPath` | 违反多机可移植（`cordis.patch.yml` 的 `gcmPath` 默认空就是为了换机不改配置）。也把发现成本推给了每个用户 |
+| 把「没找到」一律降级成 `unknown` | 会让真没装的情况也变得没有指引。正确做法是**区分三种原因**，不是把结论软化成一句废话 |
+
+**验收**：`tools/smoke-route.mjs` 全绿（`/status` 200，5 条路由）；
+`tools/render-check.mjs` 7 个用例全绿（含新增 3 个 `StatusRows` 用例）；
+源码里不再出现 `C:\Users\<名>` 或 `C:\Program Files\...exe` 之类写死路径；
+本机实测 `gcmHow = 常见安装目录`（第③层命中，探针未跑）。

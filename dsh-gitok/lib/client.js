@@ -245,9 +245,11 @@ window.__ModuleLoader__.load({
           '注意：本机删了不等于 GitHub 那边撤销，两件事分开（见下方说明）。',
       },
       deps: {
-        what: '查 GCM 是否装好、git 版本、以及代理端口能不能连通。',
-        why: '环境缺件时，后面所有步骤都会失败，先把这里弄绿。',
-        how: '代理连不上通常是 VPN 没开；GCM 缺失要重装 Git for Windows（自带 GCM）。',
+        what: '查 GCM 是否装好（装在哪、怎么找到的）、git 版本、以及代理端口能不能连通。',
+        why: '环境缺件时，后面所有步骤都会失败，先把这里弄绿。但「没找到」不等于「没装」—— 插件会依次查 PATH、%ProgramFiles%/%LOCALAPPDATA%、注册表、git --exec-path 以及 credential.helper 的值。',
+        how: '先跑 `git credential-manager --version`：能打印版本号 = GCM 在，把它的绝对路径填进设置里的 gcmPath 就完事（同级 bin 目录用 `git --exec-path` 反推）；' +
+          '报 `not a git command` = 真没装，去装 Git for Windows / MinGit，或跑 `git config --global credential.helper manager` 修 helper 名。' +
+          '代理连不上通常是 VPN 没开。',
       },
     };
 
@@ -516,7 +518,26 @@ window.__ModuleLoader__.load({
           return `${n} 条` + (users.length ? `：${users.join(', ')}` : '');
         })(),
       );
-      push('GCM 路径', st.gcmPath);
+      // GCM 路径要把「怎么找到的」一起显示：
+      // 面板只给一个绝对路径，用户换机器时无法分辨是「真的没装」还是「插件没找对」。
+      // 找不到时把「找过哪里」列出来，用户一眼就知道自己该改哪。（0.4.5）
+      if (st.gcmPath) {
+        push('GCM 路径', st.gcmPath + (st.gcmHow ? `（${st.gcmHow}）` : ''));
+      } else {
+        push('GCM 路径', '❌ 未找到');
+        if (st.gcmTried && st.gcmTried.length) {
+          rows.push(
+            react.createElement(Row, {
+              key: 'gcmTried',
+              k: '已找过',
+              v: st.gcmTried.join('；'),
+            }),
+          );
+        }
+        if (st.gcmHint) {
+          rows.push(react.createElement(Row, { key: 'gcmHint', k: '诊断', v: st.gcmHint }));
+        }
+      }
       return rows.length ? react.createElement('div', null, rows) : null;
     }
 

@@ -302,7 +302,7 @@ git -c credential.helper=<Windows GCM 路径> \
 | `sshkey` | SSH 私钥口令 | `ssh-keygen -y -P '' -f <key>` 能导出公钥 = **空口令 → `error`（P0）** |
 | `helper` | helper 叠加 | **同一 host** 下非空 helper 数 > 1 → `warn` |
 | `creds` | 凭据条目 | 无已存凭据 → `warn`；只探 WSL 时 → `unknown` |
-| `deps` | 依赖与网络 | GCM 缺失 / 端点超时 → `error`；代理不可达 → `warn` |
+| `deps` | 依赖与网络 | GCM 确实找不到 / 端点超时 → `error`；helper 名用了已删除的 `manager-core` → `warn`；**未能确认**（探针跑不起来）→ `unknown`；代理不可达 → `warn` |
 **数据通路**（这是关键，Client 拿不到 Host 的能力）：
 
 ```
@@ -355,7 +355,7 @@ gitok_verify <URL> targets=[claude]        # 确认切换后仍可用
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
-| `gcmPath` | `''` | GCM 绝对路径，留空自动探测 MinGit / Git for Windows |
+| `gcmPath` | `''` | GCM 绝对路径。**留空 = 自动探测**，依次尝试：配置值 → PATH 逐目录 → `%ProgramFiles%`/`%LOCALAPPDATA%`/`~/.dotnet/tools` 等安装根（含 ucrt64 / mingw64 / bin 三种布局与独立安装包）→ 一次 pwsh 探针（注册表 InstallPath、`git --exec-path` 反推目录、`credential.helper` 里写的绝对路径）。面板会显示「来源」，而不是只能看到一个路径 |
 | `targets` | `['windows']` | 要管理的端点，`windows` = 本机，其余为 WSL 发行版名，`auto` = 运行时发现全部 WSL |
 | `proxy` | `''` | 插件指定代理。留空则按 git 全局 `http.proxy` → 系统代理 → 直连 依次回落 |
 | `useHttpPath` | `false` | 按 host+仓库路径区分凭据**条目**。注意它不会让 GCM 返回不同 token |
