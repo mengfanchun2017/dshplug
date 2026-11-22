@@ -794,7 +794,7 @@ awesome 条目按对方 `validateEntries()` + `slugFor()` 逐条自检无 proble
 **结论（2026-11-22，v0.4.1）**：插件不得假定「装在某一个固定目录」。所有路径运行时推导；
 文档里的绝对路径一律标注为「本机示例」。
 
-**背景（真实发生）**：仓库从 `C:\dsh\dshplug` 整体搬到 `C:\dsh\dw-plugin`。
+**背景（真实发生）**：仓库从 `C:\dsh\dw-plugin` 整体搬到 `C:\dsh\dw-plugin`。
 搬到之后逐层查了一遍，结论分成两半：
 
 | 层 | 是否硬编码 | 实测 |
@@ -804,10 +804,10 @@ awesome 条目按对方 `validateEntries()` + `slugFor()` 逐条自检无 proble
 | `install.ps1` | **否** | `RepoRoot` 默认 `$PSScriptRoot`；注释里还留着当初写死 `C:\dsh\dsh-plugins` 的教训 |
 | `cordis.patch.yml` | **否** | `gcmPath` / `proxy` / `heartbeatUrl` 默认空 = 自动探测 |
 | `lib/index.js` 的 `revokeImpact` | 部分 | 扫描目录含 `C:\dsh`（`$env:USERPROFILE\git` / `Documents` 是推导的）。**这是有意的**：只用于「撤销前提示影响面」，扫不到只会少列，不会误删 |
-| **文档（77 处）** | **是** | 6 份 md 里全是旧的 `C:\dsh\dshplug\...`，其中 BOOTSTRAP 39 处、README 25 处 |
+| **文档（77 处）** | **是** | 6 份 md 里全是旧的 `C:\dsh\dw-plugin\...`，其中 BOOTSTRAP 39 处、README 25 处 |
 
 **为什么这次要动文档而不是只改代码**：代码本来就是对的，错的是文档把「本机当时的状态」
-写成了「必须遵守的规则」——BOOTSTRAP 原来的标题直接是「路径**必须**固定在 `C:\dsh\dshplug\dsh-gitok`」，
+写成了「必须遵守的规则」——BOOTSTRAP 原来的标题直接是「路径**必须**固定在 `C:\dsh\dw-plugin\dsh-gitok`」，
 还写了「不要在别的目录 clone 一份来开发」。这两条都是错的，会让人以为换目录是不可行的。
 
 **顺带修掉一个真 bug（`install.ps1 -Check` 静默漏报）**：

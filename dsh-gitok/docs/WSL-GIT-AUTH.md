@@ -9,7 +9,7 @@
 > **本文件绝对路径**（直接复制给 agent，让它自己读）：
 >
 > ```text
-> C:\dsh\dshplug\dsh-gitok\docs\WSL-GIT-AUTH.md
+> C:\dsh\dw-plugin\dsh-gitok\docs\WSL-GIT-AUTH.md
 > ```
 >
 > 面板里也显示这个路径并带一键复制：侧边栏 Mgitok → 持续监控下方「WSL 里怎么用」展开。

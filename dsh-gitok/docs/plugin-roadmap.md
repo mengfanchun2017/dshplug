@@ -339,7 +339,7 @@ Monitor
 [ ] doctor 输出无任何 40+ 字符高熵串（ADR-002 脱敏验收）
 
 多机
-[ ] 两台机 clone 到同一路径 C:\dsh\dshplug，install -Check 均 active/link-junction
+[ ] 两台机 clone 到同一路径 C:\dsh\dw-plugin，install -Check 均 active/link-junction
 [ ] 提交里的 patch 不含硬编码代理端口 / 别的机器 WSL 名
 [ ] 完全退出 DSH 重开后配置生效，三层验证 + 面板验收全绿
 ```

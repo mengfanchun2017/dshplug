@@ -50,10 +50,10 @@
 
 ```powershell
 # ① 确认清单里有这个插件且 status=active
-& C:\dsh\dshplug\install.ps1 -Check
+& C:\dsh\dw-plugin\install.ps1 -Check
 
 # ② 装（建 link: Junction）
-& C:\dsh\dshplug\install.ps1 -Only dsh-gitok
+& C:\dsh\dw-plugin\install.ps1 -Only dsh-gitok
 
 # ③ 完全退出 DSH，再打开
 #    首次加载新 bundle 必须重启，Junction 只保证之后改代码即时生效
@@ -66,7 +66,7 @@
 **重装 / 强制刷新**（改了 `package.json` 的 `dsh.client` 或 `files` 时）：
 
 ```powershell
-& C:\dsh\dshplug\install.ps1 -Only dsh-gitok -Force
+& C:\dsh\dw-plugin\install.ps1 -Only dsh-gitok -Force
 ```
 
 不加 `-Force` 时，脚本看到已是 `link-junction` 就认为「无需操作」，**不会更新元数据**。
@@ -76,7 +76,7 @@
 
 `install.ps1` 依赖三样**只在本机成立**的东西：
 
-1. 仓库在 `C:\dsh\dshplug`（里面有 `list.json`）；
+1. 仓库在 `C:\dsh\dw-plugin`（里面有 `list.json`）；
 2. `link:` 会把**绝对路径**写进 profile 的 `package.json`；
 3. 本机是 Windows + 桌面版 DSH。
 
@@ -123,11 +123,11 @@ DSH 的 `evaluatePluginCompatibility()` 返回「无未满足要求」。
 $node = "$env:USERPROFILE\AppData\Local\Programs\DeepSeek Harness\resources\runtime\primary-runtime\dependencies\node\bin\node.exe"
 
 # 语法
-& $node --check C:\dsh\dshplug\dsh-gitok\lib\index.js
-& $node --check C:\dsh\dshplug\dsh-gitok\lib\client.js
+& $node --check C:\dsh\dw-plugin\dsh-gitok\lib\index.js
+& $node --check C:\dsh\dw-plugin\dsh-gitok\lib\client.js
 
 # package.json 合法性 + dsh.client 是否在
-& $node -e "const j=require('C:/dsh/dshplug/dsh-gitok/package.json');console.log(j.version, !!j.dsh.client, j.files)"
+& $node -e "const j=require('C:/dsh/dw-plugin/dsh-gitok/package.json');console.log(j.version, !!j.dsh.client, j.files)"
 ```
 
 期望：两次 `--check` 都不输出内容（exit 0）；第三行打印 `0.3.10 true [...]`。
@@ -139,7 +139,7 @@ $node = "$env:USERPROFILE\AppData\Local\Programs\DeepSeek Harness\resources\runt
 $env:DSH_HOME="$env:USERPROFILE\.dsh"; $env:DSH_PROFILE="desktop"
 
 & $node --input-type=module -e "
-const m = await import('file:///C:/dsh/dshplug/dsh-gitok/lib/index.js');
+const m = await import('file:///C:/dsh/dw-plugin/dsh-gitok/lib/index.js');
 const tools=[], routes=[];
 m.apply({
   effect:f=>{f();return()=>{}},
@@ -168,7 +168,7 @@ routes: /plugins/gitok/status,/plugins/gitok/login,/plugins/gitok/revoke,/plugin
 
 ```powershell
 # apply 里出现的每个 ctx.xxx，inject 里都必须有
-Select-String -Path C:\dsh\dshplug\dsh-gitok\lib\client.js -Pattern 'ctx\.\w+'
+Select-String -Path C:\dsh\dw-plugin\dsh-gitok\lib\client.js -Pattern 'ctx\.\w+'
 ```
 
 把结果与 `const inject = [...]` 逐项对照。写 `apply` 时只要多用一个 `ctx.xxx` 就漏，
@@ -181,7 +181,7 @@ $node = "$env:USERPROFILE\AppData\Local\Programs\DeepSeek Harness\resources\runt
 
 & $node --input-type=module -e "
 import fs from 'node:fs';
-const code = fs.readFileSync('C:/dsh/dshplug/dsh-gitok/lib/client.js','utf8');
+const code = fs.readFileSync('C:/dsh/dw-plugin/dsh-gitok/lib/client.js','utf8');
 const R = { createElement:(t)=>({type:t,kids:[]}), useState:(i)=>[i,()=>{}],
             useEffect:()=>{}, useCallback:(f)=>f, useRef:(v)=>({current:v}) };
 let cap=null;
@@ -259,7 +259,7 @@ creds   : 1
 > 对比两个时间即可确认：
 > ```powershell
 > Get-Process | Where-Object { $_.ProcessName -like '*Harness*' } | Select-Object Id, StartTime
-> (Get-Item C:\dsh\dshplug\dsh-gitok\lib\index.js).LastWriteTime
+> (Get-Item C:\dsh\dw-plugin\dsh-gitok\lib\index.js).LastWriteTime
 > ```
 > 进程 `StartTime` **早于** `LastWriteTime` → 必须完全退出 DSH（关窗口不算）再打开。
 > 这类问题的特征是：**冒烟测试是绿的，路由却是 500 的**（因为测试 import 的是磁盘新文件）。
@@ -281,11 +281,11 @@ v0.3.4 的 `DOCS_WSL` 就是这么漏的，潜伏到 v0.3.7 才被用户撞上�
 所以：**改完 `lib/index.js`，重启 DSH 之前先跑一次这个脚本。**
 它用打桩 ctx 真调 `apply`，再真调 status 路由的 handler，**不等 DSH 重启**。
 
-保存为 `C:\dsh\dshplug\dsh-gitok\tools\smoke-route.mjs`（见下），然后：
+保存为 `C:\dsh\dw-plugin\dsh-gitok\tools\smoke-route.mjs`（见下），然后：
 
 ```powershell
 $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
-& $node C:\dsh\dshplug\dsh-gitok\tools\smoke-route.mjs
+& $node C:\dsh\dw-plugin\dsh-gitok\tools\smoke-route.mjs
 ```
 
 期望输出（任一 `FAIL` 都别急着重启，先修）：
@@ -294,7 +294,7 @@ $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\nod
 routes    = /plugins/gitok/status /plugins/gitok/login /plugins/gitok/revoke /plugins/gitok/rotate /plugins/gitok/bootstrap
 http      = 200
 ok        = true
-docsPath  = C:\dsh\dshplug\dsh-gitok\docs\WSL-GIT-AUTH.md
+docsPath  = C:\dsh\dw-plugin\dsh-gitok\docs\WSL-GIT-AUTH.md
 docsExists= true
 level     = ok | summary = 已配置，认证可用
 checks    = heartbeat:unknown plaintext:ok sshkey:ok helper:ok creds:ok deps:ok
@@ -316,14 +316,14 @@ checks    = heartbeat:unknown plaintext:ok sshkey:ok helper:ok creds:ok deps:ok
 
 ```powershell
 # 只改宿主半 → 重启 DSH
-code C:\dsh\dshplug\dsh-gitok\lib\index.js
+code C:\dsh\dw-plugin\dsh-gitok\lib\index.js
 
 # 只改浏览器半 → 刷新页面即可
-code C:\dsh\dshplug\dsh-gitok\lib\client.js
+code C:\dsh\dw-plugin\dsh-gitok\lib\client.js
 
 # 改完必跑的语法门
-& $node --check C:\dsh\dshplug\dsh-gitok\lib\index.js
-& $node --check C:\dsh\dshplug\dsh-gitok\lib\client.js
+& $node --check C:\dsh\dw-plugin\dsh-gitok\lib\index.js
+& $node --check C:\dsh\dw-plugin\dsh-gitok\lib\client.js
 ```
 
 **同时改两半时按宿主半处理**（要重启）—— 别为了省一次重启而误判「面板没生效」。
@@ -338,14 +338,14 @@ $gcm  = "C:/Users/franc/AppData/Local/Programs/MinGit/ucrt64/bin/git-credential-
 
 & $node --input-type=module -e @"
 import fs from 'node:fs';
-const p='C:/dsh/dshplug/dsh-gitok/lib/index.js';
-fs.writeFileSync('C:/dsh/dshplug/dsh-gitok/lib/_probe.mjs',
+const p='C:/dsh/dw-plugin/dsh-gitok/lib/index.js';
+fs.writeFileSync('C:/dsh/dw-plugin/dsh-gitok/lib/_probe.mjs',
   fs.readFileSync(p,'utf8') + '\nexport { runDoctor, parseStatus };');
-const m = await import('file:///C:/dsh/dshplug/dsh-gitok/lib/_probe.mjs');
+const m = await import('file:///C:/dsh/dw-plugin/dsh-gitok/lib/_probe.mjs');
 const api = { targets:()=>['windows'], gcm:()=>'$gcm', probeTimeout:()=>20000 };
 const text = await m.runDoctor(api);
 console.log(JSON.stringify(m.parseStatus(text,'$gcm'),null,2));
-fs.unlinkSync('C:/dsh/dshplug/dsh-gitok/lib/_probe.mjs');
+fs.unlinkSync('C:/dsh/dw-plugin/dsh-gitok/lib/_probe.mjs');
 "@
 ```
 
@@ -357,10 +357,10 @@ fs.unlinkSync('C:/dsh/dshplug/dsh-gitok/lib/_probe.mjs');
 
 ```powershell
 # 预览：会提交哪些文件（不 commit、不 push）
-& C:\dsh\dshplug\plugpush.ps1 -Name dsh-gitok -DryRun
+& C:\dsh\dw-plugin\plugpush.ps1 -Name dsh-gitok -DryRun
 
 # 真正推
-& C:\dsh\dshplug\plugpush.ps1 -Name dsh-gitok -Message "dsh-gitok v0.2.1：xxxx"
+& C:\dsh\dw-plugin\plugpush.ps1 -Name dsh-gitok -Message "dsh-gitok v0.2.1：xxxx"
 ```
 
 ### 4.1 ⚠️ `plugpush.ps1` 会带上仓库根级文件
@@ -373,7 +373,7 @@ fs.unlinkSync('C:/dsh/dshplug/dsh-gitok/lib/_probe.mjs');
 稳妥做法（本仓库曾因此改用）：
 
 ```powershell
-cd C:\dsh\dshplug
+cd C:\dsh\dw-plugin
 & git add -- dsh-gitok list.json          # 只挑自己的
 & git status --porcelain                   # 核对暂存内容
 & git -c user.name="Francis Meng" `
@@ -389,15 +389,15 @@ cd C:\dsh\dshplug
 
 ## 5. 迁移到另一个工作区（用户下一步要做的）
 
-目标：把开发从「临时会话」切到 `C:\dsh\dshplug` 工作区继续。
+目标：把开发从「临时会话」切到 `C:\dsh\dw-plugin` 工作区继续。
 
 ### 5.1 前提
 
-代码**已经在** `C:\dsh\dshplug\dsh-gitok` 且已推送（`8276917`）。
+代码**已经在** `C:\dsh\dw-plugin\dsh-gitok` 且已推送（`8276917`）。
 不是「搬过去」，而是「确认那边拿到的是最新版」。
 
 ```powershell
-cd C:\dsh\dshplug
+cd C:\dsh\dw-plugin
 & git pull --ff-only
 & git log --oneline -3
 ```
@@ -406,14 +406,14 @@ cd C:\dsh\dshplug
 
 ### 5.2 切换 DSH 工作区
 
-把 DSH 的工作区目录设为 `C:\dsh\dshplug`（或它的子目录）。
+把 DSH 的工作区目录设为 `C:\dsh\dw-plugin`（或它的子目录）。
 工作区切换后**新会话**才会注入那边的 `AGENTS.md`。
 
 ### 5.3 切过去之后第一件事
 
 ```powershell
-& C:\dsh\dshplug\install.ps1 -Check          # 确认 dsh-gitok 仍是 link-junction / active
-& C:\dsh\dshplug\install.ps1 -Only dsh-gitok -Force   # 换工作区后建议强制刷一次元数据
+& C:\dsh\dw-plugin\install.ps1 -Check          # 确认 dsh-gitok 仍是 link-junction / active
+& C:\dsh\dw-plugin\install.ps1 -Only dsh-gitok -Force   # 换工作区后建议强制刷一次元数据
 ```
 
 然后**完全退出 DSH 再打开**，跑 §2.3 的运行时验证。
@@ -478,7 +478,7 @@ Get-Command git-credential-manager -ErrorAction SilentlyContinue
 
 ```powershell
 # 卸载插件（保留源码目录，只去掉 profile 里的 link）
-& C:\dsh\dshplug\install.ps1 -Only dsh-gitok -Force    # 重装用
+& C:\dsh\dw-plugin\install.ps1 -Only dsh-gitok -Force    # 重装用
 # 彻底卸载：从 profile 的 package.json 移除 dsh-gitok，或
 cd $env:USERPROFILE\.dsh\profiles\desktop
 & pnpm remove dsh-gitok
@@ -535,7 +535,7 @@ OAuth 那条路做不到 —— 详见 ADR-014 的 v0.3.11 补遗。
 
 ```powershell
 # ① 装插件（只需一次）
-& C:\dsh\dshplug\install.ps1 -Only dsh-gitok
+& C:\dsh\dw-plugin\install.ps1 -Only dsh-gitok
 # 然后完全退出 DSH 再打开
 
 # ② 在对话里让 AI 跑初始化（推荐先预演）
@@ -614,7 +614,7 @@ git -c http.proxy=http://127.0.0.1:7897 ls-remote https://github.com/<owner>/<re
 
 ```powershell
 # 改了 package.json（dsh.client / files / version）→ 必须重装
-& C:\dsh\dshplug\install.ps1 -Only dsh-gitok -Force
+& C:\dsh\dw-plugin\install.ps1 -Only dsh-gitok -Force
 # 然后完全退出 DSH 再打开
 ```
 
@@ -625,8 +625,8 @@ git -c http.proxy=http://127.0.0.1:7897 ls-remote https://github.com/<owner>/<re
 
 ```powershell
 $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
-& $node --check C:\dsh\dshplug\dsh-gitok\lib\index.js
-& $node --check C:\dsh\dshplug\dsh-gitok\lib\client.js
+& $node --check C:\dsh\dw-plugin\dsh-gitok\lib\index.js
+& $node --check C:\dsh\dw-plugin\dsh-gitok\lib\client.js
 ```
 
 面板侧：刷新页面后看「持续监控」是否出现六行 —— 出现就是新版本，没出现就是旧版。

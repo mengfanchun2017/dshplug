@@ -436,20 +436,20 @@ v0.1.0 时**没有** `lib/client.js`，是纯模型工具插件。v0.2.0 新增�
 
 ```powershell
 # 装
-& C:\dsh\dshplug\install.ps1 -Only dsh-gitok
+& C:\dsh\dw-plugin\install.ps1 -Only dsh-gitok
 # → 完全退出 DSH 再打开
 
 # 改了 package.json 的 dsh.client / files（必须 -Force，否则不更新元数据）
-& C:\dsh\dshplug\install.ps1 -Only dsh-gitok -Force
+& C:\dsh\dw-plugin\install.ps1 -Only dsh-gitok -Force
 
 # 验证（最有价值的一条：mock ctx，不依赖重启）
 $node = "$env:USERPROFILE\AppData\Local\Programs\DeepSeek Harness\resources\runtime\primary-runtime\dependencies\node\bin\node.exe"
-& $node --check C:\dsh\dshplug\dsh-gitok\lib\index.js
-& $node --check C:\dsh\dshplug\dsh-gitok\lib\client.js
+& $node --check C:\dsh\dw-plugin\dsh-gitok\lib\index.js
+& $node --check C:\dsh\dw-plugin\dsh-gitok\lib\client.js
 
 # 发布（注意 plugpush 会带上仓库根级文件，详见 BOOTSTRAP §4.1）
-& C:\dsh\dshplug\plugpush.ps1 -Name dsh-gitok -DryRun
-& C:\dsh\dshplug\plugpush.ps1 -Name dsh-gitok -Message "说明"
+& C:\dsh\dw-plugin\plugpush.ps1 -Name dsh-gitok -DryRun
+& C:\dsh\dw-plugin\plugpush.ps1 -Name dsh-gitok -Message "说明"
 ```
 
 三条最容易误判的：
@@ -469,7 +469,7 @@ $node = "$env:USERPROFILE\AppData\Local\Programs\DeepSeek Harness\resources\runt
 
 ## 6.6 在**另一台新 DSH** 上安装（公开仓库路线）
 
-上面 §6.2 的 `install.ps1` 只在本机（`C:\dsh\dshplug` 存在 + `list.json` 存在）成立。
+上面 §6.2 的 `install.ps1` 只在本机（`C:\dsh\dw-plugin` 存在 + `list.json` 存在）成立。
 换一台机器、或者给别人的 DSH 装，走下面这条路。
 
 ### 一行命令
@@ -658,7 +658,7 @@ git ls-remote https://github.com/mengfanchun2017/dshplug.git HEAD
 | 项 | 值 |
 |---|---|
 | profile | `desktop` |
-| 安装形态 | `link-junction` → `C:\dsh\dshplug\dsh-gitok` |
+| 安装形态 | `link-junction` → `C:\dsh\dw-plugin\dsh-gitok` |
 | profile 依赖 | `dsh-gitok@link:../../../../../dsh/dshplug/dsh-gitok` |
 | 激活方式 | 自身 `dsh.bundle.patch`，**不**往 profile 的 `cordis.patch.yml` 写 insert |
 | 生效条件 | **完全退出 DSH 再打开**（宿主半首次加载必须重启） |
@@ -819,7 +819,7 @@ const t = ctx.locale.bind(NS)
 是安装时写进 profile 的。新增浏览器半后如果只改代码不重装，DSH 根本不会去加载 `client.js`。
 
 ```powershell
-& C:\dsh\dshplug\install.ps1 -Only dsh-gitok -Force
+& C:\dsh\dw-plugin\install.ps1 -Only dsh-gitok -Force
 ```
 
 `-Force` 必须加：不加的话 `install.ps1` 看到已是 `link-junction` 就认为「无需操作」。
@@ -1187,7 +1187,7 @@ const DOCS_WSL = path.join(here, 'docs', 'WSL-GIT-AUTH.md')
 
 ```powershell
 $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
-& $node C:\dsh\dshplug\dsh-gitok\tools\smoke-route.mjs
+& $node C:\dsh\dw-plugin\dsh-gitok\tools\smoke-route.mjs
 ```
 
 **已实测它能抓到本 bug**：在隔离副本里复现后，`node --check` 仍 exit 0，
@@ -1202,7 +1202,7 @@ $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\nod
 
 ## 9. 换工作区继续开发（交接清单）
 
-> 2026-11-12 已从临时工作区搬入 `C:\dsh\dshplug\dsh-gitok`，这是唯一开发位置。
+> 2026-11-12 已从临时工作区搬入 `C:\dsh\dw-plugin\dsh-gitok`，这是唯一开发位置。
 
 这个插件**没有留在临时工作区**，代码已经放进 dshplug 仓库。换机器 / 换工作区后按下面做：
 
@@ -1221,7 +1221,7 @@ git clone https://github.com/mengfanchun2017/dshplug.git C:\dsh\dw-plugin
 
 ### 9.2 把 DSH 工作区切到插件目录
 
-在 GUI 里「选择工作区」→ 选 `C:\dsh\dshplug\dsh-gitok`。
+在 GUI 里「选择工作区」→ 选 `C:\dsh\dw-plugin\dsh-gitok`。
 之后新会话的 `cwd` 就在插件目录，右侧终端打开即是，不用 `cd`。
 （会话 cwd 硬绑定绝对路径，两台机器要保持逐字符一致。）
 
@@ -1234,15 +1234,15 @@ git clone https://github.com/mengfanchun2017/dshplug.git C:\dsh\dw-plugin
 
 ```powershell
 # ① 拉最新（代码已在仓库且已推送 8276917，不是「搬过去」）
-cd C:\dsh\dshplug; & git pull --ff-only
+cd C:\dsh\dw-plugin; & git pull --ff-only
 
 # ② 换工作区后强制刷一次元数据
-& C:\dsh\dshplug\install.ps1 -Only dsh-gitok -Force
+& C:\dsh\dw-plugin\install.ps1 -Only dsh-gitok -Force
 
 # ③ 完全退出 DSH 再打开
 
 # ④ 验收
-& C:\dsh\dshplug\install.ps1 -Check    # 期望 link-junction / active
+& C:\dsh\dw-plugin\install.ps1 -Check    # 期望 link-junction / active
 ```
 ### 9.4 起手先读什么
 
