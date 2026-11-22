@@ -947,7 +947,10 @@ async function toolAdopt(api, args) {
 
   const allTargets = (await api.resolveTargets()).filter((t) => t !== 'windows')
   const list = Array.isArray(args?.targets) && args.targets.length ? args.targets.map(String) : allTargets
-  const hosts = Array.isArray(args?.hosts) && args.hosts.length ? args.hosts.map(String) : ['github.com']
+  // 默认两个 host 都要配：github.com 的 helper 不覆盖 gist.github.com。
+  // 只配前者时推普通仓库正常，一旦涉及 gist 就回退到未认证（§6.7.2 实测踩过）。
+  const DEFAULT_ADOPT_HOSTS = ['github.com', 'gist.github.com']
+  const hosts = Array.isArray(args?.hosts) && args.hosts.length ? args.hosts.map(String) : DEFAULT_ADOPT_HOSTS
   const uhp = args?.useHttpPath !== undefined ? Boolean(args.useHttpPath) : Boolean(cfg(api.config, 'useHttpPath', false))
 
   const lines = ['# 接管 git 认证' + (dryRun ? '（预演，不写入）' : ''), '', `- Windows GCM：\`${g}\``, `- WSL 路径：\`${gWsl}\``, '']
@@ -964,11 +967,12 @@ async function toolAdopt(api, args) {
 
     if (dryRun) {
       lines.push('- 计划动作：')
-      lines.push(`  1. 备份 \`~/.gitconfig\` → \`~/.gitconfig.bak.gitok-<时间戳>\``)
+      let step = 1
+      lines.push(`  ${step++}. 备份 \`~/.gitconfig\` → \`~/.gitconfig.bak.gitok-<时间戳>\``)
       for (const h of hosts) {
-        lines.push(`  2. \`git config --global --unset-all credential.https://${h}.helper\``)
-        lines.push(`  3. \`git config --global --add credential.https://${h}.helper ${shellArg(gWsl)}\``)
-        if (uhp) lines.push(`  4. \`git config --global credential.https://${h}.useHttpPath true\``)
+        lines.push(`  ${step++}. \`git config --global --unset-all credential.https://${h}.helper\``)
+        lines.push(`  ${step++}. \`git config --global --add credential.https://${h}.helper ${shellArg(gWsl)}\``)
+        if (uhp) lines.push(`  ${step++}. \`git config --global credential.https://${h}.useHttpPath true\``)
       }
       lines.push('')
       continue
@@ -992,12 +996,17 @@ async function toolAdopt(api, args) {
     const w = await runOn(target, cmds.join('; '), { timeoutMs: api.probeTimeout() })
     lines.push(w.ok ? '- ✅ helper 已指向 Windows GCM' : `- ❌ 写入失败 [${w.code}]：${redact(w.stderr)}`)
 
-    // 复查：应当只剩一条 GCM
-    const chk = await runOn(target, `git config --global --get-all "credential.https://${hosts[0]}.helper"`, { timeoutMs: api.probeTimeout() })
-    const got = chk.stdout.trim()
-    lines.push(`- 复查 helper：\`${redact(got) || '(空)'}\``)
-    if (got && !got.includes(gWsl)) lines.push('  ⚠️ 未生效，请检查 git 版本是否支持 `--unset-all`。')
-    if (got.split('\n').filter(Boolean).length > 1) lines.push('  ⚠️ 仍有多条 helper 叠加，请手动清理。')
+    // 复查：逐个 host 查，应当各只剩一条 GCM。
+    // 不能把多个 host 的输出拼在一起数行数——那样每个 host 的 GCM 行会被误判为「叠加」。
+    for (const h of hosts) {
+      const chk = await runOn(target, `git config --global --get-all "credential.https://${h}.helper"`, { timeoutMs: api.probeTimeout() })
+      const rows = (chk.stdout || '').trim().split('\n').map((s) => s.trim()).filter(Boolean)
+      const shown = redact(rows.join(' | ')) || '(空)'
+      lines.push(`- 复查 ${h}：\`${shown}\``)
+      if (rows.length && !rows.some((r) => r.includes(gWsl))) lines.push('  ⚠️ 未指向 GCM，请检查 git 版本是否支持 `--unset-all`。')
+      if (rows.length > 1) lines.push('  ⚠️ 该 host 仍有多条 helper 叠加，请手动清理。')
+      if (!rows.length) lines.push('  ⚠️ 该 host 没有 helper，写入可能失败。')
+    }
     lines.push('')
   }
 
@@ -1536,7 +1545,7 @@ export function apply(ctx, config) {
       additionalProperties: false,
       properties: {
         targets: { type: 'array', items: { type: 'string' }, description: '要接管的端点（WSL 发行版名），留空用配置里除 windows 外的全部。' },
-        hosts: { type: 'array', items: { type: 'string' }, description: '为哪些 host 配置借用，默认 ["github.com"]。' },
+        hosts: { type: 'array', items: { type: 'string' }, description: '为哪些 host 配置借用，默认 ["github.com","gist.github.com"]。注意前者的 helper 不覆盖 gist，两个都要配。' },
         useHttpPath: { type: 'boolean', description: '是否按仓库路径区分凭据。默认读配置。' },
         dryRun: { type: 'boolean', description: '只预演、不写入任何配置。' },
       },

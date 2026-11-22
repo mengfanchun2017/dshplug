@@ -254,7 +254,7 @@ git -c credential.helper=<Windows GCM 路径> \
 | `gitok_monitor` | **只读** | 六项持续监控 + 四态判定（`ok`/`warn`/`error`/`unknown`） |
 | `gitok_login` | 触发登录 | 让 GCM 弹浏览器/设备码。**密钥不经过本插件** |
 | `gitok_bootstrap` | 幂等初始化 | **主入口**：S0 自检 → S1 补配置 → S2 登录 → S3 验收 → S4 收尾。可重入，支持 `dryRun` |
-| `gitok_adopt` | **改配置** | 把 WSL 端点的 helper 指向 Windows GCM（先备份）。支持 `dryRun` |
+| `gitok_adopt` | **改配置** | 把 WSL 端点的 helper 指向 Windows GCM（先备份）。**默认同时配 `github.com` 与 `gist.github.com`**（前者不覆盖后者）。支持 `dryRun` |
 | `gitok_rotate` | **轮换** | 预检 → 备份 → erase → 重新登录 → 验收。断网时不会误删可用凭据 |
 | `gitok_revoke` | **删除** | 不传 `confirm` 时**只列影响面**；传 `true` 才 GCM `erase` 删凭据 |
 
@@ -341,7 +341,8 @@ gitok_revoke                     # 不传 confirm：只看「删了会影响哪�
 gitok_revoke confirm=true        # 确认后才真删
 ```
 
-要接入 WSL（**默认不动**，ADR-006）：
+要接入 WSL（**默认不动**，ADR-006）。`gitok_adopt` 默认会同时配
+`github.com` 和 `gist.github.com` 两个 host —— 只配前者时，推普通仓库正常，但一碰 gist 就回退到未认证：
 
 ```
 gitok_adopt targets=[claude] dryRun=true   # 先看会改什么

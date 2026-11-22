@@ -583,8 +583,152 @@ git -c http.proxy=http://127.0.0.1:7897 ls-remote https://github.com/<owner>/<re
 > **常见误判**：只看 `C:\Users\<你>\.gitconfig` 会以为「没有 credential helper」。
 > 实际上 `helper=manager` 常常在 MinGit 的**系统级** `MinGit\etc\gitconfig` 里。
 > 必须用 `git config --list --show-origin` 才能看到全貌。
-
 ---
+
+## 9A. 两台机器：主机 A 已配好，主机 B 怎么跟上
+
+> 这是**最常遇到的真实场景**，和 §9「从零开始的机器」不同：
+> 你已经有一台跑顺了的 A，现在要再加一台 B。
+
+### 9A.1 先说清楚：哪些能带、哪些不能带
+
+主机 B 上做认证，最大的误区是想把 A 的东西「拷过去」。先看这张表：
+
+| 东西 | 能不能从 A 拷到 B | 为什么 |
+|---|---|---|
+| **DPAPI 凭据密文** | ❌ **绝对不行** | 密文绑定「那台机器的那个 Windows 用户」。拷过去也没法解密，GCM 会当它不存在 |
+| **GCM 可执行文件** | 🤷 能拷但没必要 | B 上装 Git for Windows / MinGit 就自带，版本还更新 |
+| **`~/.gitconfig`** | ⚠️ 只拷「与凭据无关」的部分 | `credential.helper` 这类可以拷；但若 A 里写过 `gcmPath` 绝对路径或本机代理，拷过去就是错的 |
+| **`cordis.patch.yml` 的 `config`** | ⚠️ 要逐项看 | `targets: [claude]` 这种写死的 WSL 发行版名、`proxy` 本机地址，到 B 上可能不存在 |
+| **明文 PAT** | ❌ 不要 | 本来就是要消灭的东西 |
+| **插件本体** | ✅ 能 | 就是同一个 git 仓库，B 上 clone 即可 |
+
+**一句话：B 上的凭据必须由 B 自己登一次。** 这不是插件限制，是 DPAPI 的物理限制。
+
+### 9A.2 主机 B：给 DSH 做 Windows 认证（4 步）
+
+```powershell
+# ── 第 1 步：装插件（B 上只需一次）────────────────────────
+& <B 上仓库根>\install.ps1 -Only dsh-gitok
+#   例：& C:\dsh\dw-plugin\install.ps1 -Only dsh-gitok
+#   （install.ps1 就在仓库根，不在 dw-plugin 子目录里）
+# → 然后完全退出 DSH 再打开
+#
+# 或者走公开仓库路线（不需要本仓库已 clone 到固定位置）：
+dsh plugin --profile desktop add github:mengfanchun2017/dshplug#path:/dsh-gitok
+```
+
+```powershell
+# ── 第 2 步：先体检，不要直接改 ────────────────────────
+# 在 DSH 对话里说：「跑一下 gitok_doctor」
+#
+# 重点看三行：
+#   GCM 路径      —— 有 ❌ 就先装 Git for Windows，或在设置里填 gcmPath
+#   credential.helper —— 看看在系统级还是用户级（两处都查才算查了）
+#   已存凭据      —— 有「0 条」是正常的，B 还没登过
+```
+
+```powershell
+# ── 第 3 步：一键初始化（可重入，先 dryRun）──────────────
+# 先预演，确认它打算干什么：
+#   gitok_bootstrap url="https://github.com/<你的仓库>" dryRun=true
+#
+# 没问题就去掉 dryRun：
+#   gitok_bootstrap url="https://github.com/<你的仓库>"
+#
+# S0 自检 → S1 补 helper → S2 弹浏览器登录 → S3 验收 → S4 收尾
+# 已是正确状态的步骤会自动跳过，重复跑安全
+```
+
+```powershell
+# ── 第 4 步：自己在 PowerShell 里验证一次（不靠插件）──
+# 插件说 OK 是一回事，git 真能用是另一回事，两者都要看：
+git ls-remote https://github.com/mengfanchun2017/dshplug.git HEAD
+# 能输出一行 <sha>\tHEAD 就成了
+```
+
+> **为什么第 4 步不能省**：`gitok_monitor` 的「端到端通路”项在未配置 `heartbeatUrl` 时
+> 会如实报 `unknown`（没查 ≠ 通过）。如果想让插件也真的去查，在设置里填 `heartbeatUrl`。
+
+### 9A.3 主机 B：让 B 上的 Claude 也能用同一套
+
+这里要先分清 B 上的 Claude 跑在哪 —— **两种情况的答案完全不同**：
+
+#### 情况①：Claude 在 Windows 上跑（原生 Windows 版）
+
+**什么都不用做。** 它调 `git` → `git` 调 `git-credential-manager.exe` →
+读 Windows 凭据管理器。你刚在 9A.2 做的认证它直接用。
+
+验证：在 Claude 里让它跑 `git ls-remote <你的仓库> HEAD`，能出结果就行。
+
+#### 情况②：Claude 在 WSL 里跑（最常见）
+
+这才是需要动手的。**不要**在 WSL 里另装一份 GCM —— 那读不到宿主的凭据库，
+只会让你一直在 WSL 里弹登录。正确做法是**让 WSL 的 git 去调 Windows 那个 exe**。
+
+```bash
+# ── 在 B 的 WSL 里执行（把 claude 换成你的发行版名）──
+
+# ① 先确认 interop 是开的（否则根本调不到 Windows 程序）
+cat /proc/sys/fs/binfmt_misc/WSLInterop      # 期望 enabled
+
+# ② 确认 Windows 的 GCM 从 WSL 里能执行到
+#    路径要换成 B 上实际的（MinGit 在 ucrt64\bin，Git for Windows 在 mingw64\bin）
+GCM=/mnt/c/Users/<B的Windows用户名>/AppData/Local/Programs/MinGit/ucrt64/bin/git-credential-manager.exe
+test -x "$GCM" && echo OK || echo MISSING
+#    MISSING = 路径不对或 interop 关着，先解决这个再往下
+
+# ③ 备份（改坏了能回退）
+cp ~/.gitconfig ~/.gitconfig.bak.gitok-$(date +%Y%m%d%H%M%S)
+
+# ④ 接管：两个 host 都要配（github 的 helper 不覆盖 gist）
+for h in github.com gist.github.com; do
+  git config --global --unset-all "credential.https://$h.helper" 2>/dev/null || true
+  git config --global --add "credential.https://$h.helper" "!$GCM"
+done
+
+# ⑤ 验收（必须真跑通，别只看配置写对了）
+git ls-remote https://github.com/mengfanchun2017/dshplug.git HEAD
+```
+
+**也可以不手打**，让插件代劳（前提是插件已装进 B 的 DSH，且 B 的 WSL 在 `targets` 里）：
+
+```
+# 在 DSH 对话里：
+gitok_adopt targets=["claude"] dryRun=true   # 先看它打算改什么
+gitok_adopt targets=["claude"]               # 确认后写入
+```
+
+它会自动把 Windows GCM 的路径换算成 `/mnt/c/...` 并配好**两个 host**，改前先备份。
+
+#### 情况②的硬边界：借不到就是借不到
+
+如果 B 上的 Claude 跑在**容器**里（不是 WSL），或者环境不允许执行 Windows 二进制，
+那 DPAPI 凭据是**无论如何借不到**的 —— 容器里没有 B 的 DPAPI 主密钥。
+这种环境只能显式注入凭据（挂载或环境变量），不是配置能解决的问题。
+
+### 9A.4 两台机器的凭据会对不上吗？
+
+会，而且这是**设计如此**，不是 bug：
+
+| 事实 | 含义 |
+|---|---|
+| A 和 B 各登一次 = 各自一个 token | 同一个账号 + 同 App + 同 scope 最多 10 个并存，两台机器完全没问题 |
+| 网页的 Revoke 是**按 App 撤销** | 在网页上点撤销会**两台一起失效**。根因是可操作粒度止于 App，不是只有一个凭据 |
+| 想「一台一个、能单独撤」 | 只能用 fine-grained PAT 自己起名（如 `REDMIPRO-20261122` / `DESKTOP-B-20261122`） |
+
+所以：**想要按机器区分和单独撤销，就必须走 PAT 路线**；想省事就让两台共用一个 OAuth 授权，
+代价是撤销只能一起撤。详见 ADR-014。
+
+### 9A.5 B 上做完后的验收清单
+
+```
+[ ] gitok_doctor       —— GCM 找到、helper 指向 GCM、凭据 ≥1 条
+[ ] gitok_monitor      —— level=ok（heartbeat 可以是 unknown，那代表没配不是坏了）
+[ ] git ls-remote ...  —— 在 Windows PowerShell 里能出 sha
+[ ] WSL: git ls-remote —— 如果 B 的 Claude 在 WSL 里，这一步必须也过
+[ ] 两个 host 都查     —— github.com 和 gist.github.com 的 helper 都有值
+```
 
 ## 10. 日常维护：三件事要分开做
 
