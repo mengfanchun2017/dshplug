@@ -1,0 +1,42 @@
+
+=== \dsh\node_modules\@deepseek-ai\dsh\lib\plugin-DC80YBt4.js hits=1 ===
+98: if (result.exitCode !== 0 && args.some((argument) => /^git\+|^github:|\.git(?:#|$)/.test(argument))) process.stderr.write(`dsh: git-hosted plugins build on install via their prepare script, which pnpm blocks until allowed — add the exact key pnpm printed above
+
+=== \dsh\node_modules\@deepseek-ai\dsh-client-ui-chat\lib\client.js hits=1 ===
+19: `)?text:null;const open=expanded&&body!==null;const toggle=(0,react.useCallback)(()=>{setExpanded(value=>!value)},[]);const collapsedContent=(0,react.useMemo)(()=>(0,react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment,{children:[(0,react_jsx_runtime.jsx)(`span`
+
+=== \dsh\node_modules\@deepseek-ai\dsh-client-ui-open-in-app\lib\client.js hits=1 ===
+2: window.__ModuleLoader__.load({id:`@deepseek-ai/dsh-client-ui-open-in-app`,factory:require=>{var module={exports:{}};var exports=module.exports;Object.defineProperty(exports,Symbol.toStringTag,{value:`Module`});let _deepseek_ai_dsh_client_ui_primitives=require(
+
+=== \dsh\node_modules\@deepseek-ai\dsh-client-ui-plugin-manager\lib\client.js hits=1 ===
+2: window.__ModuleLoader__.load({id:`@deepseek-ai/dsh-client-ui-plugin-manager`,factory:require=>{var module={exports:{}};var exports=module.exports;Object.defineProperty(exports,Symbol.toStringTag,{value:`Module`});let react_jsx_runtime=require("react/jsx-runtim
+
+=== \dsh\node_modules\@deepseek-ai\dsh-experimental-forge-github\lib\index.js hits=22 ===
+85: if (!isSegment(owner) || !isSegment(name)) throw new Error(`forge-github: invalid repository ${JSON.stringify(`${owner}/${name}`)}`);
+86: if (!Number.isSafeInteger(ref.number) || ref.number <= 0) throw new Error(`forge-github: invalid pull request number ${ref.number}`);
+365: for (const commit of [base, head]) if (!isCommit(commit)) throw new Error(`forge-github: invalid commit ${JSON.stringify(commit)}`);
+817: if (!parsed.success) throw new Error("forge-github: unexpected GitHub response to the head branch lookup");
+819: if (found === null) throw new Error(`forge-github: repository ${repository.owner}/${repository.name} is not visible`);
+1256: if (!isCommit(headSha)) throw new Error(`forge-github: invalid head commit ${JSON.stringify(headSha)}`);
+1327: if (!isCommit(request.headSha)) throw new Error(`forge-github: invalid head commit ${JSON.stringify(request.headSha)}`);
+1518: if (!isCommit(request.headSha)) throw new Error(`forge-github: invalid head commit ${JSON.stringify(request.headSha)}`);
+2187: if (!isCommit(headSha)) throw new Error(`forge-github: invalid head commit ${JSON.stringify(headSha)}`);
+2201: if (!isCommit(write.headSha)) throw new Error(`forge-github: invalid head commit ${JSON.stringify(write.headSha)}`);
+
+=== \dsh\node_modules\@deepseek-ai\dsh-plugin-manager\lib\index.js hits=3 ===
+20: import hostedGitInfo from "hosted-git-info";
+117: github: "github.com",
+1427: * for the hosts `hosted-git-info` knows, such as GitHub and GitLab.com, and clones any other URL over the transport
+
+=== \dsh\node_modules\@deepseek-ai\dsh-plugin-manager\lib\types\git-transport.js hits=2 ===
+3: import hostedGitInfo from 'hosted-git-info';
+9: * for the hosts `hosted-git-info` knows, such as GitHub and GitLab.com, and clones any other URL over the transport
+
+=== \dsh\node_modules\@deepseek-ai\dsh-plugin-manager\lib\types\install-spec.js hits=1 ===
+15: github: 'github.com', gitlab: 'gitlab.com', bitbucket: 'bitbucket.org', gist: 'gist.github.com',
+
+=== \dsh\node_modules\@deepseek-ai\dsh-plugin-market\lib\index.js hits=1 ===
+12: import hostedGitInfo from "hosted-git-info";
+
+=== \dsh\node_modules\@deepseek-ai\dsh-plugin-market\lib\types\detail.js hits=1 ===
+10: import hostedGitInfo from 'hosted-git-info';

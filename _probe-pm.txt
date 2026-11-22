@@ -1,0 +1,32 @@
+
+=== plugin-manager dsh/node_modules/@deepseek-ai/dsh-plugin-manager/lib/index.js hits=26 ===
+212: * transport, user, or `.git`, then `#` and the `path:` directory. The origin ignores the form pnpm saves, so the SSH
+218: * one `path:` directory.
+232: const paths = parameters.filter((part) => part.startsWith("path:"));
+233: const others = parameters.filter((part) => !part.startsWith("path:"));
+522: * range selects and its dsh requirements (`engines` and peerDependencies). A git or tarball spec needs the fetch itself, so the
+544: "engines",
+689: path: join(dir, name),
+1035: ["build-blocked", /ERR_PNPM_IGNORED_BUILDS|Ignored build scripts|ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED/],
+1248: /** The `allowBuilds` key pnpm suggests when it refuses to prepare a git-hosted package; a subdirectory key can contain spaces. */
+1249: const GIT_DEP_PREPARE = /ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED[\s\S]*?^allowBuilds:\r?\n[ \t]+(.+?): true$/m;
+1251: * Whether an `allowBuilds` key names a git URL that carries a credential: a password, or any user name over HTTP(S).
+1271: const builds = document.get("allowBuilds");
+1272: if (builds !== void 0 && !isMap(builds)) throw new Error("allowBuilds must be a YAML mapping");
+1274: if (isAlias(node) || isNode(node) && "anchor" in node && node.anchor) throw new Error("allowBuilds must not contain YAML anchors or aliases");
+1284: * Record the build scripts a failed run reported as blocked, then list every `allowBuilds` key awaiting a decision.
+1291: * @returns Exact `allowBuilds` keys awaiting a build decision; wildcard rules are excluded.
+1298: for (const name of added) document.setIn(["allowBuilds", name], UNDECIDED_BUILD);
+1303: * Read the `allowBuilds` keys a pnpm run reported as ignored build scripts or as a git-hosted package it refused to prepare.
+1309: const git = GIT_DEP_PREPARE.exec(output)?.[1];
+1315: * @throws If a name is no longer pending or allowBuilds contains YAML anchors or aliases; no approvals are written.
+1321: for (const name of names) document.setIn(["allowBuilds", name], true);
+1510: "engines",
+1543: * What one exact version's manifest says, from `pnpm view <name>@<version> name version engines peerDependencies deprecated dsh --json`.
+1557: ...Object.hasOwn(fields, "engines") ? { engines: fields.engines } : {},
+2091: path: DETAIL_FILE_PATH,
+
+=== git-transport dsh/node_modules/@deepseek-ai/dsh-plugin-manager/lib/types/git-transport.js hits=3 ===
+5: /** An HTTP(S) Git URL with an optional `git+` prefix, which pnpm clones over that transport as written. */
+9: * for the hosts `hosted-git-info` knows, such as GitHub and GitLab.com, and clones any other URL over the transport
+47: * Choose how pnpm clones an HTTP(S) Git repository that {@link sshGitSpec} has an SSH form for: probe the spec's URL,

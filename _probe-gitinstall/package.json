@@ -1,0 +1,8 @@
+{
+  "name": "probe-gitinstall",
+  "private": true,
+  "dependencies": {
+    "dsh-gitok": "github:mengfanchun2017/dshplug#path:/dsh-gitok",
+    "dsh-synchub": "github:mengfanchun2017/dshplug#path:/dsh-synchub"
+  }
+}
