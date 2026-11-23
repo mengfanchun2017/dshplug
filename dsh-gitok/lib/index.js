@@ -782,6 +782,11 @@ async function runDoctor(api, listArg) {
     const body = redact((r.stdout || '').trim())
     if (r.code === 'TIMEOUT') {
       lines.push(`> ⏱ 超时（${api.probeTimeout()}ms），该端点可能未启动或 WSL 未运行。`)
+    } else if (r.code === 'SPAWN_FAILED') {
+      // 【为何单独一条】主机进程拒绝起子进程时，这些端点根本没有被“探测失败”
+      // —— 是根本没探。报成 ❌ 会让人去查 WSL / 网络，而问题在沙箱限制。
+      lines.push(`> ⚠️ 本次未能探测（子进程被限制：${redact(r.stderr) || r.code}）—— 这不代表端点坏了，是插件在这个环境里跑不了外部命令。`)
+      lines.push('> 请到普通终端里执行：`wsl.exe -l -v`（看发行版）、`git --version`。')
     } else if (!r.ok && !body) {
       lines.push(`> ❌ 探测失败 [${r.code}] ${redact(r.stderr) || '(无输出)'}`)
     } else {
@@ -886,12 +891,17 @@ function parseStatus(text, gcm, extra = {}) {
   let helperStacked = false
   const stackedAt = []
   let endpointTimeout = false
+  // true = 本轮根本没能在端点上执行命令（沙箱/权限），不等于端点坏了
+  let spawnBlocked = false
 
   // 面板上的 WSL 说明区要用到：每个非 windows 端点当前指向哪个 helper。
   // 目的不是重现完整诊断，而是让用户一眼看出「这台到底接管了没」。
   const wslEndpoints = []
   for (const sec of sections) {
-    if (/⏱ 超时|❌ 探测失败/.test(sec.body)) endpointTimeout = true
+    // 「未能探测」不能算 endpointTimeout：那会把 deps 拉成 error，
+    // 而真实原因只是插件起不了子进程（非端点故障）。单独记一个标志。
+    if (/⚠️ 本次未能探测/.test(sec.body)) spawnBlocked = true
+    else if (/⏱ 超时|❌ 探测失败/.test(sec.body)) endpointTimeout = true
     const body = sec.body
 
     const pc = pick(body, /^plaintext creds:[ \t]*(.*)$/m)
@@ -1065,6 +1075,8 @@ function parseStatus(text, gcm, extra = {}) {
     }
   }
   else if (endpointTimeout) { depLevel = 'error'; depDetail = '有端点探测超时或失败（WSL 可能未启动）' }
+  // 端点压根没探成（沙箱/权限）：给 unknown。报 error 会让人去修 WSL，而 WSL 可能完全正常。
+  else if (spawnBlocked) { depLevel = 'unknown'; depDetail = '未能探测端点（插件在这个环境里起不了子进程），所以「能不能用」本次未查 —— 请到普通终端跑 `wsl.exe -l -v` 与 `git ls-remote <url>` 确认' }
   else if (proxyStr === false) { depLevel = 'warn'; depDetail = '代理端口连不上，git 可能超时' }
   else if (coreHelper) {
     depLevel = 'warn'

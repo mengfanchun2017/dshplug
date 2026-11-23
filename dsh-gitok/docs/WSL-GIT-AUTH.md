@@ -147,9 +147,12 @@ Git Credential Manager（GCM），从而不在 WSL 磁盘上保存任何密钥�
 请报告：
 1. `wsl.exe -l -v` 的输出 —— 有哪些发行版、哪个是默认、版本号。
 2. 在目标发行版里执行：`uname -a`、`git --version`。
-3. 找到 Windows 侧 GCM 的**真实路径**。可以从这些地方找：
-   - Windows 上 `where.exe git-credential-manager.exe`
-   - 或 Common Files 下的 Git Credential Manager
+3. 找到 Windows 侧 GCM 的**真实路径**。**不要先试 `where.exe`**：PATH 里往往只有
+   `...\MinGit\cmd`，实测会出现「where 说找不到、GCM 其实好好装着」，
+   很多 agent 就是因此误报「没装 GCM」。让 git 自己回答：
+   - `git --exec-path` → 同级 `bin` 目录（`.../ucrt64/libexec/git-core` → `.../ucrt64/bin`）
+   - `git credential-manager --version` → 有版本号 = GCM 在且 git 能用
+   - 或 Common Files 下的 Git Credential Manager（独立安装包）
    - 或 MinGit 的 `ucrt64\bin\`
 4. 把该路径换算成 WSL 路径（`C:\a\b` → `/mnt/c/a/b`），然后
    `test -x "<路径>" && echo OK || echo MISSING`。

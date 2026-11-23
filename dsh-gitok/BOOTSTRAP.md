@@ -370,6 +370,30 @@ checks    = heartbeat:unknown plaintext:ok sshkey:ok helper:ok creds:ok deps:ok
 > `heartbeat:unknown` 是**正常的**：没配 `heartbeatUrl` 时该项如实报「没查」，
 > 不等于失败。详见 ADR 里四态模型 `ok / warn / error / unknown`。
 
+### 2.3c 第四层·GCM 定位回归测试：专治「明明装着却报未找到」
+
+**为什么还要第四层**：前两层（语法 / 路由）都是「在本机跑」—— 而 v0.4.4 那个 bug
+恰恰是**本机恰好命中硬编码路径**，所以两种测试都绿。到了别人机器就报
+「❌ 未找到 GCM」，而该机 git 认证完全正常。
+
+这类 bug 的共同点是**判定依据和事实脱钩**，只能靠「断言源码里不许出现开发机路径」
++「逐个验证解析函数」钉住：
+
+```powershell
+$node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
+& $node C:\dsh\dw-plugin\dsh-gitok\tools\gcm-detect-check.mjs
+```
+
+它查三类事（共 35 条断言）：
+
+| 类别 | 查什么 | 为何不用别的测试代替 |
+|---|---|---|
+| 静态 | 代码（去注释后）不得含 `C:\Users\<名>\` / `C:\Program Files\...exe`，不得出现 `GCM_CANDIDATES` | 这类字符串**语法完全合法**，`--check` 永远绿 |
+| 运行时 | 直接调 `gcmDirsFromExecPath` / `parseGcmProbe` / `helperBareName` / `gcmPathFromHelperValue` / `gcmInstallRootDirs` | 纯函数逻辑错（如把 `!` 命令当裸名）不会抛错，只会默默走错分支 |
+| 调用链 | 所有 `gcm()` 调用点必须 `await` | `gcm()` 改成 async 后漏 await 不报错，而是把 Promise 当路径拼进命令 |
+
+**变异测试（已验）**：把旧的 `GCM_CANDIDATES` 硬编码表塞回源码，
+这个脚本会立刻报 4 项失败并 exit 1 —— 所以它是真的能拦，不是摆设。
 ---
 
 ## 3. 日常开发循环
