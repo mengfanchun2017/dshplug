@@ -5,6 +5,11 @@
 
 > **三份文档分工**：本 [`README.md`](./README.md)=怎么用；[`BOOTSTRAP.md`](./BOOTSTRAP.md)=怎么做（安装/验证/排错/迁移/命令行）；[`ADR.md`](./ADR.md)=为什么（决策+反面代价+已否决方案）。详细调研在 [`docs/`](./docs/)。
 
+0.10.0 是**单仓库模式版**（ADR-036）：设置页可选「单仓库」——一个地址、一个 `repos/all`、
+两个分组开关（配置组 / 会话组），不再需要建两个仓库、填两个地址。同时新增同步面
+`agentInstructions`，把**全局 `~/.dsh/AGENTS.md`** 纳入同步（工作区内的 AGENTS.md 仍归各工作区自己的
+git 管）。引擎与客户端都改成「按 `channelsOf(cfg)` 动态渲染」，双仓库模式保留为默认。
+
 0.9.0 是**会话救援版**（ADR-034 收窄），只回答一个问题：**会话现在能不能打开。**
 
 你当时的原话：「如果报错了先修复避免不能用，就可以了，其他交给专业的 session 管理插件」。
@@ -166,15 +171,35 @@ advisory 项全部折叠在「明细与整洁项」里，**不进一键修复**�
 
 ---
 
-## 2. 两个通道，各自一个私有仓库
+## 2. 两种仓库模式：单仓库 / 双仓库
+
+`config.mode` 决定用哪种。**默认 `split`（双仓库）**，老配置不改就能继续用；
+想要「只填一个地址」就切到 `single`（ADR-036，0.10.0 新增）。
+
+| 模式 | 物理仓库 | 配置面 | 适合 |
+|---|---|---|---|
+| `split`（默认） | 两个：`repos/config`、`repos/sessions` | 两个地址 + 两个开关 | 想要「一个坏了另一个能救」的隔离 |
+| `single` | 一个：`repos/all` | **一个地址 + 两个分组开关** | 数据量不大、不想管两个仓库 |
+
+### 单仓库模式（`single`）
+
+一个物理仓库、一个 `cfg.remote`；`config` / `sessions` 变成**逻辑分组**，
+`channels.config.enabled` / `channels.sessions.enabled` 两个开关决定同步哪几组：
+
+- 开「配置组」= 技能库 + 配置层 + 全局 `AGENTS.md`；
+- 开「会话组」= 会话记录 + 工作区登记表 + 附件。
+
+两组的文件顶层路径不冲突（`sessions/` `storages/` `attachments/` `skills/` `profiles/` `AGENTS.md`），
+所以能共存于同一个 `payload/`。设置页切到「单仓库」后只填一个地址 + 两个勾选。
+
+### 双仓库模式（`split`）两个通道各自独立
 
 | 通道 | 装什么 | 为什么分开 |
 |---|---|---|
-| `config` | 技能文件、`profiles/<p>/cordis*.yml` 配置层 | 体积小、改动少、冲突要人看 |
+| `config` | 技能文件、`profiles/<p>/cordis*.yml`、全局 `AGENTS.md` | 体积小、改动少、冲突要人看 |
 | `sessions` | 会话日志、`storages`（工作区登记表）、`attachments` | 体积大、写入频繁，独立历史才不会把配置提交冲爆 |
 
 两个通道**互相独立**：一个落后不影响另一个推送，一个坏了另一个照样能救。
-
 ### 为什么不放一个仓库
 
 会话日志每次对话都在长，如果和配置同仓，
@@ -196,7 +221,7 @@ advisory 项全部折叠在「明细与整洁项」里，**不进一键修复**�
 不是所有东西都该同步，而且**「危险」是硬约束，不是一个可以勾掉的建议**。
 
 ```js
-surfaceEnabled(surface, cfg) => Boolean(cfg.surfaces[surface.id]) && surface.tier !== 'danger'
+surfaceEnabled(surface, cfg) => Boolean(cfg.surfaces[surface.id]) && surface.tier !== 'danger' && groupEnabled(cfg, surface.channel)
 ```
 
 ### safe（默认开）
@@ -207,6 +232,7 @@ surfaceEnabled(surface, cfg) => Boolean(cfg.surfaces[surface.id]) && surface.tie
 | `storages` | `storages/**` | `workspace.json` 决定会话归属哪个工作区；`session_projcache` 存 `cwd` |
 | `attachments` | `attachments/**` | sha256 内容寻址，与路径无关，跨工作区共享 |
 | `skills` | `skills/**` | 技能文件本体；技能的**安装**仍走 dsh-market |
+| `agentInstructions` | `AGENTS.md`（仅全局） | 用户全局规则（DSH 每次会话注入）。工作区内的 AGENTS.md 归各工作区自己的 git 管，synchub 不碰 |
 
 > `~/.dsh/skills/<名>/` 里的技能目录**不是插件目录**。
 > 插件（`dsh-rag` / `dsh-preview-editor`）在 `profiles/desktop/node_modules/`，
@@ -352,7 +378,7 @@ statusPayload():
 
 ## 6. 目录一览（面板里能看到的就是这些）
 
-`GET /api/dsh-synchub/map` 返回 16 行：6 个可同步面 + 10 个不同步目录。
+`GET /api/dsh-synchub/map` 返回 17 行：7 个可同步面 + 10 个不同步目录。
 每行含 `paths / tier / syncOn / files / bytes / note / exists`。
 
 后 4 行（`logs` / `profileOther` / `deviceId` / `quarantine`）是补上的：
@@ -482,13 +508,16 @@ payload 是镜像子树：`payload/sessions/...` 对应 `$DSH_HOME/sessions/...`
 ```json
 {
   "machine": "<你的机器名>",
+  "mode": "split",
+  "remote": "",
   "workspace": "C:\\dsh\\workspace1",
   "channels": {
     "config":   { "remote": "https://github.com/<you>/dsh-config.git",   "enabled": true },
     "sessions": { "remote": "https://github.com/<you>/dsh-sessions.git", "enabled": true }
   },
   "surfaces": { "sessions": true, "storages": true, "attachments": true,
-                "skills": true, "profileConfig": true, "profileManifest": false },
+  "surfaces": { "sessions": true, "storages": true, "attachments": true,
+                "skills": true, "agentInstructions": true, "profileConfig": true, "profileManifest": false },
   "idlePushMinutes": 20,
   "autoPush": false,
   "staleHours": 48
@@ -507,7 +536,7 @@ payload 是镜像子树：`payload/sessions/...` 对应 `$DSH_HOME/sessions/...`
 | 入口 | 只用做这些 | 不做什么 |
 |---|---|---|
 | **侧边栏 Msynchub** | ① **仪表盘**（一句话结论 + 四个数字 + 下次自动）；② **分叉二选一卡**（两台各自推过时）；③ 自检结论（就绪/待处理 + 逐步引导）；④ 通道快照（落后/领先/脏）；⑤ 空闲开关一行摘要；⑥ 目录地图；⑦ 按钮：立即同步（主）/ 提交并推送 / 拉取并应用 / 重新检查；⑧ 高级操作折叠区 | **不写任何配置**（不内嵌输入框，也没有保存按钮） |
-| **设置 → Msynchub** | **唯一配置入口**：① 必做：两个仓库地址；② 可选：本机设置与工作区映射、同步面开关；③ 诊断与维护：当前状态、检查结果、目录清单 | 不放日常同步按钮 |
+| **设置 → Msynchub** | **唯一配置入口**：① 必做：仓库模式与仓库地址（单仓库一个 / 双仓库两个）；② 可选：本机设置与工作区映射、同步面开关；③ 诊断与维护：当前状态、检查结果、目录清单 | 不放日常同步按钮 |
 
 **自检怎么用**：打开侧边栏，第一张卡直接告诉你结论。
 - `✓ 同步已就绪` → 点「立即同步」（拉+推一口气；0.6.0 前是分两个按钮）。
@@ -611,17 +640,16 @@ payload 是镜像子树：`payload/sessions/...` 对应 `$DSH_HOME/sessions/...`
 
 ### Q1. 为什么配置和会话要两个仓库？能合并成一个吗？
 
-**能合并，但现在不做。** 两个仓库是为「体积 + 写入频率」分开的：
-- `config` 通道：技能文件 + `cordis*.yml` 配置层，几百 KB，改动少。
-- `sessions` 通道：会话日志 + `workspace.json` + 附件池，几十 MB 且每次对话都在长。
+**现在能合并了（0.10.0 起）。** 以前不做，是因为两个通道是**两个独立工作副本**，
+把两个 `remote` 填成同一地址只会让第二个通道推同分支时落后/分叉，并不是真合并。
+现在设置页选「单仓库」即可：一个地址、一个 `repos/all`、两个分组开关（ADR-036）。
 
-合成一个会带来两个真问题：① 「我就改个设置」也会连带产生一条几十 MB 的提交，`git log` 不可读；
-② 回滚配置时得从一堆会话提交里挑。另外两通道**互相独立**——一个坏了另一个照样能救，这也是分开的价值。
+仍然保留「双仓库」作为默认，因为它有两个真实价值：
 
-> 如果确实想合：把 `config.channels.config.remote` 与 `sessions.remote` 填成同一个地址即可（代码不禁止），
-> 但两个通道仍各自 `git init` 到 `repos/config` 与 `repos/sessions`，**不是真的共用一个工作副本**。
-> 真正合并需要改 `SURFACES[].channel` 与 `repos/` 布局，属于架构变更，见 ADR-019。
+- 体积/写入频率：`config` 几百 KB、改动少；`sessions` 几十 MB 且每次对话都在长，分开历史才不会把配置提交冲爆。
+- **通道互相独立**：一个坏了另一个照样能救。
 
+> 单仓库模式会失去这两个价值，换来的是「只填一个地址」。数据量不大时这个交易划算（你的原话：量不大）。
 ### Q2. 「空闲」到底怎么算？
 
 **空闲 = 距上次对 Msynchub 面板/接口的手动操作超过 `idlePushMinutes`（默认 20 分钟）**，

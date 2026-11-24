@@ -153,15 +153,17 @@ git ls-remote https://github.com/<你>/dsh-config
 
 ---
 
-## 2. 首次配置（两个私有仓库 + Git 认证）
+## 2. 首次配置（仓库模式 + Git 认证）
 
 在设置页「Msynchub → 新用户从这里开始」按第 0→4 步走，等价命令行/要点：
 
-1. GitHub 建**两个空私有仓库**（不勾 README/.gitignore/License）：`dsh-config`、`dsh-sessions`。
-2. 面板内「先连上两个私有仓库」或设置页填两条仓库地址（HTTPS 或 SSH 都行，取决于本机已配通哪种）。
+1. **选仓库模式**：设置页「仓库模式」——`single`（一个地址，推荐数据量不大时）或 `split`（两个地址，默认）。
+   - 单仓库：GitHub 建**一个空私有仓库**（不勾 README/.gitignore/License），填到一个地址即可。
+   - 双仓库：建两个（`dsh-config`、`dsh-sessions`）。
+2. 设置页「仓库地址」填地址（单仓库一个 / 双仓库两个；HTTPS 或 SSH 都行，取决于本机已配通哪种）。
 3. **Git 认证自己搞定**（本插件不接收/不保存凭据）：推荐装 `dsh-gitok`，「设置 → Mgitok」一键初始化——
    它会检查 Windows 凭据管理器、credential helper、明文凭据、代理、SSH 私钥口令并给修复命令。
-   不装也行；HTTPS / GCM OAuth / SSH 均可，只要本机 git 能读写这两个私有仓库。
+   不装也行；HTTPS / GCM OAuth / SSH 均可，只要本机 git 能读写你的私有仓库。
 4. 第一台点「提交并推送」建基线；第二台点「拉取并应用」。**两台工作区必须落在完全相同的绝对路径**（ADR-002）。
 
 > 本机若 MinGit schannel 报 `SEC_E_NO_CREDENTIALS (0x8009030e)`，仓库级切 OpenSSL：
@@ -180,14 +182,14 @@ $P = 'C:\dsh\dw-plugin\dsh-synchub'
 & $node --check "$P\lib\client.js"
 & $node --check "$P\lib\sessiondoctor.js"
 
-# 全部 10 份；任何一份非 0 就停
+# 全部 11 份；任何一份非 0 就停
 Get-ChildItem "$P\test" -Filter *.cjs | Sort-Object Name | ForEach-Object {
   & $node $_.FullName
   if ($LASTEXITCODE -ne 0) { throw "FAIL $($_.Name)" }
 }
 ```
 各套件自己的通过标志（`ALL PASS` / `SYNCHUB_SMOKE_OK` / … / `会话体检 smoke：23 通过 / 0 失败`）。
-全绿 = 10/10 套件 exit 0。
+全绿 = 11/11 套件 exit 0。
 
 | 套件 | 盯什么 |
 |---|---|
@@ -201,8 +203,9 @@ Get-ChildItem "$P\test" -Filter *.cjs | Sort-Object Name | ForEach-Object {
 | `unsynced-smoke.cjs` | 假绿回归：unsynced/pending/payloadMissing |
 | `diverge-smoke.cjs` | 分叉二选一 |
 | `repo-sync-smoke.cjs` | 代码仓库四态 |
+| `single-smoke.cjs` | 单仓库模式（ADR-036）：模式抽象 / 分组开关 / payload 落点 / 单通道状态 / 失败态 |
 
-十份 smoke 用临时夹具，**不碰真实 DSH 会话数据、不发网络请求**
+十一份 smoke 用临时夹具，**不碰真实 DSH 会话数据、不发网络请求**
 （`unsynced-smoke` / `repo-sync-smoke` 会读真实仓库目录，但**只读**：不 stage、不 commit、不 push）。
 
 > **为什么必须有 `render-smoke`（2026-11-18 踩过）**：`node --check` 只查语法。
@@ -355,6 +358,33 @@ Copy-Item "$($b.FullName)\storages\workspace.json" "$env:USERPROFILE\.dsh\storag
 | 不动 subagent 会话 | 它们本来就藏在组目录里、本来就不该出现在侧边栏 |
 | 不检查会话内容是否损坏 | 只解首帧拿 header；`broken` 仅表示找不到正文文件或首帧读不出 |
 | 不重启 DSH | 改完 `workspace.json` 要你自己重启，侧边栏才按新归属显示 |
+
+### 4.5 单仓库模式（ADR-036，0.10.0）
+
+用户原话：「配置两个仓库太麻烦，量也不大」。设置页「仓库模式」选 **单仓库** 即可：
+
+- 一个私有仓库地址（填到「私有仓库地址」）；
+- 两个分组开关：**同步配置组**（技能库 + 配置层 + 全局 `AGENTS.md`）/ **同步会话组**（会话 + 工作区登记 + 附件）；
+- 物理上只有一个仓库 `repos/all`、一个 `payload/`，两组的文件顶层不冲突所以共存。
+
+**从旧的双仓库迁移**（不会自动合仓，数据不丢）：
+
+1. 在 GitHub 新建一个空私有仓库（或指定一个已有的）。
+2. 设置页选「单仓库」，把地址填进去；两个分组开关按需要打开。
+3. 点「保存」→ 回侧边栏点「立即同步」。插件会把**本机当前文件**重新 stage 进新仓库并推基线。
+4. 旧的两个仓库（`dsh-config` / `dsh-sessions`）**留在磁盘与 GitHub 作历史**，不再使用；
+   确认新仓库没问题后可以自行归档/删除。
+
+> 单仓库会失去「一个通道坏了另一个能救」的隔离，且提交历史混合（改设置也连带会话提交）。
+> 数据量不大时这个交易划算；如果以后后悔，把模式切回「双仓库」即可（两套仓库都还在）。
+
+### 4.6 全局 AGENTS.md 同步（ADR-036）
+
+新增同步面 `agentInstructions`（配置组、safe、默认开），把 `~/.dsh/AGENTS.md` 纳入同步。
+
+- **工作区里的 AGENTS.md 不走这里**：它归各工作区自己的 git（「代码仓库同步」会把 `dw-base/AGENTS.md` 推到 `dshwp-base`）。
+- `~/.agents/AGENTS.md`（`DSH_AGENTS_HOME`）本机不存在，暂未纳入。
+- 在一台机器改了全局规则会覆盖另一台 —— 这是同步的预期，别写只对本地有意义的路径。
 
 ## 5. 排错表
 

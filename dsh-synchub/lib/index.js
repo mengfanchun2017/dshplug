@@ -34,7 +34,7 @@ const execFileAsync = promisify(execFile);
 
 const name = 'dsh-synchub';
 const inject = ['webServer'];
-const VERSION = '0.9.0';
+const VERSION = '0.10.0';
 /* 分支不能写死。远端仓库可能是 master（GitHub 旧默认）也可能是 main，
    写死一个就会在已有仓库上推出一个**平行的空历史分支**。
    优先级：config.channels[ch].branch → 远端 HEAD 指向的分支 → DEFAULT_BRANCH。 */
@@ -2537,6 +2537,7 @@ async function mapInfo(cfg, opts = {}) {
       tier: s.tier,
       syncOn: surfaceEnabled(s, cfg),
       channel: s.channel,
+      repo: repoKeyOf(s.channel, cfg),
       files: files.length,
       bytes: size,
       note: s.note,
@@ -2956,7 +2957,7 @@ async function statusPayload(cfg, opts = {}) {
       scanned: chList.every(s => s.scanned),
       payloadMissing: channelsOf(cfg).filter(ch => states[ch].payloadMissing),
     },
-    surfaces: SURFACES.map(s => ({ id: s.id, label: s.label, tier: s.tier, on: Boolean(cfg.surfaces[s.id]), channel: s.channel, note: s.note })),
+    surfaces: SURFACES.map(s => ({ id: s.id, label: s.label, tier: s.tier, on: Boolean(cfg.surfaces[s.id]), channel: s.channel, repo: repoKeyOf(s.channel, cfg), note: s.note })),
     auto: {
       enabled: Boolean(cfg.autoPush),
       idlePushMinutes: cfg.idlePushMinutes,
@@ -3573,4 +3574,4 @@ async function codeRepoAutoTick(ctx) {
 export { name, inject, apply };
 export const VERSION_INFO = VERSION;
 // 供离线 smoke 测试用（node --check 查不出逻辑错，必须真跑一遍）。
-export const __test = { codeRepoList, codeRepoState, codeReposPayload, syncCodeRepo, syncAllCodeRepos, divergeInfo, resolveKeepLocal, resolveKeepRemote, stampTrailer, purgePreview, purgeExecute, purgeVerify, sessionIdForms, walkSessionRefs, bareSessionId, sessionNoteTemplate, sessionNotePreview, sessionNoteWrite, resolveNotePath, sessionMigrateGroup, sessionMigratePreview, sessionMigrateExecute, sessionMigrateVerify, encodeWorkspaceGroup, decodeWorkspaceGroup, stateInfo, installInfo, idleStandard, mergeConfig, normalizeRemoteToHttps, repoFacts, normalizeWorkspaceMap, realWorkspaces, workspaceReport, selfCheck, channelState, readConfig, statusPayload, preflightReport: selfCheck, sessionDoctorScan, sessionDoctorApply };
+export const __test = { codeRepoList, codeRepoState, codeReposPayload, syncCodeRepo, syncAllCodeRepos, divergeInfo, resolveKeepLocal, resolveKeepRemote, stampTrailer, purgePreview, purgeExecute, purgeVerify, sessionIdForms, walkSessionRefs, bareSessionId, sessionNoteTemplate, sessionNotePreview, sessionNoteWrite, resolveNotePath, sessionMigrateGroup, sessionMigratePreview, sessionMigrateExecute, sessionMigrateVerify, encodeWorkspaceGroup, decodeWorkspaceGroup, stateInfo, installInfo, idleStandard, mergeConfig, normalizeRemoteToHttps, repoFacts, normalizeWorkspaceMap, realWorkspaces, workspaceReport, selfCheck, channelState, readConfig, statusPayload, preflightReport: selfCheck, sessionDoctorScan, sessionDoctorApply, channelsOf, repoKeyOf, remoteOf, groupEnabled, surfaceEnabled, diffLocalToPayload, stageChanges, commitChanges, pushChannels, pullChannels, applyPayload, isSingle, channelLabel };

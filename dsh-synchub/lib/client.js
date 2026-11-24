@@ -78,7 +78,7 @@ window.__ModuleLoader__.load({
       }
       const ch = own.channels || {};
       const chList = Object.keys(ch).map(k => ch[k]).filter(Boolean);
-      const labelOf = s => (s && s.label) || '通道';
+      const labelOf = s => (s && s.label) || (s && s.channel === 'config' ? '配置通道' : s && s.channel === 'sessions' ? '会话通道' : '通道');
       const maxOf = fn => chList.reduce((m, s) => Math.max(m, fn(s) || 0), 0);
       const sumOf = fn => chList.reduce((n, s) => n + (fn(s) || 0), 0);
 
@@ -743,7 +743,7 @@ function checkedAtText(atMs) {
       }, [notePreview, noteId, noteFile, noteDraft, act]);
 
       const chList = Object.keys((own && own.channels) || {}).map(k => own.channels[k]).filter(Boolean);
-      const labelOf = s => (s && s.label) || '通道';
+      const labelOf = s => (s && s.label) || (s && s.channel === 'config' ? '配置通道' : s && s.channel === 'sessions' ? '会话通道' : '通道');
       const auto = (own && own.auto) || {};
       const red = alerts.some(a => a.level === 'red');
       const amber = alerts.some(a => a.level === 'warn');

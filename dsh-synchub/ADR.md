@@ -1543,3 +1543,77 @@ DSH 在目录改名后会为该新路径**新建**一个 `workspaceId`，旧记�
   - 删掉 `dh.hint` 那行渲染 → 旧版断言立即变红。
   后者还揭出一个自测陷阱：最初断言写 `/重启 DSH/`，而页面上**另一个卡也有这四个字**，
   所以删掉 hint 照样绿。改成只匹 hint 独有的「两半版本对齐」后才真正生效。
+
+---
+
+## ADR-036 · 0.10.0：单仓库模式（一地址 + 两分组开关）+ 全局 AGENTS.md 同步
+
+- **日期**：2026-11-24
+- **状态**：已采纳（已实现，待真机重启验收）
+- **背景**（用户原话）：
+  > 「synchub 现在同步是配置一个仓库 还有 session 一个仓库对吧 是否可以合并为一个，
+  >  但是保留开关，两个都可以打开关闭 否则配置起来有点复杂 而且量也不大」
+
+  同时问：每个工作区的 AGENTS.md（记忆文件）要怎么同步；已经开了「代码仓库同步」的
+  GitHub 同步，是不是就在那里同步、不在 synchub 跑。
+
+- **调研结论（先纠正两个前提）**：
+  1. **两个地址填成同一个仓库 ≠ 合并**。两个通道是**两个独立工作副本**（`repos/config`、
+     `repos/sessions`），各自 `.git`/分支/history；填同一 remote 后第二个通道推同分支必然
+     落后/分叉（ff-only 拉不下来）。README §11.5 Q1 与 ADR-019 已写明。
+  2. **工作区 AGENTS.md 已经同步了**。用户开了「代码仓库同步」（codeRepos，`git add -A`），
+     `C:\dsh\dw-base\AGENTS.md` 已被跟踪并推到 `dshwp-base`（`git log` 实证）。
+     synchub 只搬 `$DSH_HOME`，**刻意不碰工作区文件**，两者不会重复搬。
+     真正没同步的只有**全局 `~/.dsh/AGENTS.md`**（不在任何同步面，也不在任何 payload）。
+
+- **决策**：
+  1. **单仓库模式** `cfg.mode==='single'`：一个物理仓库 `repos/all`、一个 `cfg.remote`；
+     `config` / `sessions` 退化为**逻辑分组**，`channels.<group>.enabled` 成为**分组过滤器**
+     （决定哪些同步面参与 stage/apply）。逻辑通道只剩 `'all'` 一个。
+  2. **双仓库模式** `cfg.mode==='split'` 保留，且为**默认**（老配置没有 `mode` 字段，
+     不能默认切成单仓库，否则会悄悄改掉已有用户的行为）。
+  3. 引擎引入 `isSingle / channelsOf / repoKeyOf / remoteOf / groupEnabled / channelLabel`，
+     并把 diff/stage/commit/push/pull/apply/channelState/status/preflight/checkAll/selfCheck/
+     stateInfo/diverge/autoPush/路由全部改成「按 `channelsOf(cfg)` 循环 + 按 `repoKeyOf` 落盘」。
+     单仓库下 payload 顶层路径不冲突（`sessions/` `storages/` `attachments/` `skills/`
+     `profiles/` `AGENTS.md`），所以能共存于同一个 `payload/`。
+  4. **新增同步面 `agentInstructions`**（config 组、safe、默认开）：只含全局 `AGENTS.md`。
+     工作区内的 AGENTS.md 仍归各工作区自己的 git 管。
+  5. 客户端不再写死 `channels.config` / `channels.sessions` 两行，改为按 `Object.keys(own.channels)`
+     动态渲染；设置页加「仓库模式」下拉 + 单仓库下的一地址 + 两分组开关。
+
+- **理由**：
+  - 用户的两台机器数据量不大，两个仓库换来的「隔离」价值低于「要建两个仓库、填两个地址、
+    看两套状态」的心智负担。单仓库把配置面从「2 地址 + 2 开关」压到「1 地址 + 2 开关」。
+  - 分组开关保留了「只同步某一类」的能力，且现在**真的生效**（以前 `channels.<ch>.enabled`
+    只影响 push/pull，stage/apply 仍会搬，名不副实）。
+  - 全局 AGENTS.md 是用户跨机要一致的规则文件，且就在 `$DSH_HOME` 里，天然属于本插件的同步面。
+
+- **反面代价**：
+  - **失去通道隔离**：一个仓库坏了（远端误删、权限丢失）两类数据一起受影响；以前会话仓库坏了配置仓库还能救。
+  - **提交历史混合**：改设置也会连带会话提交，`git log` 不如两仓分明（用户已明确接受「量不大」）。
+  - **迁移不是自动的**：老用户要新建（或指定）一个仓库、填 `remote`、把 `mode` 切到 single，
+    旧两仓留在磁盘与 GitHub 作历史，插件不会自动合并旧 payload。
+  - **分组开关语义变了**：双仓库模式下关掉一个通道现在连 stage/apply 一起停（以前只停 push/pull）。
+    这是修正名不副实，但确实改变了老行为。
+  - **全局 AGENTS.md 会跨机覆盖**：一台机器改了规则会覆盖另一台的版本，这是同步的预期，
+    但要注意别在一台机器上写只对本地有意义的路径。
+
+- **已否决的替代方案**：
+  | 方案 | 否决原因 |
+  |---|---|
+  | 两个 `remote` 填同一个地址 | 仍是两个工作副本，第二通道推同分支必然落后/分叉（README Q1 已写） |
+  | 保留两个逻辑通道但共用一个物理仓库目录 | `dirty`/`ahead` 等仓库级指标会在两个通道上重复计数，状态与摘要都要特殊打补丁，比改成单通道更脏 |
+  | 把全局 AGENTS.md 也交给代码仓库同步 | 它在 `~/.dsh`，不在任何工作区仓库里，代码仓库同步够不着 |
+  | 把工作区 AGENTS.md 也加进 synchub | 与代码仓库同步重复搬，且工作区文件应归工作区 git（ADR-001 边界） |
+  | 默认改成单仓库（DEFAULTS.mode='single'） | 老配置没有 `mode` 字段，会悄悄把已有双仓库用户切走，风险不可控 |
+
+- **验证**：
+  - 新增 `test/single-smoke.cjs` **38 条**：模式抽象纯函数、`mergeConfig` 收 mode/remote、
+    分组开关过滤、stage 落 `repos/all/payload` 且不建 `repos/config`、diff 归零、
+    `channelState('all')`/`statusPayload` 只报一个通道且摘要不重复计数、关掉配置组后
+    AGENTS.md 不进 payload、apply 回写、空配置失败态引导文案。
+  - 现有 10 份 smoke 中 9 份全绿；`diverge-smoke` 的源码护栏已随实现更新。
+    `repo-sync-smoke` 在本沙箱因 `spawnSync git EPERM` 无法跑（测试自己起 git，非本次改动引入）。
+  - **真机重启验收未做**：改了 `index.js`，必须完全退出 DSH 再打开；单仓库的真实 push/pull
+    需要在真机（能跑 git 的环境）上验。
