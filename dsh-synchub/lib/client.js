@@ -77,8 +77,10 @@ window.__ModuleLoader__.load({
         return a;
       }
       const ch = own.channels || {};
-      const conf = ch.config || {};
-      const sess = ch.sessions || {};
+      const chList = Object.keys(ch).map(k => ch[k]).filter(Boolean);
+      const labelOf = s => (s && s.label) || '通道';
+      const maxOf = fn => chList.reduce((m, s) => Math.max(m, fn(s) || 0), 0);
+      const sumOf = fn => chList.reduce((n, s) => n + (fn(s) || 0), 0);
 
       // ① 环境切换：另一台推过 → 最该先 pull
       if (own.switched && own.stamp) {
@@ -90,19 +92,16 @@ window.__ModuleLoader__.load({
       }
 
       // ② 通道没配好 = 根本没法跨机
-      const noRemote = [];
-      if (!(conf.remote || '')) noRemote.push('配置');
-      if (!(sess.remote || '')) noRemote.push('会话');
+      const noRemote = chList.filter(s => !(s.remote || '')).map(labelOf);
       if (noRemote.length) {
-        a.push({ kind: 'remote', level: 'red', text: `${noRemote.join(' / ')}通道还没连私有仓库：到「设置 → Msynchub → 两个仓库地址」里填` });
+        a.push({ kind: 'remote', level: 'red', text: `${noRemote.join(' / ')}还没连私有仓库：到「设置 → Msynchub → 通道地址」里填` });
       }
-
       // ③ 落后 / 未推送 / 脏
-      const behind = Math.max(conf.behind || 0, sess.behind || 0);
-      const ahead = Math.max(conf.ahead || 0, sess.ahead || 0);
+      const behind = maxOf(s => s.behind);
+      const ahead = maxOf(s => s.ahead);
       /* 用 unsynced（仓库未提交 + 本机未暂存），不是 git dirty ——
          空仓库的 dirty 恒为 0，会把「从未同步」说成「已对齐」（ADR-026）。 */
-      const unsynced = (conf.unsynced || 0) + (sess.unsynced || 0);
+      const unsynced = sumOf(s => s.unsynced);
       if (behind > 0 && ahead > 0) {
         a.push({ kind: 'diverged', level: 'red', text: `两台机器各自推过（领先 ${ahead} / 落后 ${behind}）：普通拉取会失败，在面板里二选一（以本机为准 / 以远端为准）` });
       }
@@ -111,9 +110,7 @@ window.__ModuleLoader__.load({
       if (unsynced > 0) a.push({ kind: 'dirty', level: 'warn', text: `还有 ${unsynced} 处本机变动没同步上去：点「提交并推送」` });
 
       // ④ 从没同步过
-      const never = [];
-      if ((conf.remote || '') && !conf.lastCommitAt) never.push('配置');
-      if ((sess.remote || '') && !sess.lastCommitAt) never.push('会话');
+      const never = chList.filter(s => (s.remote || '') && !s.lastCommitAt).map(labelOf);
       if (never.length && !behind && !ahead) {
         a.push({ kind: 'never', level: 'warn', text: `${never.join(' / ')}通道还没有任何提交，先「提交并推送」建立基线` });
       }
@@ -121,10 +118,8 @@ window.__ModuleLoader__.load({
       // 旧版只看 git dirty，空仓库恒为 0 → 面板全绿而 GitHub 上是空的。
       // pending 只在显式扫描时存在（/status 不算，因为要算 80MB 指纹）。
       // 所以这里两条路都要管：能算出 pending 用 pending；算不出但 payloadMissing 也要报。
-      const pending = (conf.pending || 0) + (sess.pending || 0);
-      const noPayload = [];
-      if (conf.remote && conf.payloadMissing && conf.initialized) noPayload.push('配置');
-      if (sess.remote && sess.payloadMissing && sess.initialized) noPayload.push('会话');
+      const pending = sumOf(s => s.pending);
+      const noPayload = chList.filter(s => s.remote && s.payloadMissing && s.initialized).map(labelOf);
       if (pending > 0) {
         a.push({ kind: 'pending', level: 'red', text: `本机还有 ${pending} 个文件从未同步上去：点「提交并推送」` });
       } else if (noPayload.length) {
@@ -747,8 +742,8 @@ function checkedAtText(atMs) {
         }));
       }, [notePreview, noteId, noteFile, noteDraft, act]);
 
-      const conf = (own && own.channels && own.channels.config) || {};
-      const sess = (own && own.channels && own.channels.sessions) || {};
+      const chList = Object.keys((own && own.channels) || {}).map(k => own.channels[k]).filter(Boolean);
+      const labelOf = s => (s && s.label) || '通道';
       const auto = (own && own.auto) || {};
       const red = alerts.some(a => a.level === 'red');
       const amber = alerts.some(a => a.level === 'warn');
@@ -769,7 +764,7 @@ function checkedAtText(atMs) {
          noRemote = 真读到了配置，且确实缺地址。 */
       const loading = !own && !err;
       const unknown = !own && Boolean(err);
-      const noRemote = Boolean(own && own.ok && (!conf.remote || !sess.remote));
+      const noRemote = Boolean(own && own.ok && chList.some(s => !(s.remote || '')));
 
       /* ---------------------------------------------------------------- 仪表盘
          用户反馈（2026-11-18）：「侧边栏应该让我快速了解现在还差多少要同步、差异在哪、
@@ -782,18 +777,18 @@ function checkedAtText(atMs) {
          所以：没有 summary 就从旧字段自己算，并明说可靠度较低。 */
       const legacy = !own || !own.summary;
       const pendingN = legacy
-        ? ((conf.pending != null ? conf.pending : conf.dirty) || 0) + ((sess.pending != null ? sess.pending : sess.dirty) || 0)
+        ? chList.reduce((n, s) => n + ((s.pending != null ? s.pending : s.dirty) || 0), 0)
         : (sum.unsynced || 0);
       const behindN = legacy
-        ? Math.max(conf.behind || 0, sess.behind || 0)
+        ? chList.reduce((m, s) => Math.max(m, s.behind || 0), 0)
         : (sum.behind || 0);
       const aheadN = legacy
-        ? Math.max(conf.ahead || 0, sess.ahead || 0)
+        ? chList.reduce((m, s) => Math.max(m, s.ahead || 0), 0)
         : (sum.ahead || 0);
       const payloadMiss = legacy
-        ? ['config', 'sessions'].filter(ch => (ch === 'config' ? conf : sess).payloadMissing)
+        ? chList.filter(s => s.payloadMissing).map(labelOf)
         : (sum.payloadMissing || []);
-      const scanned = legacy ? (conf.scanned === true && sess.scanned === true) : Boolean(sum.scanned);
+      const scanned = legacy ? chList.every(s => s.scanned === true) : Boolean(sum.scanned);
       const busyNow = Boolean(auto.busy);
       const divergedNow = Boolean(sum.diverged);
       const nextAt = auto.nextAt ? new Date(auto.nextAt) : null;
@@ -808,7 +803,7 @@ function checkedAtText(atMs) {
       let headline, tone;
       if (loading) { headline = '正在读取本机状态…'; tone = 'idle'; }
       else if (unknown) { headline = '状态没读到，点下面「重新检查」重试'; tone = 'red'; }
-      else if (noRemote) { headline = '还没连仓库，先去设置填两个地址'; tone = 'red'; }
+      else if (noRemote) { headline = '还没连仓库，先去设置填仓库地址'; tone = 'red'; }
       else if (divergedNow) { headline = '两台机器各自推过，普通同步会失败'; tone = 'red'; }
       else if (behindN > 0) { headline = `落后远端 ${behindN} 个提交，先拉取`; tone = 'red'; }
       else if (pendingN > 0) { headline = `还有 ${pendingN} 处本机变动没同步上去`; tone = 'warn'; }
@@ -886,7 +881,7 @@ function checkedAtText(atMs) {
         divergeData
           ? e('div', { style: { marginTop: 10 } },
             Object.entries(divergeData.channels || {}).map(([ch, st]) => e('div', { key: ch, style: { marginTop: 8 } },
-              e('strong', null, ch === 'config' ? '配置通道' : '会话通道'),
+              e('strong', null, st.label || (ch === 'config' ? '配置通道' : ch === 'sessions' ? '会话通道' : '同步仓库')),
               `：本机独有 ${st.localOnly ? st.localOnly.length : 0} 条 · 远端独有 ${st.remoteOnly ? st.remoteOnly.length : 0} 条`,
               (st.localOnly || []).concat(st.remoteOnly || []).length
                 ? e('details', { style: { marginTop: 4 } },
@@ -948,14 +943,14 @@ function checkedAtText(atMs) {
          根因是接口超时导致 own=null，conf/sess 退化为 {}，noRemote 于是为 true。
          这条误导信息比「没数据」更糟：它让用户去重填已经正确的配置。 */
       const connectCard = (own && noRemote) ? e('div', { className: 'card' },
-        e('h3', null, '还缺两个仓库地址', e('span', { className: 'red' }, '● 必需一步')),
+        e('h3', null, chList.length > 1 ? '还缺两个仓库地址' : '还缺仓库地址', e('span', { className: 'red' }, '● 必需一步')),
         e('div', { className: 'muted' },
           '没有仓库地址，下面所有按钮都不起作用。只需要做两件事：'),
         e('div', { className: 'step need', style: { marginTop: 8 } },
           e('span', { className: 'red' }, '1.'),
           e('div', null,
             e('strong', null, '到设置里填地址'),
-            e('div', { className: 'act' }, '路径：设置 → Msynchub → ① 必做：两个仓库地址'),
+            e('div', { className: 'act' }, '路径：设置 → Msynchub → ① 必做：' + (chList.length > 1 ? '两个仓库地址' : '仓库地址')),
             e('div', { className: 'act' }, '填完点「保存」')),
         ),
         e('div', { className: 'step need' },
@@ -1303,8 +1298,8 @@ function checkedAtText(atMs) {
           /* 状态摘要：通道快照 + 空闲开关一句话（配置本身去设置里改）。 */
           e('div', { className: 'card' },
             e('h3', null, '同步通道状态'),
-            chRow('配置通道', conf),
-            chRow('会话通道', sess),
+            chList.map((c, i) => chRow(c.label || labelOf(c) || '通道', c)),
+            chList.length ? null : e('div', { className: 'muted' }, '尚未配置仓库地址'),
             own && own.stamp ? e('div', { className: 'row' },
               e('span', { className: 'k' }, '最近一次推送来自'),
               e('span', { className: own.switched ? 'red' : 'good' },
@@ -1534,14 +1529,14 @@ function checkedAtText(atMs) {
             row('DSH_HOME', e('code', null, status.dshHome)),
             // ⚠ 「脏」用 unsynced（仓库未提交 + 本机未暂存），不再是 git dirty。
             // 旧值在空仓库上恒为 0，于是 github 上是空的、面板却显示全绿。
-            row('配置通道', status.channels?.config?.remote
-              ? e('span', { className: ((status.channels.config.behind || 0) + (status.channels.config.unsynced || 0)) > 0 ? 'red' : 'good' },
-                `${status.channels.config.behind || 0} 落后 / ${status.channels.config.ahead || 0} 领先 / ${status.channels.config.unsynced || 0} 未同步`)
-              : e('span', { className: 'red' }, '未配置')),
-            row('会话通道', status.channels?.sessions?.remote
-              ? e('span', { className: ((status.channels.sessions.behind || 0) + (status.channels.sessions.unsynced || 0)) > 0 ? 'red' : 'good' },
-                `${status.channels.sessions.behind || 0} 落后 / ${status.channels.sessions.ahead || 0} 领先 / ${status.channels.sessions.unsynced || 0} 未同步`)
-              : e('span', { className: 'red' }, '未配置')),
+            ...Object.keys(status.channels || {}).map(ch => {
+              const c = status.channels[ch] || {};
+              const label = c.label || (ch === 'config' ? '配置通道' : ch === 'sessions' ? '会话通道' : '同步仓库');
+              return row(label, c.remote
+                ? e('span', { className: ((c.behind || 0) + (c.unsynced || 0)) > 0 ? 'red' : 'good' },
+                  `${c.behind || 0} 落后 / ${c.ahead || 0} 领先 / ${c.unsynced || 0} 未同步`)
+                : e('span', { className: 'red' }, '未配置'));
+            }),
             row('最近推送来自', status.stamp
               ? `${status.stamp.machine} · ${fmt(status.stamp.at)}${status.switched ? '（另一台）' : '（本机）'}`
               : '—'),
@@ -1553,17 +1548,50 @@ function checkedAtText(atMs) {
               // ⚠ hasGit 只代表 .git 目录也在，不代表“同步成功”。旧文案写“已建”会让空仓库
               // （零提交、无 payload）看起来跟已经推上去一样——2026-11-18 用户就是这样
               // 在 GitHub 上看到空仓库、而面板显示正常的。现在分成三种真实状态。
-              row('两通道仓库', e('span', null,
-                `配置 ${repoWord(status.state.repos?.config)} · 会话 ${repoWord(status.state.repos?.sessions)}`)),
+              row('仓库状态', e('span', null,
+                Object.keys(status.state.repos || {}).map(ch => {
+                  const r = status.state.repos[ch] || {};
+                  const name = ch === 'all' ? '单仓库' : (r.dir || '').split(/[\\/]/).pop() || ch;
+                  return `${name} ${repoWord(r)}`;
+                }).join(' · '))),
               row('回滚点', `${status.state.backupCount || 0} 个`),
               e('div', { className: 'muted', style: { fontSize: 11.5 } }, status.state.hint)) : null));
 
+      const isSingle = form?.mode === 'single';
+      const modeRow = e('div', { className: 'field' },
+        e('label', null, '仓库模式'),
+        e('select', {
+          value: isSingle ? 'single' : 'split',
+          onChange: ev => set('mode', ev.target.value),
+          style: { font: 'inherit', padding: '5px 8px', borderRadius: 6, border: '1px solid rgba(128,128,128,.4)', background: 'transparent', color: 'inherit' },
+        },
+          e('option', { value: 'single' }, '单仓库（一个地址 + 两个分组开关）'),
+          e('option', { value: 'split' }, '双仓库（每组各一个地址，老配置）')),
+        e('div', { className: 'hint' }, '单仓库：只填一个地址，配置组与会话组共用；两个开关决定同步哪几组。'));
+      const groupChk = (ch, label, hint) => e('div', { className: 'chk' },
+        e('input', { type: 'checkbox', checked: form?.channels?.[ch]?.enabled !== false, onChange: ev => setCh(ch, 'enabled', ev.target.checked) }),
+        e('span', null, label),
+        e('span', { className: 'why' }, hint));
       const channelCard = e('div', { className: 'card' },
-        e('h3', null, '通道地址（私有仓库）'),
-        CH('config', '配置通道', '技能库 + DSH 配置层。建议单独一个私有仓库，如 dsh-config'),
-        CH('sessions', '会话通道', '会话日志 + 工作区登记表 + 附件。建议单独一个私有仓库，如 dsh-sessions'),
+        e('h3', null, '仓库地址（私有仓库）'),
+        modeRow,
+        isSingle
+          ? e(react.Fragment, null,
+              e('div', { className: 'field' },
+                e('label', null, '私有仓库地址'),
+                e('input', {
+                  type: 'text',
+                  placeholder: 'https://github.com/<你>/<私有仓库>.git',
+                  value: form?.remote ?? '',
+                  onChange: ev => set('remote', ev.target.value),
+                }),
+                e('div', { className: 'hint' }, '配置组与会话组共用这一个仓库（ADR-036）')),
+              groupChk('config', '同步配置组（技能库 + 配置层 + 全局 AGENTS.md）', '关掉后这一组不再进仓库'),
+              groupChk('sessions', '同步会话组（会话记录 + 工作区登记 + 附件）', '关掉后这一组不再进仓库'))
+          : e(react.Fragment, null,
+              CH('config', '配置通道', '技能库 + DSH 配置层 + 全局记忆文件。建议单独一个私有仓库，如 dsh-config'),
+              CH('sessions', '会话通道', '会话日志 + 工作区登记表 + 附件。建议单独一个私有仓库，如 dsh-sessions')),
         e(CredentialNote, null));
-
       const formCard = e('div', { className: 'card' },
         e('h3', null, '本机设置'),
         form === null ? e('div', { className: 'k' }, '读取中…')
@@ -1769,13 +1797,13 @@ function checkedAtText(atMs) {
                 '它 ' , e('strong', null, '不装插件'), '（那是 dsh-market 的事），也 ', e('strong', null, '不碰'), ' 你的代码仓库。',
                 '代码走 git 自己管，这里只负责「换台机器能接着干活」。'))),
           e('div', { className: 'step' },
-            e('strong', null, '第 1 步 · 在 GitHub 建两个空私有仓库'),
+            e('strong', null, form?.mode === 'single' ? '第 1 步 · 在 GitHub 建一个空私有仓库' : '第 1 步 · 在 GitHub 建两个空私有仓库'),
             e('div', null,
               '两个都要 ', e('strong', null, 'Private'), '，而且 ', e('strong', null, '不要勾 README / .gitignore / License'),
               '（勾了就成了非空仓库，首次推送会被拒）。',
               e('div', { className: 'muted' },
                 '建议叫 ', e('code', null, 'dsh-config'), '（配置层）与 ', e('code', null, 'dsh-sessions'), '（会话）。',
-                '两者必须分开：会话体积大、变动频繁，混在一起会让配置通道天天冲突。'))),
+                form?.mode === 'single' ? '单仓库模式下只建一个即可（两个分组共用）。' : '两者必须分开：会话体积大、变动频繁，混在一起会让配置通道天天冲突。'))),
           e('div', { className: 'step' },
             e('strong', null, '第 2 步 · 复制仓库地址，填到下面「通道地址」'),
             e('div', null,
@@ -1783,7 +1811,7 @@ function checkedAtText(atMs) {
               e('div', { className: 'muted' },
                 'HTTPS 与 SSH 都行，取决于你本机已经配通哪种；不确定就先用 HTTPS，',
                 '连不上时先查代理/凭据（见下面的「Git 认证」说明）。',
-                '填完点「保存」，再点「重新检查」确认两个通道都不报错。'))),
+                '填完点「保存」，再点「重新检查」确认通道不报错。'))),
           e('div', { className: 'step' },
             e('strong', null, '第 3 步 · 把 Git 认证配通（你自己搞定）'),
             e('div', null,

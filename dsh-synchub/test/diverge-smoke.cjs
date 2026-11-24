@@ -51,8 +51,8 @@ const ROOT = path.join(__dirname, '..');
   const src = fs.readFileSync(path.join(ROOT, 'lib', 'index.js'), 'utf8');
   assert.ok(/out\.diverged = out\.ahead > 0 && out\.behind > 0/.test(src),
     'channelState 必须计算 diverged（既领先又落后）');
-  assert.ok(/diverged: Boolean\(config\.diverged \|\| sessions\.diverged\)/.test(src),
-    'summary.diverged 必须是两通道或运算');
+  assert.ok(/diverged: chList\.some\(s => s\.diverged\)/.test(src),
+    'summary.diverged 必须是所有仓库的或运算');
 
   const cli = fs.readFileSync(path.join(ROOT, 'lib', 'client.js'), 'utf8');
   assert.ok(/summary\.diverged/.test(cli), 'client 必须消费 summary.diverged');

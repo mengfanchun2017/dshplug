@@ -41,31 +41,53 @@ const VERSION = '0.9.0';
 const DEFAULT_BRANCH = 'main';
 const BRANCH_CACHE = new Map();
 
+/* ---- 单仓库模式（ADR-036）------------------------------------------
+ * mode==='single'：config / sessions 两个「逻辑分组」共用一个物理仓库 repos/all，
+ * 两个开关（channels.<group>.enabled）退化为分组过滤器（决定哪些面参与同步）。
+ * mode==='split'（默认，兼容老用户）：每个分组各自一个仓库，互不干扰。 */
+function isSingle(cfg) { return Boolean(cfg && cfg.mode === 'single'); }
+function channelsOf(cfg) { return isSingle(cfg) ? ['all'] : ['config', 'sessions']; }
+function repoKeyOf(channel, cfg) { return isSingle(cfg) ? 'all' : channel; }
+function remoteOf(channel, cfg) {
+  if (isSingle(cfg)) return String(cfg.remote || '').trim();
+  const c = (cfg.channels || {})[channel] || {};
+  return String(c.remote || '').trim();
+}
+function groupEnabled(cfg, channel) {
+  const c = (cfg.channels || {})[channel] || {};
+  return c.enabled !== false;
+}
+function channelLabel(ch) {
+  if (ch === 'all') return '同步仓库';
+  return ch === 'config' ? '配置通道' : '会话通道';
+}
+
 /* 缓存优先；没探测过时读本地仓库的实际分支（比 DEFAULT_BRANCH 可靠得多）：
    config 仓库当初就是从 master 建的，写死 main 会让阳性值算错——
    rev-list HEAD...origin/main 会失败，于是 behind 停在 0，看起来「与远端一致」。 */
-function branchOf(channel) {
-  const cached = BRANCH_CACHE.get(channel);
+function branchOf(channel, cfg) {
+  const key = repoKeyOf(channel, cfg);
+  const cached = BRANCH_CACHE.get(key);
   if (cached) return cached;
   // 同步函数不能 await：读 .git/HEAD（一行 ref: refs/heads/<name>）够快且无子进程。
   try {
-    const head = fs.readFileSync(path.join(repoDir(channel), '.git', 'HEAD'), 'utf8').trim();
+    const head = fs.readFileSync(path.join(repoDir(channel, cfg), '.git', 'HEAD'), 'utf8').trim();
     const m = /^ref:\s+refs\/heads\/(\S+)$/.exec(head);
     if (m) {
-      BRANCH_CACHE.set(channel, m[1]);
+      BRANCH_CACHE.set(key, m[1]);
       return m[1];
     }
   } catch { /* 未初始化或分离 HEAD：回退默认值 */ }
   return DEFAULT_BRANCH;
 }
 /** 探测远端默认分支并缓存；失败则保持现状。 */
-async function probeBranch(channel) {
-  const dir = repoDir(channel);
+async function probeBranch(channel, cfg) {
+  const dir = repoDir(channel, cfg);
   const r = await git(dir, ['ls-remote', '--symref', 'origin', 'HEAD'], 120000);
   if (!r.ok || !r.out) return null;
   const m = /^ref:\s+refs\/heads\/(\S+)\s+HEAD/m.exec(r.out);
   if (m) {
-    BRANCH_CACHE.set(channel, m[1]);
+    BRANCH_CACHE.set(repoKeyOf(channel, cfg), m[1]);
     return m[1];
   }
   return null;
@@ -151,6 +173,16 @@ const SURFACES = [
     on: true,
     roots: ['skills'],
     note: '技能文件本体；技能的安装走 dsh-market'
+  },
+  {
+    id: 'agentInstructions',
+    channel: 'config',
+    label: '全局记忆文件',
+    tier: 'safe',
+    on: true,
+    files: ['AGENTS.md'],
+    exclude: [],
+    note: '用户全局 AGENTS.md（DSH 每次会话注入的规则）。工作区内的 AGENTS.md 归各工作区自己的 git 管',
   },
   {
     id: 'profileConfig',
@@ -302,6 +334,10 @@ async function workspaceReport(cfg) {
 
 const DEFAULTS = {
   machine: os.hostname(),
+  /* 单仓库模式（ADR-036）：一个仓库地址 + 两个分组开关。
+     默认 'split'，老配置不改就能继续用。 */
+  mode: 'split',
+  remote: '',
   workspace: 'C:\\dsh\\workspace1',
   workspaceRoot: 'C:\\dsh',
   workspaces: [],
@@ -493,6 +529,9 @@ function mergeConfig(base, patch) {
       if (typeof src.enabled === 'boolean') out.channels[ch].enabled = src.enabled;
     }
   }
+  // 单仓库模式（ADR-036）：一个地址 + 两个分组开关。
+  if (patch.mode === 'single' || patch.mode === 'split') out.mode = patch.mode;
+  if (typeof patch.remote === 'string') out.remote = patch.remote.trim();
   if (patch.surfaces && typeof patch.surfaces === 'object') {
     for (const s of SURFACES) {
       if (typeof patch.surfaces[s.id] === 'boolean') out.surfaces[s.id] = patch.surfaces[s.id];
@@ -565,12 +604,12 @@ async function git(cwd, args, timeout = 20000) {
   }
 }
 
-function repoDir(channel) {
-  return path.join(REPO_ROOT, channel);
+function repoDir(channel, cfg) {
+  return path.join(REPO_ROOT, repoKeyOf(channel, cfg));
 }
 
-function payloadDir(channel) {
-  return path.join(repoDir(channel), 'payload');
+function payloadDir(channel, cfg) {
+  return path.join(repoDir(channel, cfg), 'payload');
 }
 
 /**
@@ -601,28 +640,29 @@ async function probeRemoteExists(channel, remote) {
 const FETCH_TTL_MS = 8000;
 const FETCH_CACHE = new Map(); // channel -> { at, promise }
 
-async function fetchRemoteCached(channel, remote) {
-  const hit = FETCH_CACHE.get(channel);
+async function fetchRemoteCached(channel, remote, cfg) {
+  const key = repoKeyOf(channel, cfg);
+  const hit = FETCH_CACHE.get(key);
   const now = Date.now();
   if (hit && hit.remote === remote && now - hit.at < FETCH_TTL_MS) return hit.promise;
   // 存 Promise 而不是结果：并发的多个请求共用同一趟网络往返，不会各跑一次。
-  const promise = fetchRemote(channel, remote);
-  FETCH_CACHE.set(channel, { at: now, remote, promise });
-  promise.catch(() => FETCH_CACHE.delete(channel));
+  const promise = fetchRemote(channel, remote, cfg);
+  FETCH_CACHE.set(key, { at: now, remote, promise });
+  promise.catch(() => FETCH_CACHE.delete(key));
   return promise;
 }
 
 /* 本地 refs 快照（完全无网络）。fast 模式用它回答「落后/领先」。
    behind/ahead 基于上次 fetch 的 origin/<br>，可能在缓存 TTL 内陈旧 ——
    这在侧边栏轮询里是可接受的：它会明确标 stale=true，不假装刚查过。 */
-function cachedRemoteState(channel, remote) {
-  const hit = FETCH_CACHE.get(channel);
+function cachedRemoteState(channel, remote, cfg) {
+  const hit = FETCH_CACHE.get(repoKeyOf(channel, cfg));
   if (!hit || hit.remote !== remote) return null;
   return { ok: true, at: hit.at, stale: Date.now() - hit.at >= FETCH_TTL_MS };
 }
 
-async function fetchRemote(channel, remote) {
-  const dir = repoDir(channel);
+async function fetchRemote(channel, remote, cfg) {
+  const dir = repoDir(channel, cfg);
   const anyRef = await git(dir, ['ls-remote', '--heads', 'origin'], 120000);
   // ls-remote 失败 = 仓库根本不存在 / 没权限，和「仓库存在但为空」是两件事。
   // 前者拉一百次也不会自动建好，必须明说，不能引导用户去点拉取。
@@ -634,16 +674,16 @@ async function fetchRemote(channel, remote) {
   if (!anyRef.out) return { ok: true, empty: true };
 
   // 先探默认分支（master/main 都可能），再 fetch 它 —— 不探就会 fetch 错分支。
-  await probeBranch(channel);
-  const br = branchOf(channel);
+  await probeBranch(channel, cfg);
+  const br = branchOf(channel, cfg);
   const f = await git(dir, ['fetch', '--prune', 'origin', br], 120000);
   if (!f.ok) return { ok: false, empty: false, error: f.err || f.out };
   const up = await git(dir, ['rev-parse', '--verify', '--quiet', `origin/${br}`]);
   return { ok: true, empty: !up.ok, branch: br, output: f.out };
 }
 
-async function ensureRepo(channel, remote) {
-  const dir = repoDir(channel);
+async function ensureRepo(channel, remote, cfg) {
+  const dir = repoDir(channel, cfg);
   const fresh = !fs.existsSync(path.join(dir, '.git'));
   await fsp.mkdir(dir, { recursive: true });
 
@@ -684,12 +724,12 @@ async function ensureRepo(channel, remote) {
 }
 
 /** 首次接入远端：把远端已有历史取下来，本地工作区对齐。 */
-async function bootstrapFromRemote(channel, remote) {
-  const dir = repoDir(channel);
-  const info = await ensureRepo(channel, remote);
+async function bootstrapFromRemote(channel, remote, cfg) {
+  const dir = repoDir(channel, cfg);
+  const info = await ensureRepo(channel, remote, cfg);
   if (!remote) return { ok: false, error: '未配置远端仓库' };
 
-  const fetched = await fetchRemote(channel, remote);
+  const fetched = await fetchRemote(channel, remote, cfg);
   if (!fetched.ok) return { ok: false, error: `拉取远端失败：${fetched.error}` };
   if (fetched.empty) {
     // 远端还没有 main（刚建的空仓库）：本地继续用现有状态，等 commit/push 建基线
@@ -717,26 +757,26 @@ async function bootstrapFromRemote(channel, remote) {
       });
       moved += acc.length;
     }
-    const br = fetched.branch || branchOf(channel);
+    const br = fetched.branch || branchOf(channel, cfg);
     const co = await git(dir, ['checkout', '-f', '-B', br, `origin/${br}`]);
     if (!co.ok) return { ok: false, error: `检出远端分支失败：${co.err}` };
     return { ok: true, adopted: true, stashed: moved, stashDir: moved ? stash : null };
   }
-  const brDone = fetched.branch || branchOf(channel);
+  const brDone = fetched.branch || branchOf(channel, cfg);
   await git(dir, ['branch', '--set-upstream-to', `origin/${brDone}`, brDone]);
   return { ok: true };
 }
 
 /** 通道当前状态。带 opts.fetch 时先去远端刷新引用 —— 否则「落后」永远是旧值。 */
 async function channelState(channel, cfg, opts = {}) {
-  const conf = cfg.channels[channel] || {};
-  const dir = repoDir(channel);
+  const dir = repoDir(channel, cfg);
   const out = {
     channel,
-    remote: conf.remote || '',
-    enabled: conf.enabled !== false,
+    label: channelLabel(channel),
+    remote: remoteOf(channel, cfg),
+    enabled: isSingle(cfg) ? true : groupEnabled(cfg, channel),
     initialized: fs.existsSync(path.join(dir, '.git')),
-    branch: branchOf(channel),
+    branch: branchOf(channel, cfg),
     ahead: 0,
     behind: 0,
     dirty: 0,
@@ -774,7 +814,7 @@ async function channelState(channel, cfg, opts = {}) {
   // 会把「另一台刚推过」误报成「与远端一致」。
   if (out.remote) {
     if (opts.fetch) {
-      const fr = await fetchRemoteCached(channel, out.remote);
+      const fr = await fetchRemoteCached(channel, out.remote, cfg);
       out.fetched = fr.ok;
       if (fr.missing) out.remoteMissing = true;
       if (!fr.ok) out.error = fr.missing ? 'remote-missing' : `fetch-failed: ${fr.error}`;
@@ -784,12 +824,12 @@ async function channelState(channel, cfg, opts = {}) {
       /* 不 fetch 也仍然要回答「落后/领先」——那算的是本地 origin/<br> ref，
          不是网络。只是可能陈旧（上次 fetch 之后的远端提交看不到）。
          必须标记出来，不能把「没查」当成「一致」（ADR-026 的同一教训）。 */
-      const cs = cachedRemoteState(channel, out.remote);
+      const cs = cachedRemoteState(channel, out.remote, cfg);
       out.fetched = false;
       out.stale = true;
       out.checkedAt = cs ? new Date(cs.at).toISOString() : null;
     }
-    const br = branchOf(channel);
+    const br = branchOf(channel, cfg);
     const up = await git(dir, ['rev-parse', '--verify', '--quiet', `origin/${br}`]);
     if (up.ok) {
       if (head.ok) {
@@ -809,7 +849,7 @@ async function channelState(channel, cfg, opts = {}) {
       }
       const rl = await git(dir, ['log', '-1', '--format=%cI', `origin/${br}`]);
       if (rl.ok) out.remoteCommitAt = rl.out || null;
-      const st = await parseStamp(channel);
+      const st = await parseStamp(channel, cfg);
       if (st) {
         out.remoteMachine = st.machine;
         out.remoteStampAt = st.at;
@@ -821,7 +861,7 @@ async function channelState(channel, cfg, opts = {}) {
   // 于是面板显示「payload 已对齐本机」、preflight 判「可以开始工作」，
   // 而实际一次都没暂存过（2026-11-18 用户踩到：GitHub 上看仓库是空的）。
   // payloadMissing 很便宜（就一个 existsSync），总算；它能把「零提交/从未暂存」区分出来。
-  out.payloadMissing = !fs.existsSync(payloadDir(channel));
+  out.payloadMissing = !fs.existsSync(payloadDir(channel, cfg));
 
   // pending 要扫全量文件并算指纹（sessions 可达 80MB+），不能挂在 /status 轮询里。
   // 只在显式 opts.scan 时算；不算时置 null（= 「没查」，不假装 0）。
@@ -829,9 +869,10 @@ async function channelState(channel, cfg, opts = {}) {
     let pending = 0;
     try {
       const diff = await diffLocalToPayload(cfg);
-      // diff 是两通道合计，只取本通道的部分
-      pending = diff.added.filter(x => x.channel === channel).length
-        + diff.removed.filter(x => x.channel === channel).length;
+      // diff 按「逻辑分组」标记 channel；单仓库模式下按物理仓库 key 过滤
+      const key = repoKeyOf(channel, cfg);
+      pending = diff.added.filter(x => repoKeyOf(x.channel, cfg) === key).length
+        + diff.removed.filter(x => repoKeyOf(x.channel, cfg) === key).length;
     } catch { pending = null; }
     out.pending = pending;
   } else {
@@ -895,7 +936,11 @@ async function walkFiles(absRoot, relPrefix, patterns, acc, depth = 0) {
 
 function surfaceEnabled(surface, cfg) {
   // danger 级别（插件清单）无论开关如何都不进同步，避免把 link: 绝对路径传到另一台
-  return Boolean(cfg.surfaces[surface.id]) && surface.tier !== 'danger';
+  if (surface.tier === 'danger') return false;
+  if (!cfg.surfaces[surface.id]) return false;
+  // 分组开关：单仓库模式下它是「同步哪一组」的唯一手段；双仓库模式下也生效，
+  // 让 channels.<group>.enabled 名副其实（否则只影响 push/pull，stage/apply 仍会搬）。
+  return groupEnabled(cfg, surface.channel);
 }
 
 /** 枚举某个同步面在本机的实际文件。 */
@@ -988,17 +1033,20 @@ async function diffLocalToPayload(cfg, opts = {}) {
   const removed = [];
   const renamed = [];
 
-  // payload 每通道只扫一次，后面复用（避免重复 readdir 与重复哈希）
-  const payloadIndex = { config: new Map(), sessions: new Map() };
-  for (const ch of ['config', 'sessions']) {
+  // payload 每个物理仓库只扫一次，后面复用（避免重复 readdir 与重复哈希）。
+  // 单仓库模式下只有一个 key（'all'），但 rel 路径不冲突，所以能共存于同一 payload。
+  const payloadIndex = new Map();
+  for (const key of channelsOf(cfg)) {
     const acc = [];
-    await walkFiles(payloadDir(ch), '', [], acc);
-    for (const item of acc) payloadIndex[ch].set(toPosix(item.rel), item);
+    await walkFiles(payloadDir(key, cfg), '', [], acc);
+    const m = new Map();
+    for (const item of acc) m.set(toPosix(item.rel), item);
+    payloadIndex.set(key, m);
   }
 
   for (const f of files) {
     const sha = await fingerprint(f);
-    const existing = payloadIndex[f.channel].get(f.rel);
+    const existing = (payloadIndex.get(repoKeyOf(f.channel, cfg)) || new Map()).get(f.rel);
     let same = false;
     if (existing && existing.size === f.size) {
       same = (await sha256File(existing.abs)) === sha;
@@ -1011,16 +1059,20 @@ async function diffLocalToPayload(cfg, opts = {}) {
   }
 
   // payload 里有、本机没有，且属于某个启用面 → 需要从 payload 删除
-  const present = new Set(files.map(f => `${f.channel}\u0000${f.rel}`));
+  // payload 里有、本机没有，且属于某个启用面 → 需要从 payload 删除
+  const present = new Set(files.map(f => `${repoKeyOf(f.channel, cfg)}\u0000${f.rel}`));
   const seen = new Set();
   for (const s of SURFACES) {
     if (!surfaceEnabled(s, cfg)) continue;
-    for (const rel of payloadIndex[s.channel].keys()) {
-      if (present.has(`${s.channel}\u0000${rel}`)) continue;
+    const key = repoKeyOf(s.channel, cfg);
+    const idx = payloadIndex.get(key);
+    if (!idx) continue;
+    for (const rel of idx.keys()) {
+      if (present.has(`${key}\u0000${rel}`)) continue;
       if (!belongsTo(s, rel)) continue;
-      const key = `${s.channel}\u0000${rel}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
+      const k = `${key}\u0000${rel}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
       removed.push({ rel, channel: s.channel, surface: s.id });
     }
   }
@@ -1054,7 +1106,7 @@ async function stageChanges(cfg, opts = {}) {
       skipped.push(a.rel);
       continue;
     }
-    const target = path.join(payloadDir(a.channel), a.rel);
+    const target = path.join(payloadDir(repoKeyOf(a.channel, cfg), cfg), a.rel);
     await fsp.mkdir(path.dirname(target), { recursive: true });
     await fsp.copyFile(a.abs, target);
     written.push(a.rel);
@@ -1062,7 +1114,7 @@ async function stageChanges(cfg, opts = {}) {
 
   for (const item of diff.removed) {
     if (opts.onlySurface && item.surface !== opts.onlySurface) continue;
-    const target = path.join(payloadDir(item.channel), item.rel);
+    const target = path.join(payloadDir(repoKeyOf(item.channel, cfg), cfg), item.rel);
     if (fs.existsSync(target)) {
       await fsp.rm(target, { force: true });
       deleted.push(item.rel);
@@ -1071,8 +1123,8 @@ async function stageChanges(cfg, opts = {}) {
 
   await saveCache();
 
-  for (const ch of ['config', 'sessions']) {
-    const dir = repoDir(ch);
+  for (const ch of channelsOf(cfg)) {
+    const dir = repoDir(ch, cfg);
     if (!fs.existsSync(path.join(dir, '.git'))) continue;
     await git(dir, ['add', '-A']);
   }
@@ -1091,8 +1143,8 @@ async function stageChanges(cfg, opts = {}) {
 
 async function commitChanges(cfg, message) {
   const results = {};
-  for (const ch of ['config', 'sessions']) {
-    const dir = repoDir(ch);
+  for (const ch of channelsOf(cfg)) {
+    const dir = repoDir(ch, cfg);
     if (!fs.existsSync(path.join(dir, '.git'))) {
       results[ch] = { ok: false, reason: 'not-initialized' };
       continue;
@@ -1134,10 +1186,10 @@ function stampTrailer(cfg) {
  * 从提交消息尾注解析「最近一次推送来自哪台」。
  * 优先看 origin/main（= 远端现状），没有才回退 HEAD。
  */
-async function parseStamp(channel, { remoteOnly = false } = {}) {
-  const dir = repoDir(channel);
+async function parseStamp(channel, cfg, { remoteOnly = false } = {}) {
+  const dir = repoDir(channel, cfg);
   if (!fs.existsSync(path.join(dir, '.git'))) return null;
-  const br = branchOf(channel);
+  const br = branchOf(channel, cfg);
   const refs = remoteOnly ? [`origin/${br}`] : [`origin/${br}`, 'HEAD'];
   for (const ref of refs) {
     const r = await git(dir, ['log', '-1', '--format=%B', ref]);
@@ -1152,13 +1204,13 @@ async function parseStamp(channel, { remoteOnly = false } = {}) {
 async function pushChannels(cfg, opts = {}) {
   const out = {};
   const message = opts.message || `synchub: ${cfg.machine} @ ${new Date().toISOString()}`;
-  for (const ch of ['config', 'sessions']) {
-    const conf = cfg.channels[ch] || {};
+  for (const ch of channelsOf(cfg)) {
+    const conf = { remote: remoteOf(ch, cfg), enabled: isSingle(cfg) ? true : groupEnabled(cfg, ch) };
     if (conf.enabled === false) {
       out[ch] = { ok: true, skipped: 'disabled' };
       continue;
     }
-    const dir = repoDir(ch);
+    const dir = repoDir(ch, cfg);
     if (!fs.existsSync(path.join(dir, '.git'))) {
       out[ch] = { ok: false, reason: 'not-initialized' };
       continue;
@@ -1171,13 +1223,13 @@ async function pushChannels(cfg, opts = {}) {
     // ⚠ 顺序故意是「先 fetch 判落后 → 再 commit → 再 push」。
     // 早先版本先 commit 再检查，落后时会先在本地凭空造一个分叉提交，
     // 之后 ff-only 永远拉不下来 —— 只能人工 reset。
-    const f = await fetchRemote(ch, conf.remote);
+    const f = await fetchRemote(ch, conf.remote, cfg);
     if (!f.ok) {
       out[ch] = { ok: false, reason: `fetch-failed: ${f.error}` };
       continue;
     }
     if (!f.empty) {
-      const counts = await git(dir, ['rev-list', '--left-right', '--count', `HEAD...origin/${f.branch || branchOf(ch)}`]);
+      const counts = await git(dir, ['rev-list', '--left-right', '--count', `HEAD...origin/${f.branch || branchOf(ch, cfg)}`]);
       if (counts.ok) {
         const m = /^(\d+)\s+(\d+)/.exec(counts.out);
         if (m && Number(m[2]) > 0) {
@@ -1205,7 +1257,7 @@ async function pushChannels(cfg, opts = {}) {
       continue;
     }
 
-    const brPush = f.branch || branchOf(ch);
+    const brPush = f.branch || branchOf(ch, cfg);
     const r = await git(dir, ['push', '-u', 'origin', `${brPush}:${brPush}`], 180000);
     out[ch] = r.ok
       ? { ok: true, committed, output: r.err || r.out }
@@ -1216,19 +1268,19 @@ async function pushChannels(cfg, opts = {}) {
 
 async function pullChannels(cfg) {
   const out = {};
-  for (const ch of ['config', 'sessions']) {
-    const conf = cfg.channels[ch] || {};
+  for (const ch of channelsOf(cfg)) {
+    const conf = { remote: remoteOf(ch, cfg), enabled: isSingle(cfg) ? true : groupEnabled(cfg, ch) };
     if (conf.enabled === false) {
       out[ch] = { ok: true, skipped: 'disabled' };
       continue;
     }
-    const dir = repoDir(ch);
+    const dir = repoDir(ch, cfg);
     if (!fs.existsSync(path.join(dir, '.git'))) {
       if (!conf.remote) {
         out[ch] = { ok: false, reason: 'no-remote' };
         continue;
       }
-      const boot = await bootstrapFromRemote(ch, conf.remote);
+      const boot = await bootstrapFromRemote(ch, conf.remote, cfg);
       out[ch] = boot.ok ? { ok: true, bootstrapped: true, boot } : { ok: false, reason: boot.error };
       continue;
     }
@@ -1240,7 +1292,7 @@ async function pullChannels(cfg) {
         out[ch] = { ok: false, reason: 'no-remote' };
         continue;
       }
-      const boot = await bootstrapFromRemote(ch, conf.remote);
+      const boot = await bootstrapFromRemote(ch, conf.remote, cfg);
       out[ch] = boot.ok ? { ok: true, bootstrapped: true, boot } : { ok: false, reason: boot.error };
       continue;
     }
@@ -1248,7 +1300,7 @@ async function pullChannels(cfg) {
       out[ch] = { ok: false, reason: 'no-remote' };
       continue;
     }
-    const f = await fetchRemote(ch, conf.remote);
+    const f = await fetchRemote(ch, conf.remote, cfg);
     if (!f.ok) {
       out[ch] = { ok: false, reason: `fetch-failed: ${f.error}` };
       continue;
@@ -1257,7 +1309,7 @@ async function pullChannels(cfg) {
       out[ch] = { ok: true, emptyRemote: true };
       continue;
     }
-    const brPull = f.branch || branchOf(ch);
+    const brPull = f.branch || branchOf(ch, cfg);
     const mb = await git(dir, ['merge', '--ff-only', `origin/${brPull}`]);
     out[ch] = mb.ok
       ? { ok: true, output: mb.out || 'up-to-date' }
@@ -1282,13 +1334,13 @@ async function pullChannels(cfg) {
 /** 看两个通道现在是否分叉（含预览）。只读，不改任何东西。 */
 async function divergeInfo(cfg) {
   const channels = {};
-  for (const ch of ['config', 'sessions']) {
-    const conf = cfg.channels[ch] || {};
-    const dir = repoDir(ch);
-    const st = { initialized: fs.existsSync(path.join(dir, '.git')), remote: conf.remote || '', diverged: false, ahead: 0, behind: 0 };
+  for (const ch of channelsOf(cfg)) {
+    const conf = { remote: remoteOf(ch, cfg), enabled: isSingle(cfg) ? true : groupEnabled(cfg, ch) };
+    const dir = repoDir(ch, cfg);
+    const st = { label: channelLabel(ch), initialized: fs.existsSync(path.join(dir, '.git')), remote: conf.remote || '', diverged: false, ahead: 0, behind: 0 };
     if (!st.initialized || !st.remote) { channels[ch] = st; continue; }
-    const f = await fetchRemoteCached(ch, st.remote);
-    const br = (f.ok && f.branch) || branchOf(ch);
+    const f = await fetchRemoteCached(ch, st.remote, cfg);
+    const br = (f.ok && f.branch) || branchOf(ch, cfg);
     const counts = await git(dir, ['rev-list', '--left-right', '--count', `HEAD...origin/${br}`]);
     const m = counts.ok ? /^(\d+)\s+(\d+)/.exec(counts.out) : null;
     if (m) {
@@ -1307,7 +1359,7 @@ async function divergeInfo(cfg) {
     }
     channels[ch] = st;
   }
-  const diverged = channels.config.diverged || channels.sessions.diverged;
+  const diverged = channelsOf(cfg).some(ch => channels[ch].diverged);
   return {
     ok: true,
     diverged,
@@ -1607,12 +1659,12 @@ async function resolveKeepLocal(cfg) {
   const out = { ok: true, mode: 'keep-local', channels: {} };
   await stageChanges(cfg);
   const backupDir = path.join(BACKUP_ROOT, 'diverge-' + new Date().toISOString().replace(/[:.]/g, '-'));
-  for (const ch of ['config', 'sessions']) {
-    const conf = cfg.channels[ch] || {};
-    const dir = repoDir(ch);
+  for (const ch of channelsOf(cfg)) {
+    const conf = { remote: remoteOf(ch, cfg), enabled: isSingle(cfg) ? true : groupEnabled(cfg, ch) };
+    const dir = repoDir(ch, cfg);
     if (conf.enabled === false || !conf.remote || !fs.existsSync(path.join(dir, '.git'))) { out.channels[ch] = { ok: true, skipped: true }; continue; }
-    const f = await fetchRemote(ch, conf.remote);
-    const br = (f.ok && f.branch) || branchOf(ch);
+    const f = await fetchRemote(ch, conf.remote, cfg);
+    const br = (f.ok && f.branch) || branchOf(ch, cfg);
     // 备份远端侧被覆盖前的提交，便于事后找回（不做 git 层面的分支保留，简单直接）
     const remoteLog = await git(dir, ['log', '--format=%H', '-n', '50', `origin/${br}`]);
     if (remoteLog.ok && remoteLog.out) {
@@ -1634,13 +1686,13 @@ async function resolveKeepLocal(cfg) {
 /** 以远端为准：reset --hard 到 origin/<br>，再把 payload 落回本机磁盘（含备份）。 */
 async function resolveKeepRemote(cfg, opts = {}) {
   const out = { ok: true, mode: 'keep-remote', channels: {}, applied: null };
-  for (const ch of ['config', 'sessions']) {
-    const conf = cfg.channels[ch] || {};
-    const dir = repoDir(ch);
+  for (const ch of channelsOf(cfg)) {
+    const conf = { remote: remoteOf(ch, cfg), enabled: isSingle(cfg) ? true : groupEnabled(cfg, ch) };
+    const dir = repoDir(ch, cfg);
     if (conf.enabled === false || !conf.remote || !fs.existsSync(path.join(dir, '.git'))) { out.channels[ch] = { ok: true, skipped: true }; continue; }
-    const f = await fetchRemote(ch, conf.remote);
+    const f = await fetchRemote(ch, conf.remote, cfg);
     if (!f.ok || f.empty) { out.channels[ch] = { ok: false, reason: f.ok ? 'remote-empty' : `fetch-failed: ${f.error}` }; continue; }
-    const br = f.branch || branchOf(ch);
+    const br = f.branch || branchOf(ch, cfg);
     // 丢弃前把本机独有提交的哈希留下来（万一反悔还能从 reflog 找回）
     const localLog = await git(dir, ['log', '--format=%H', '-n', '50', `origin/${br}..HEAD`]);
     const backupDir = path.join(BACKUP_ROOT, 'diverge-' + new Date().toISOString().replace(/[:.]/g, '-'));
@@ -1676,7 +1728,7 @@ async function applyPayload(cfg, opts = {}) {
   for (const s of SURFACES) {
     if (!surfaceEnabled(s, cfg)) continue;
     if (opts.onlySurface && s.id !== opts.onlySurface) continue;
-    const base = payloadDir(s.channel);
+    const base = payloadDir(repoKeyOf(s.channel, cfg), cfg);
     const acc = [];
     await walkFiles(base, '', [], acc);
     for (const item of acc) {
@@ -1712,7 +1764,7 @@ async function applyPayload(cfg, opts = {}) {
     const present = new Set(files.map(f => f.rel));
     for (const s of SURFACES) {
       if (!surfaceEnabled(s, cfg)) continue;
-      const base = payloadDir(s.channel);
+      const base = payloadDir(repoKeyOf(s.channel, cfg), cfg);
       const acc = [];
       await walkFiles(base, '', [], acc);
       const keep = new Set(acc.map(i => toPosix(i.rel)));
@@ -2397,12 +2449,15 @@ async function sessionNoteWrite(id, filename, content, confirm) {
 async function remoteStamp(cfg) {
   // 只看 origin/main：要回答的是「远端最近一次是谁推的」。
   // 若都读不到尾注，返回 null，界面会显式说未知而不是假装一致。
-  // 两个通道都查，取时间戳更新的那个：可能只有会话通道被推过。
-  const a = await parseStamp('config', { remoteOnly: true });
-  const b = await parseStamp('sessions', { remoteOnly: true });
-  if (!a) return b;
-  if (!b) return a;
-  return String(b.at || '') > String(a.at || '') ? b : a;
+  // 每个物理仓库都查，取时间戳更新的那个：可能只有其中一个被推过。
+  const sts = [];
+  for (const ch of channelsOf(cfg)) {
+    const s = await parseStamp(ch, cfg, { remoteOnly: true });
+    if (s) sts.push(s);
+  }
+  if (!sts.length) return null;
+  sts.sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+  return sts[0];
 }
 
 /* -------------------------------------------------------------- 只读体检 */
@@ -2417,11 +2472,11 @@ async function checkAll(cfg) {
   const g = await git(DSH_HOME, ['--version'], 8000);
   push('git', 'git 可用', g.ok, g.ok ? g.out : '未找到 git，同步全部不可用');
 
-  for (const ch of ['config', 'sessions']) {
-    const conf = cfg.channels[ch] || {};
+  for (const ch of channelsOf(cfg)) {
+    const conf = { remote: remoteOf(ch, cfg), enabled: isSingle(cfg) ? true : groupEnabled(cfg, ch) };
     const st = await channelState(ch, cfg, { fetch: true });
-    const label = ch === 'config' ? '配置通道' : '会话通道';
-    push(`${ch}Remote`, `${label}远端仓库`, Boolean(conf.remote), conf.remote || `${label}未配置远端仓库`, conf.remote ? null : `在侧边栏「同步中心」的「先连上两个私有仓库」里填${label}地址，或到设置面板填`);
+    const label = channelLabel(ch);
+    push(`${ch}Remote`, `${label}远端仓库`, Boolean(conf.remote), conf.remote || `${label}未配置远端仓库`, conf.remote ? null : `到设置面板「通道地址」里填${label}地址`);
     if (conf.remote && st.initialized) {
       push(`${ch}Behind`, `${label}落后远端`, st.behind === 0, st.behind > 0 ? `落后远端 ${st.behind} 个提交` : '与远端一致（未落后）', st.behind > 0 ? '先点「拉取」再改本机' : null);
       push(`${ch}Dirty`, `${label}未提交变动`, st.dirty === 0, st.dirty > 0 ? `payload 有 ${st.dirty} 处未提交` : 'payload 干净', st.dirty > 0 ? '点「提交并推送」' : null);
@@ -2455,8 +2510,8 @@ async function checkAll(cfg) {
     }
   }
   const credInPayload = [];
-  for (const ch of ['config', 'sessions']) {
-    const base = payloadDir(ch);
+  for (const ch of channelsOf(cfg)) {
+    const base = payloadDir(ch, cfg);
     for (const p of ['.credentials.yaml', '.trae-auth.cn.json']) {
       if (fs.existsSync(path.join(base, p))) credInPayload.push(path.join(base, p));
     }
@@ -2530,34 +2585,35 @@ async function preflight(cfg) {
   const steps = [];
   const add = (id, state, title, detail, action) => steps.push({ id, state, title, detail, action: action || null });
 
-  const channels = {
-    // preflight 要回答「到底同步了没」，必须拿到精确 pending。
-    // 代价可接受：它只在用户点开面板/手动体检时跑，不在 /status 轮询路径上。
-    config: await channelState('config', cfg, { fetch: true, scan: true }),
-    sessions: await channelState('sessions', cfg, { fetch: true, scan: true }),
-  };
+  const channels = {};
+  // preflight 要回答「到底同步了没」，必须拿到精确 pending。
+  // 代价可接受：它只在用户点开面板/手动体检时跑，不在 /status 轮询路径上。
+  for (const ch of channelsOf(cfg)) {
+    channels[ch] = await channelState(ch, cfg, { fetch: true, scan: true });
+  }
   const stamp = await remoteStamp(cfg);
   const switched = Boolean(stamp && stamp.machine !== (cfg.machine || os.hostname()));
 
   add('dshHome', fs.existsSync(DSH_HOME) ? 'ok' : 'fail', 'DSH 数据目录',
     DSH_HOME, null);
 
-  const noRemote = ['config', 'sessions'].filter(ch => !(cfg.channels[ch] || {}).remote);
+  const noRemote = channelsOf(cfg).filter(ch => !remoteOf(ch, cfg));
+  const labelOf = ch => channelLabel(ch);
   // 标题必须随状态变 —— 之前无论 ok 还是 need 都写「远端仓库已配置」，
   // 结果 verdict 显示「已配置」而 todo=2，看着就像已经好了。
   add('remote', noRemote.length === 0 ? 'ok' : 'need',
     noRemote.length ? '远端仓库还没配' : '远端仓库已配置',
     noRemote.length
-      ? `${noRemote.map(ch => (ch === 'config' ? '配置通道' : '会话通道')).join('、')}没有仓库地址`
-      : '配置通道与会话通道都已连到私有仓库',
-    noRemote.length ? '在下面的「先连上两个私有仓库」里填地址，或在设置面板填' : null);
+      ? `${noRemote.map(labelOf).join('、')}没有仓库地址`
+      : `${channelsOf(cfg).map(labelOf).join('与')}都已连到私有仓库`,
+    noRemote.length ? '在设置面板「通道地址」里填仓库地址' : null);
 
   // 未初始化的通道不能算「与远端一致」—— 那是没查，不是查过没问题。
   // 但「未初始化」不等于「要拉取」：仓库可能压根没建。
   // 对未初始化的通道先探一下远端存不存在，否则会把「仓库没建」误报成「首次拉取会自动建立」。
-  const notInitRaw = ['config', 'sessions'].filter(ch => (cfg.channels[ch] || {}).remote && !channels[ch].initialized);
+  const notInitRaw = channelsOf(cfg).filter(ch => remoteOf(ch, cfg) && !channels[ch].initialized);
   for (const ch of notInitRaw) {
-    const probe = await probeRemoteExists(ch, cfg.channels[ch].remote);
+    const probe = await probeRemoteExists(ch, remoteOf(ch, cfg));
     if (probe.missing) {
       channels[ch].remoteMissing = true;
       channels[ch].fetched = false;
@@ -2567,14 +2623,14 @@ async function preflight(cfg) {
   }
   const notInit = notInitRaw.filter(ch => !channels[ch].remoteMissing);
   // 同理：fetch 失败也不能算一致。behind 会停在 0，看上去像「追平了」。
-  const fetchFail = ['config', 'sessions'].filter(ch => {
+  const fetchFail = channelsOf(cfg).filter(ch => {
     const st = channels[ch];
-    return (cfg.channels[ch] || {}).remote && st.initialized && st.fetched === false;
+    return remoteOf(ch, cfg) && st.initialized && st.fetched === false;
   });
-  const behind = Math.max(channels.config.behind || 0, channels.sessions.behind || 0);
+  const behind = Math.max(...channelsOf(cfg).map(ch => channels[ch].behind || 0));
   // 仓库根本没建好，和「本地还没接上」是两回事：后者拉一下就成，
   // 前者拉一百次也不会自动建。必须分开放前面说。
-  const missing = ['config', 'sessions'].filter(ch => channels[ch].remoteMissing);
+  const missing = channelsOf(cfg).filter(ch => channels[ch].remoteMissing);
   const pullOk = behind === 0 && notInit.length === 0 && fetchFail.length === 0 && missing.length === 0;
   add('pull', pullOk ? 'ok' : 'need',
     missing.length ? '远端仓库不存在' : '先拉取远端',
@@ -2595,7 +2651,7 @@ async function preflight(cfg) {
           : '点「拉取并应用」，把远端状态取到本机');
 
 
-  const unpushed = Math.max(channels.config.ahead || 0, channels.sessions.ahead || 0);
+  const unpushed = Math.max(...channelsOf(cfg).map(ch => channels[ch].ahead || 0));
   add('push', unpushed === 0 ? 'ok' : 'need',
     '推送本机改动',
     unpushed === 0 ? '没有未推送的提交' : `${unpushed} 个提交未推送`,
@@ -2603,8 +2659,8 @@ async function preflight(cfg) {
 
   // 只看 git dirty 会骗人：两个空仓库 git 是干净的，但本机文件一个都没进 payload。
   // 必须用 unsynced（仓库未提交 + 本机未暂存）才能回答「到底同步了没」。
-  const dirty = (channels.config.unsynced || 0) + (channels.sessions.unsynced || 0);
-  const payloadMissing = ['config', 'sessions'].filter(ch => channels[ch].payloadMissing);
+  const dirty = channelsOf(cfg).reduce((n, ch) => n + (channels[ch].unsynced || 0), 0);
+  const payloadMissing = channelsOf(cfg).filter(ch => channels[ch].payloadMissing);
   add('stage', (dirty === 0 && payloadMissing.length === 0) ? 'ok' : 'need',
     '暂存本机变动',
     dirty === 0
@@ -2648,14 +2704,14 @@ async function preflight(cfg) {
    而不是扔一堆步骤让用户自己拼。面板第一张卡就用它。 */
 async function selfCheck(cfg) {
   const pre = await preflight(cfg);
-  const noRemote = ['config', 'sessions'].filter(ch => !((cfg.channels[ch] || {}).remote));
+  const noRemote = channelsOf(cfg).filter(ch => !remoteOf(ch, cfg));
   const ready = pre.todo === 0;
   // 引导：每条都带「缺什么 / 去哪填 / 怎么验证」三件。
   const guide = [];
   if (noRemote.length) {
     guide.push({
-      step: '填两个私有仓库地址',
-      missing: noRemote.map(ch => ch === 'config' ? '配置通道' : '会话通道').join('、') + ' 没有地址',
+      step: isSingle(cfg) ? '填一个私有仓库地址' : '填两个私有仓库地址',
+      missing: noRemote.map(ch => channelLabel(ch)).join('、') + ' 没有地址',
       where: '设置 → Msynchub → 通道地址',
       verify: '填完点「保存」，再点「重新检查」；通道行应变成 N 落后 / N 领先 / N 脏，而不是「未配置远端」',
       quick: '本面板下方也有输入框可直接填（只改通道地址，不动其他配置）',
@@ -2663,7 +2719,7 @@ async function selfCheck(cfg) {
   }
   if (pre.steps.some(s => s.id === 'pull' && /远端仓库不存在/.test(s.title || ''))) {
     guide.push({
-      step: '在 GitHub 上建这两个空仓库',
+      step: isSingle(cfg) ? '在 GitHub 上建这个空仓库' : '在 GitHub 上建这两个空仓库',
       missing: '远端根本不存在（拉取不会自己把仓库变出来）',
       where: 'GitHub → New repository（Private，不要勾 README / .gitignore / License）',
       verify: '建好后回面板点「重新检查」，这项应变成与远端一致',
@@ -2686,12 +2742,9 @@ async function selfCheck(cfg) {
       verify: '处理完点「重新检查」',
     });
   }
-  /* “上一次同步”取两通道较新的 lastCommitAt（读自真实仓库，不编造）；
+  /* “上一次同步”取各仓库较新的 lastCommitAt（读自真实仓库，不编造）；
      就绪时必须把时间一起报出来 —— 否则用户只能说“应该好了吧”，不能确认。 */
-  const chStates = await Promise.all([
-    channelState('config', cfg, {}),
-    channelState('sessions', cfg, {}),
-  ]);
+  const chStates = await Promise.all(channelsOf(cfg).map(ch => channelState(ch, cfg, {})));
   const channelTimes = chStates.map(s => s.lastCommitAt).filter(Boolean).sort();
   const lastCommitAt = channelTimes.length ? channelTimes[channelTimes.length - 1] : null;
   return {
@@ -2700,16 +2753,16 @@ async function selfCheck(cfg) {
     headline: ready ? '同步已就绪' : `还不能同步（${pre.todo} 项待处理）`,
     detail: ready
       ? (lastCommitAt
-        ? `两个通道都可用；最后一次本地同步提交：${lastCommitAt}。改完东西点「提交并推送」，换机时点「拉取并应用」。`
-        : '两个通道都可用，但**还没有任何同步提交**（新基线）。先点一次「提交并推送」建立基线。')
+        ? `${channelsOf(cfg).map(channelLabel).join('与')}都可用；最后一次本地同步提交：${lastCommitAt}。改完东西点「提交并推送」，换机时点「拉取并应用」。`
+        : `${channelsOf(cfg).map(channelLabel).join('与')}都可用，但**还没有任何同步提交**（新基线）。先点一次「提交并推送」建立基线。`)
       : (pre.nextAction || pre.verdict),
     lastCommitAt,
     guide,
-    channels: ['config', 'sessions'].map(ch => ({
+    channels: channelsOf(cfg).map(ch => ({
       id: ch,
-      label: ch === 'config' ? '配置通道' : '会话通道',
-      remote: (cfg.channels[ch] || {}).remote || '',
-      configured: Boolean((cfg.channels[ch] || {}).remote),
+      label: channelLabel(ch),
+      remote: remoteOf(ch, cfg),
+      configured: Boolean(remoteOf(ch, cfg)),
     })),
     todo: pre.todo,
     next: pre.next,
@@ -2754,15 +2807,16 @@ async function autoPushTick(ctx) {
 
   runtime.busy = 'auto';
   try {
-    const st = { config: await channelState('config', cfg, { fetch: true }), sessions: await channelState('sessions', cfg, { fetch: true }) };
-    const behind = Math.max(st.config.behind || 0, st.sessions.behind || 0);
+    const st = {};
+    for (const ch of channelsOf(cfg)) st[ch] = await channelState(ch, cfg, { fetch: true });
+    const behind = Math.max(...channelsOf(cfg).map(ch => st[ch].behind || 0));
     if (behind > 0) {
       runtime.lastAutoResult = { at: new Date().toISOString(), ok: false, reason: 'behind-remote' };
       runtime.lastAutoPushAt = Date.now();
       return;
     }
     // fetch 失败时 behind 会停在 0，不能误以为追平了就去写。
-    const unreachable = ['config', 'sessions'].filter(ch => st[ch].initialized && st[ch].fetched === false);
+    const unreachable = channelsOf(cfg).filter(ch => st[ch].initialized && st[ch].fetched === false);
     if (unreachable.length) {
       runtime.lastAutoResult = { at: new Date().toISOString(), ok: false, reason: `remote-unreachable: ${unreachable.join(',')}` };
       runtime.lastAutoPushAt = Date.now();
@@ -2776,7 +2830,7 @@ async function autoPushTick(ctx) {
     }
     await commitChanges(cfg, `synchub: auto @ ${new Date().toISOString()}`);
     const pushed = await pushChannels(cfg, {});
-    const ok = ['config', 'sessions'].every(ch => {
+    const ok = channelsOf(cfg).every(ch => {
       const r = pushed[ch];
       return !r || r.ok !== false || r.skipped;
     });
@@ -2811,7 +2865,7 @@ function guard(req) {
 }
 
 /** 状态目录真实磁盘状态（把「未初始化」变成面板能看到的字段）。只读，不创建。 */
-async function stateInfo() {
+async function stateInfo(cfg = {}) {
   const rootExists = fs.existsSync(STATE_ROOT);
   let config = { exists: false, modifiedAt: null, error: null };
   try {
@@ -2819,8 +2873,8 @@ async function stateInfo() {
     config = { exists: true, modifiedAt: st.mtime.toISOString(), error: null };
   } catch (e) { config.error = e.code || String(e.message || e); }
   const repos = {};
-  for (const ch of ['config', 'sessions']) {
-    const dir = repoDir(ch);
+  for (const ch of channelsOf(cfg)) {
+    const dir = repoDir(ch, cfg);
     let hasGit = false, hasHead = false, payloadFiles = 0, error = null;
     try {
       hasGit = fs.existsSync(path.join(dir, '.git'));
@@ -2867,16 +2921,17 @@ async function statusPayload(cfg, opts = {}) {
   const fast = opts.fast === true;
   // fast：完全不访问网。git 的 ls-remote 是这里唯一的外网调用，其它都是本地读。
   const scan = opts.scan === true;
-  const [config, sessions] = await Promise.all([
-    channelState('config', cfg, { fetch: !fast, scan }),
-    channelState('sessions', cfg, { fetch: !fast, scan }),
-  ]);
+  const states = {};
+  await Promise.all(channelsOf(cfg).map(async ch => {
+    states[ch] = await channelState(ch, cfg, { fetch: !fast, scan });
+  }));
+  const chList = channelsOf(cfg).map(ch => states[ch]);
   const stamp = await remoteStamp(cfg);
   const enabled = {};
   for (const s of SURFACES) enabled[s.id] = surfaceEnabled(s, cfg);
   // 侧边栏摘要：用 unsynced（仓库未提交 + 本机未暂存），不是 git dirty。
-  const pendingTotal = (config.pending || 0) + (sessions.pending || 0);
-  const unsyncedTotal = (config.unsynced || 0) + (sessions.unsynced || 0);
+  const pendingTotal = chList.reduce((n, s) => n + (s.pending || 0), 0);
+  const unsyncedTotal = chList.reduce((n, s) => n + (s.unsynced || 0), 0);
   return {
     ok: true,
     version: VERSION,
@@ -2886,20 +2941,20 @@ async function statusPayload(cfg, opts = {}) {
     dshHome: DSH_HOME,
     profile: PROFILE,
     activeSession: ACTIVE_SESSION || null,
-    state: await stateInfo(),
-    channels: { config, sessions },
+    state: await stateInfo(cfg),
+    channels: states,
     stamp,
     switched: Boolean(stamp && stamp.machine !== (cfg.machine || os.hostname())),
     // 侧边栏直接用的聚合值，免得前端自己加。
     summary: {
       pending: pendingTotal,
       unsynced: unsyncedTotal,
-      behind: Math.max(config.behind || 0, sessions.behind || 0),
-      ahead: Math.max(config.ahead || 0, sessions.ahead || 0),
+      behind: Math.max(...chList.map(s => s.behind || 0)),
+      ahead: Math.max(...chList.map(s => s.ahead || 0)),
       // 分叉（ADR-030）：两台各自推过，普通拉取会失败，面板要给二选一。
-      diverged: Boolean(config.diverged || sessions.diverged),
-      scanned: Boolean(config.scanned && sessions.scanned),
-      payloadMissing: ['config', 'sessions'].filter(ch => (ch === 'config' ? config : sessions).payloadMissing),
+      diverged: chList.some(s => s.diverged),
+      scanned: chList.every(s => s.scanned),
+      payloadMissing: channelsOf(cfg).filter(ch => states[ch].payloadMissing),
     },
     surfaces: SURFACES.map(s => ({ id: s.id, label: s.label, tier: s.tier, on: Boolean(cfg.surfaces[s.id]), channel: s.channel, note: s.note })),
     auto: {
@@ -3145,11 +3200,11 @@ function routesFor() {
           touchActivity();
           const cfg = await readConfig();
           const body = req.method === 'POST' ? await readBody(req).catch(() => ({})) : {};
-          for (const ch of ['config', 'sessions']) {
-            const conf = cfg.channels[ch] || {};
-            if (conf.enabled !== false && conf.remote) {
-              const dir = repoDir(ch);
-              if (!fs.existsSync(path.join(dir, '.git'))) await bootstrapFromRemote(ch, conf.remote);
+          for (const ch of channelsOf(cfg)) {
+            const remote = remoteOf(ch, cfg);
+            if (remote) {
+              const dir = repoDir(ch, cfg);
+              if (!fs.existsSync(path.join(dir, '.git'))) await bootstrapFromRemote(ch, remote, cfg);
             }
           }
           const staged = await stageChanges(cfg);
