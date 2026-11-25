@@ -856,6 +856,7 @@ Get-Content "$env:USERPROFILE\.dsh\profiles\desktop\package.json"
 # ② 包内容完整（git 安装取源码，实测 18 个文件）
 (Get-ChildItem "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-gitok" -Recurse -File).Count
 #   18
+```
 
 **B 上不需要 clone 仓库**：git 安装会把源码取进 pnpm store 再链进 profile，
 `C:\dsh\dw-plugin` 只在本机开发（要 `link:` 热更新）时才需要。
