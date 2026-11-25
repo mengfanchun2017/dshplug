@@ -4025,12 +4025,15 @@ async function tidyWithLlm(llm, provider, model, prev, recent) {
   const a = { role: 'user', content: [{ type: 'text', text: '现有记忆：\n' + (prev || '（空）') }] };
   const b = { role: 'user', content: [{ type: 'text', text: '相关会话（最近）：\n' + (recent || '（无）') }] };
   let text = '';
+  const kinds = [];
   for await (const chunk of llm.stream({ provider, model, messages: [sys, a, b] })) {
     if (!chunk) continue;
-    if (chunk.kind === 'text-delta') text += (chunk.text ?? chunk.delta ?? '');
-    if (chunk.kind === 'finish') break;
+    const k = chunk.kind || chunk.type || '?';
+    if (kinds.length < 8) kinds.push(k);
+    if (k === 'text-delta' || k === 'text') text += (chunk.text ?? chunk.delta ?? chunk.content ?? '');
+    if (k === 'finish' || chunk.finish) break;
   }
-  return text.trim();
+  return JSON.stringify({ text: text.trim(), kinds });
 }
 
 /** 整理一个工作区的记忆：现有 PROJECT.md + 最近会话 → 模型合并 → 备份后覆盖。 */
@@ -4041,8 +4044,11 @@ async function tidyWorkspaceMemory(cfg, ws, llm, provider, model) {
   const recent = await recentWorkspaceTranscript(DSH_HOME, ws, 5);
   if (!prev && !recent.length) return { ok: false, skipped: 'no-content' };
   const recentText = recent.map(r => '### ' + r.sessionId + '\n' + r.messages.map(m => (m.role === 'assistant' ? '助手：' : '用户：') + m.text).join('\n')).join('\n\n');
-  const merged = await tidyWithLlm(llm, provider, model, prev, recentText.slice(0, 20000));
-  if (!merged) return { ok: false, error: '整理结果为空' };
+  const rawTidy = await tidyWithLlm(llm, provider, model, prev, recentText.slice(0, 20000));
+  let merged = '';
+  let tidyKinds = null;
+  try { const pv = JSON.parse(rawTidy); merged = pv.text || ''; tidyKinds = pv.kinds; } catch { merged = String(rawTidy || ''); }
+  if (!merged) return { ok: false, error: '整理结果为空（chunk kinds: ' + JSON.stringify(tidyKinds) + '）' };
   const w = await writeMemoryFile(file, merged);
   return { ok: true, file, bytes: w.bytes, unchanged: w.unchanged };
 }
