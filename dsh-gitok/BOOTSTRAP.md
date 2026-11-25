@@ -1058,8 +1058,8 @@ B 机上还有另一条路：`sync-plugins.ps1` 会把 A 机导出的插件清�
 
 | 你想要 | 怎么做 |
 |---|---|
-| **装齐全部插件**（推荐） | 先 clone 两个仓库 → **不启动 DSH**（避免 profile 被建出来）→ 直接跑 `sync-plugins.ps1` → 再启动 DSH |
-| **只装这两个、手动补其余** | 先粘地址装 Mgitok + Msynchub → 完全退出 DSH → 跑 `sync-plugins.ps1`（它只会补缺的） |
+| **装齐全部插件**（推荐） | clone 两个仓库 → **先不启动 DSH**（避免 profile 被建出来）→ 跑 `sync-plugins.ps1` → 再启动 DSH |
+| **只装这两个、手动补其余** | 先粘地址装 Mgitok + Msynchub → 完全退出 DSH → 再跑 `sync-plugins.ps1`（它只补缺的） |
 
 > **「不启动 DSH」为什么重要**：桌面版启动一次就会建出 `package.json`，
 > 于是清单永远走不到「恢复」分支。已经启动过了就先把清单改名再跑：

@@ -61,33 +61,34 @@ github:mengfanchun2017/dswp-plugin#path:/dsh-synchub
 ### 第 1 步：把仓库放到固定路径
 所有机器（可多台，不限于两台）**必须用完全相同的路径**，否则 `link:` 里的绝对路径对不上（ADR-002）。
 
+> 路径名随意，两台一致即可。下面用 `C:\dsh\dw-plugin`（与另一份文档一致）；
+> 本文件早先生效的 `C:\dsh\dshplug` 写法也仍然有效（仓库名与目录名无需相同）。
 ```powershell
-# 目标：C:\dsh\dshplug 存在且是 git 仓库
+# 目标：C:\dsh\dw-plugin 存在且是 git 仓库
 New-Item -ItemType Directory -Path 'C:\dsh' -Force | Out-Null
 cd C:\dsh
-git clone https://github.com/mengfanchun2017/dswp-plugin.git dshplug
+git clone https://github.com/mengfanchun2017/dswp-plugin.git dw-plugin
 ```
 
-**验证**（应该输出 `dshplug` 和若干文件名）：
+**验证**（应该输出 `dw-plugin` 和若干文件名）：
 
 ```powershell
-ls C:\dsh\dshplug | Select-Object -First 5 Name
-test -f C:\dsh\dshplug\list.json; "list.json 存在: $?"
+ls C:\dsh\dw-plugin | Select-Object -First 5 Name
+test -f C:\dsh\dw-plugin\list.json; "list.json 存在: $?"
 ```
 
-> 若已 clone 过，只需 `git -C C:\dsh\dshplug pull`。
-> 若不想 clone（想用 git 地址直接装），跳到 §6.1，但那仍然需要本节能访问 GitHub。
-
+> 若已 clone 过，只需 `git -C C:\dsh\dw-plugin pull`。
+> 若不想 clone（想用 git 地址直接装），跳到 §6.1，但那仍然需要本机能访问 GitHub。
 ### 第 2 步：装插件（建 link: Junction）
 
 ```powershell
-& "C:\dsh\dshplug\install.ps1" -Only dsh-synchub
+& "C:\dsh\dw-plugin\install.ps1" -Only dsh-synchub
 ```
 
 **验证**（看是否出现 `dsh-synchub` 且形态为 link）：
 
 ```powershell
-& "C:\dsh\dshplug\install.ps1" -Check
+& "C:\dsh\dw-plugin\install.ps1" -Check
 ```
 
 预期看到「全部为 link: 形态且已安装」或 `dsh-synchub ... link-junction`。
@@ -159,8 +160,8 @@ git ls-remote https://github.com/<你>/dsh-config
 自研插件不在 npm，走本仓库的 `link:` 分发（见 ADR-008 / ADR-017 决策：维持本地分发）。
 
 ```powershell
-# 新机器先把 dshplug 仓库放到与另一台完全相同的路径（例 C:\dsh\dshplug）
-& "C:\dsh\dshplug\install.ps1" -Only dsh-synchub
+# 新机器先把插件仓库放到与另一台完全相同的路径（例 C:\dsh\dw-plugin）
+& "C:\dsh\dw-plugin\install.ps1" -Only dsh-synchub
 # 完全退出 DSH 再打开
 ```
 
@@ -184,7 +185,7 @@ git ls-remote https://github.com/<你>/dsh-config
 4. 第一台点「提交并推送」建基线；第二台点「拉取并应用」。**两台工作区必须落在完全相同的绝对路径**（ADR-002）。
 
 > 本机若 MinGit schannel 报 `SEC_E_NO_CREDENTIALS (0x8009030e)`，仓库级切 OpenSSL：
-> `git -C C:\dsh\dshplug config http.sslBackend openssl`。网络间歇失败先重试 2~3 次再换路，详见仓库根 README。
+> `git -C C:\dsh\dw-plugin config http.sslBackend openssl`。网络间歇失败先重试 2~3 次再换路，详见仓库根 README。
 
 ---
 
@@ -521,7 +522,7 @@ dsh plugin --profile desktop add 'github:mengfanchun2017/dswp-plugin#path:/dsh-g
 `install.ps1 -Only dsh-synchub` 建 `link:` Junction，**改代码即时生效**，适合开发。
 
 ### 6.3 迁移步骤
-1. 两台机器路径必须完全一致（`C:\dsh\dshplug`、工作区 `C:\dsh\workspace1` 等，ADR-002）。
+1. 两台机器路径必须完全一致（`C:\dsh\dw-plugin`、工作区 `C:\dsh\workspace1` 等，ADR-002）。
 2. 新机器：clone 仓库 → `install.ps1 -Only dsh-synchub` → 完全重启 → 配两远端 → 「拉取并应用」。
 3. 首次接入时插件发现本地仓库已 `git init` 但无 `HEAD`，会自动 bootstrap（把脚手架移到 `backups/pre-bootstrap-*` 再对齐远端）。
 4. 0.2 旧插件（`chatsync` / `dsh-config-manager`）可卸载；`chatsync` 已废弃。
