@@ -3033,6 +3033,46 @@ def cmd_inventory(args):
     return 0
 
 
+def cmd_lecture_notes(args):
+    """列出某个「讲」下的全部笔记（note_id + 标题），供界面复制 ID。
+
+    为何单独一个命令：inventory --summary 只给每个讲「有几条」，前端拿不到
+    note_id；而一个讲下通常有多条划线（实测 660 个讲、4322 条笔记，平均 6.5 条），
+    不能把「讲」当成一条笔记。要看清「这一讲里哪一条才是我要的那条」，
+    必须能展开到笔记层——「填 ID」问题的根不是用户不愿填，是根本看不到。
+    """
+    base = (DATA_DIR / args.into) if getattr(args, "into", "") else (DATA_DIR / "current")
+    if not base.is_dir():
+        raise ApiError(f"镜像目录不存在：{base}")
+    course = args.course or ""
+    book = args.book or ""
+    lecture = args.lecture or ""
+    kb = args.kb or ""
+    out = []
+    for f in sorted(base.glob("*.md")):
+        h = _parse_md_head(f)
+        nid = h.get("note_id")
+        if not nid:
+            continue
+        if _course_of(h) != course:
+            continue
+        if (_book_of(h) or "") != book:
+            continue
+        # 讲名 = 文章标题；树里空标题会显示成「(无标题)」，两边必须用同一套规则
+        if (h.get("title") or "(无标题)") != lecture:
+            continue
+        # 与 cmd_inventory 用同一套规则：没归库的笔记在树里叫「(未归知识库)」，
+        # 直接判 topics 会全部漏掉。
+        if kb and kb not in (h.get("topics") or ["(未归知识库)"]):
+            continue
+        out.append({"note_id": nid, "title": h.get("title") or "",
+                    "type": h.get("type"), "file": f.name})
+    out.sort(key=lambda x: x["note_id"] or "")
+    print(jdump({"notes": out, "count": len(out), "course": course,
+                 "book": book, "lecture": lecture}))
+    return 0
+
+
 # ── AI 动作的默认提示词 ──────────────────────────────────
 #
 # 为何放在代码里而又是「默认」：首次使用时写一份到 <dataDir>/prompts，
@@ -3445,13 +3485,20 @@ def cmd_resolve(args):
                 if len(parts) <= len(full.split(SEP)) and full.split(SEP)[:len(parts)] == parts:
                     hits[p].append(nid)
 
+    titles = {}
     out = []
     for p in want:
         ids = sorted(set(hits[p]))
         out.append({"path": p, "count": len(ids), "note_ids": ids})
-
+    # 带上标题：界面要让用户「看着标题挑一条」，光给 19 位数字没法选。
     uniq = sorted({i for o in out for i in o["note_ids"]})
-    print(jdump({"resolved": out, "total_unique": len(uniq), "note_ids": uniq}))
+    for f in sorted(base.glob("*.md")):
+        h2 = _parse_md_head(f)
+        nid2 = h2.get("note_id")
+        if nid2:
+            titles[str(nid2)] = h2.get("title") or ""
+    print(jdump({"resolved": out, "total_unique": len(uniq), "note_ids": uniq,
+                 "titles": titles}))
     return 0
 
 
@@ -4588,6 +4635,14 @@ def build_parser():
                     help="层级路径，用 \\x1f 分隔：知识库\\x1f目录\\x1f书\\x1f讲；给几段就匹配几层")
     rv.add_argument("--into", default="current", help="镜像子目录（相对数据目录），默认 current")
     rv.set_defaults(func=cmd_resolve)
+    ln = sub.add_parser("lecture-notes",
+                         help="列出一个「讲」下的全部笔记（note_id + 标题，供界面复制 ID）")
+    ln.add_argument("--kb", default="", help="知识库名（空=不限）")
+    ln.add_argument("--course", required=True, help="目录／专栏名")
+    ln.add_argument("--book", default="", help="书名（空=没有书名的单篇）")
+    ln.add_argument("--lecture", required=True, help="讲名（= 文章标题）")
+    ln.add_argument("--into", default="current", help="镜像子目录（相对数据目录），默认 current")
+    ln.set_defaults(func=cmd_lecture_notes)
     mc = sub.add_parser("mirror-check", help="本地镜像 vs 线上列表 对账（只读，耗读配额）")
     mc.add_argument("--into", default="current", help="镜像子目录（相对数据目录），默认 current")
     mc.add_argument("--strict", action="store_true", help="不一致时退出码 1（供自动化用）")

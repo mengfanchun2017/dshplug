@@ -47,6 +47,31 @@ function pickForm(configForms) {
   return hit || list[0]
 }
 
+/**
+ * 写剪贴板，失败则退回「选中文字 + 明说」。
+ *
+ * 为何不静默失败：用户按一下没反应会以为已经复制了，粘出来是旧内容也不知道。
+ * 所以回退路径必须 alert 明说「只是选中了，没进剪贴板」。
+ *
+ * @returns {Promise<boolean>} true = 真写进了剪贴板
+ */
+async function copyTextRaw(text, fallbackMsg) {
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    try {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      document.body.appendChild(ta)
+      ta.select()
+      window.alert(fallbackMsg || '已选中，请按 Ctrl+C 复制（浏览器拒绝了直接写剪贴板）')
+      document.body.removeChild(ta)
+    } catch { /* 最后放弃，但不能崩 */ }
+    return false
+  }
+}
+
 const zh = {
   nav: 'Mgetbrain',
   // 左侧边栏图标的名字（sidebar.panellist 的 label）
@@ -124,7 +149,7 @@ const zh = {
   tabAI: 'AI 动作',
   aiTitle: 'AI 动作',
   aiSub: '发芽 / 审问 / 连线：取素材 + 可改的提示词，结果不自动写回',
-  aiHow: '填一条笔记的 id（在「分类调整」里展开到「讲」能看到），先生成素材包，再点按钮。',
+  aiHow: '两条路都行：直接填笔记 id；或去「分类调整」勾一个「讲」，回来点「从「分类调整」带入」。',
   aiNoteIdPh: '笔记 id（数字）',
   aiLoadPack: '取素材包',
   aiPacking: '正在取素材…',
@@ -146,6 +171,43 @@ const zh = {
   aiPayloadTitle: '要发给 AI 的内容',
   aiCopy: '复制',
   aiIdle: '先填一个笔记 id 并点「取素材包」。只有素材包存在时，按钮才会出现。',
+  // —— 讲内笔记 / 复制 ID ——
+  lecToggleHint: '展开这一讲下的每条笔记，可复制 note_id',
+  lecNotesLoading: '正在读这一讲的笔记…',
+  lecNotesFail: '读取失败：',
+  lecNotesEmpty: '这一讲下没有笔记。',
+  copyId: '复制 ID',
+  copiedId: '已复制',
+  copyFallback: '已选中，请按 Ctrl+C 复制（浏览器拒绝了直接写剪贴板）',
+  aiPickFromTree: '从「分类调整」带入选中的讲',
+  aiPickHint: '不用手填 ID：去「分类调整」勾一个「讲」，再回来点这里。',
+  aiPickNone: '「分类调整」里没有勾选任何东西。',
+  aiPickFail: '带入失败：',
+  aiPickTitle: '选一条笔记',
+  aiPickSub: '这次勾选解析出 {n} 条笔记，点一条填进去。',
+  aiPickUse: '用它',
+  // —— 场景导航 ——
+  scenLabel: '我要：',
+  scenStruct: '归整一批笔记',
+  scenAuto: '一次归完未归库的',
+  scenApply: '执行 / 回退',
+  scenAI: '让 AI 帮我想',
+  scenOverview: '看库的情况',
+  // —— 确认执行页 ——
+  applyStepTitle: '三步走完才写线上',
+  applyStep1: '① 看清单：下面每一行都是一个真实动作。',
+  applyStep2: '② 先干跑：一个请求都不发，只把「会改哪些」打出来。',
+  applyStep3: '③ 再真写：按钮要连点两次，写完立刻能撤销。',
+  applySourceManual: '手工选择',
+  applySourceAuto: '自动归类',
+  applyDryCardTitle: '干跑结果（线上未动）',
+  applyDryCardHint: '确认清单和这里的结果一致，再点上面的「真写」。',
+  applyRealCardTitle: '已写入线上',
+  applyRealCardHint: '这次改动已拍快照，可在下面「撤销」里回退。',
+  applyFailCardTitle: '失败',
+  applyAutoSummaryHint: '这份计划的动作较多，界面只显示摘要；点「干跑」会打印逐批清单。',
+  autoGoApply: '去「确认执行」干跑 →',
+  autoGoApplyHint: '干跑/真写只在那一页，避免两边都能写、不知道刚点的是哪个。',
   applyEmptyUndoHint: '若刚才已经写过，可直接在下面回退。',
   // —— 撤销区 ——
   undoTitle: '撤销',
@@ -239,7 +301,7 @@ const zh = {
   selHintKb: '选中整个知识库',
   selHintCourse: '选中整个目录',
   selHintBook: '选中整本书',
-  applyEmpty: '还没有计划。先去「分类调整」勾选要动的笔记，生成计划。',
+  applyEmpty: '还没有待执行的计划。去「分类调整」勾选要动的笔记，或去「自动归类」一次归完。',
   applyBuilding: '正在把选中的层级解析成具体笔记，并生成计划（不联网）…',
   applyFail: '生成计划失败：',
   applySummary: '共 {n} 个动作。这一步只预览，不连网；点下面的按钮才真正写线上。',
@@ -476,7 +538,7 @@ const en = {
   tabAI: 'AI actions',
   aiTitle: 'AI actions',
   aiSub: 'Sprout / Interrogate / Link: fetch context + editable prompts; results are never written back',
-  aiHow: 'Enter a note id (expand to a lecture under Organize to see one), load the context pack, then pick an action.',
+  aiHow: 'Two ways: type a note id, or tick a lecture under Organize and click “Use the lecture selected in Organize”.',
   aiNoteIdPh: 'note id (digits)',
   aiLoadPack: 'Load context pack',
   aiPacking: 'Fetching context…',
@@ -498,6 +560,43 @@ const en = {
   aiPayloadTitle: 'Payload to send to the AI',
   aiCopy: 'Copy',
   aiIdle: 'Enter a note id and load the context pack first. Actions appear only when a pack exists.',
+  // —— notes inside a lecture / copy id ——
+  lecToggleHint: 'Expand the notes inside this lecture; copy a note_id from any of them',
+  lecNotesLoading: 'Reading the notes in this lecture…',
+  lecNotesFail: 'Failed to read: ',
+  lecNotesEmpty: 'No notes inside this lecture.',
+  copyId: 'Copy ID',
+  copiedId: 'Copied',
+  copyFallback: 'Selected — press Ctrl+C (the browser refused clipboard write)',
+  aiPickFromTree: 'Use the lecture selected in Organize',
+  aiPickHint: 'No need to type an id: tick a lecture under Organize, then come back and click here.',
+  aiPickNone: 'Nothing is ticked under Organize.',
+  aiPickFail: 'Could not pick: ',
+  aiPickTitle: 'Pick one note',
+  aiPickSub: 'That selection resolves to {n} notes — click one to fill the box.',
+  aiPickUse: 'Use this',
+  // —— scenario navigation ——
+  scenLabel: 'I want to:',
+  scenStruct: 'organize a batch',
+  scenAuto: 'file everything unfiled',
+  scenApply: 'execute / roll back',
+  scenAI: 'have AI think with me',
+  scenOverview: 'see how the library is',
+  // —— apply page ——
+  applyStepTitle: 'Three steps before anything is written',
+  applyStep1: '1. Read the list: every row below is a real action.',
+  applyStep2: '2. Dry-run first: sends nothing, just prints what would change.',
+  applyStep3: '3. Then write: the button needs two clicks, and you can undo right after.',
+  applySourceManual: 'manual selection',
+  applySourceAuto: 'auto-classify',
+  applyDryCardTitle: 'Dry-run result (nothing written)',
+  applyDryCardHint: 'If the list and this result match, click “write for real” above.',
+  applyRealCardTitle: 'Written to the platform',
+  applyRealCardHint: 'A snapshot was taken; roll it back under “Undo” below.',
+  applyFailCardTitle: 'Failed',
+  applyAutoSummaryHint: 'This plan has many actions, so only a summary is shown; “dry-run” prints the batch list.',
+  autoGoApply: 'Go to “Confirm & execute” to dry-run →',
+  autoGoApplyHint: 'Dry-run and write live on that page only — so you always know which plan you just ran.',
   applyEmptyUndoHint: 'If you just wrote, you can roll it back below.',
   // —— undo section ——
   undoTitle: 'Undo',
@@ -591,7 +690,7 @@ const en = {
   selHintKb: 'Select the whole knowledge base',
   selHintCourse: 'Select the whole series',
   selHintBook: 'Select the whole book',
-  applyEmpty: 'No plan yet. Go to "Organize", tick what you want to change, and build a plan.',
+  applyEmpty: 'No plan yet. Tick notes under Organize, or run Auto-classify to file everything at once.',
   applyBuilding: 'Resolving the selected levels into concrete notes and building the plan (offline)…',
   applyFail: 'Failed to build the plan: ',
   applySummary: '{n} action(s). This is a preview only — no network; nothing is written until you press the button below.',
@@ -1110,7 +1209,7 @@ window.__ModuleLoader__.load({
           })
           const d = await r.json()
           setPlan(d && d.ok
-            ? { data: d.plan, planPath: d.planPath, phase: 'ready' }
+            ? { data: d.plan, planPath: d.planPath, phase: 'ready', source: 'manual' }
             : { data: null, phase: 'error', error: (d && d.error) || ('HTTP ' + r.status) })
         } catch (e) {
           setPlan({ data: null, phase: 'error', error: String((e && e.message) || e) })
@@ -1389,6 +1488,78 @@ window.__ModuleLoader__.load({
       const [activeAction, setActiveAction] = React.useState('')
       const [payload, setPayload] = React.useState('')
 
+      // ── 讲内笔记（v2.12.0）──────────────────────────────
+      // 为何要：「讲」下平均 6.5 条笔记，光看条数拿不到 note_id；而「AI 动作」
+      // 与「删除」都要一个具体 ID。展开到笔记层、每条给一个「复制 ID」，
+      // 才能从根上去掉「手填 19 位数字」这一步。
+      const [lecOpen, setLecOpen] = React.useState(new Set())
+      const [lecNotes, setLecNotes] = React.useState({})
+      const loadLecNotes = React.useCallback(async (key, query) => {
+        setLecNotes((m) => ({ ...m, [key]: { phase: 'loading', notes: [] } }))
+        try {
+          const qs = new URLSearchParams(query)
+          const r = await fetch('/plugins/getnote/lecture-notes?' + qs.toString(),
+            { credentials: 'same-origin' })
+          const d = await r.json()
+          setLecNotes((m) => ({ ...m, [key]: d && d.ok
+            ? { phase: 'ready', notes: d.notes || [] }
+            : { phase: 'error', error: (d && d.error) || ('HTTP ' + r.status) } }))
+        } catch (e) {
+          setLecNotes((m) => ({ ...m, [key]:
+            { phase: 'error', error: String((e && e.message) || e) } }))
+        }
+      }, [])
+      // 不在 setState 的 updater 里调 loadLecNotes：updater 可能被调两次，
+      // 那会发两次请求（本地接口无所谓，但习惯要正）。
+      const toggleLec = React.useCallback((key, query) => {
+        const willOpen = !lecOpen.has(key)
+        const next = new Set(lecOpen)
+        if (willOpen) next.add(key); else next.delete(key)
+        setLecOpen(next)
+        const cur = lecNotes[key]
+        if (willOpen && (!cur || cur.phase !== 'ready')) loadLecNotes(key, query)
+      }, [lecOpen, lecNotes, loadLecNotes])
+
+      // ── 复制 ID 的反馈（复制成功只在按钮上亮一下，不弹窗）──────
+      const [copiedKey, setCopiedKey] = React.useState('')
+      const copyText = React.useCallback(async (text, key) => {
+        const ok = await copyTextRaw(text,
+          T('copyFallback', '已选中，请按 Ctrl+C 复制（浏览器拒绝了直接写剪贴板）'))
+        setCopiedKey(ok ? String(key == null ? 'x' : key) : '')
+        return ok
+      }, [T])
+
+      // ── AI 页：从「分类调整」带入（不再手填 ID）─────────────
+      const [aiPick, setAiPick] = React.useState({ phase: 'idle', notes: [], error: '' })
+      const aiPickFromTree = React.useCallback(async () => {
+        const paths = Array.from(sel)
+        if (!paths.length) {
+          setAiPick({ phase: 'error', error: T('aiPickNone', '「分类调整」里没有勾选任何东西。') })
+          return
+        }
+        setAiPick({ phase: 'loading', notes: [], error: '' })
+        try {
+          const r = await fetch('/plugins/getnote/resolve', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ paths }),
+          })
+          const d = await r.json()
+          if (!d || !d.ok) throw new Error((d && d.error) || ('HTTP ' + r.status))
+          const titles = d.titles || {}
+          const notes = (d.noteIds || []).map((id) =>
+            ({ note_id: String(id), title: titles[String(id)] || '' }))
+          if (!notes.length) {
+            setAiPick({ phase: 'error', error: T('aiPickNone', '「分类调整」里没有勾选任何东西。') })
+            return
+          }
+          setAiPick({ phase: 'ready', notes, error: '' })
+        } catch (e) {
+          setAiPick({ phase: 'error', error: String((e && e.message) || e) })
+        }
+      }, [sel, T])
+
       const loadAI = React.useCallback(async () => {
         try {
           const r = await fetch('/plugins/getnote/ai', { credentials: 'same-origin' })
@@ -1471,20 +1642,8 @@ window.__ModuleLoader__.load({
       }, [pack, aiData, activeAction])
 
       const copyPayload = React.useCallback(async () => {
-        try {
-          await navigator.clipboard.writeText(payload)
-        } catch {
-          // 回退：选中文本，但必须明说「只是选中了」
-          try {
-            const ta = document.createElement('textarea')
-            ta.value = payload
-            document.body.appendChild(ta)
-            ta.select()
-            alert('已选中全部文字，请按 Ctrl+C 复制（浏览器拒绝了直接写剪贴板）')
-            document.body.removeChild(ta)
-          } catch { /* 最后放弃 */ }
-        }
-      }, [payload])
+        await copyTextRaw(payload, T('copyFallback', '已选中全部文字，请按 Ctrl+C 复制（浏览器拒绝了直接写剪贴板）'))
+      }, [payload, T])
 
       // 一键生成自动归类计划：只写计划文件，不发写请求。
       // 为何要这个：2055 条没归库，靠手勾「讲」是几百次点击，不可能完成。
@@ -1508,12 +1667,33 @@ window.__ModuleLoader__.load({
         }
       }, [])
 
+      // 自动归类生成完计划后，「执行」只有一个入口：把这份计划交棒给「确认执行」页。
+      // 为何不在自动归类页直接干跑：两个页都能写线上时，用户分不清「我刚点的
+      // 是哪一个」；而且自动归类页以前压根不渲染干跑结果（点了像没反应）。
+      const goApplyFromAuto = React.useCallback(() => {
+        const d = (autoPlan && autoPlan.data) || {}
+        setPlan({
+          data: d.plan || null,
+          planPath: d.planPath || '',
+          phase: 'ready',
+          source: 'auto',
+          summary: d.summary || null,
+          actions: d.actions || 0,
+          exceededHighRisk: !!d.exceededHighRisk,
+        })
+        setResult(null)
+        setArmed(false)
+        setView('apply')
+      }, [autoPlan])
+
+      // 页签顺序 = 工作流顺序：先造计划（分类调整 / 自动归类），再执行（确认执行）。
+      // 两个「造计划」页是二选一，不是两步。
       const tabs = [
         { id: 'structure', label: T('tabStructure', '分类调整') },
-        { id: 'overview', label: T('tabOverview', '笔记现状') },
-        { id: 'apply', label: T('tabApply', '确认执行') },
         { id: 'auto', label: T('tabAuto', '自动归类') },
+        { id: 'apply', label: T('tabApply', '确认执行') },
         { id: 'ai', label: T('tabAI', 'AI 动作') },
+        { id: 'overview', label: T('tabOverview', '笔记现状') },
         { id: 'log', label: T('tabLog', '执行日志') },
       ]
       const act = { openKb: [openKb, setOpenKb], openCourse: [openCourse, setOpenCourse],
@@ -1521,7 +1701,10 @@ window.__ModuleLoader__.load({
         pub: { run: runPublish, index: runIndex, state: pub },
         openBook: [openBook, setOpenBook], sel: [sel, setSel], setSel, onPlanMenu,
         showShelf: [showShelf, setShowShelf], showUnknown: [showUnknown, setShowUnknown],
-        onAutoPlan, autoPlan,
+        onAutoPlan, goApplyFromAuto, autoPlan,
+        // 讲内笔记 / 复制 ID / AI 带入
+        lecOpen, lecNotes, toggleLec, copyText, copiedKey,
+        aiPick, aiPickFromTree,
         drag: [drag, setDrag], dropOn: [dropOn, setDropOn], onDropToKb,
         undo: undos, onUndo, undoResult, undoBusy, undoArmed, setUndoArmed,
         // 「分类调整」页的目标选择器直接读这几个键。
@@ -1545,12 +1728,23 @@ window.__ModuleLoader__.load({
       else if (view === 'apply') content = renderApply(T, h, P, { ...plan, result },
         { run: runApply, busy, armed, setArmed,
           undo: undos, onUndo, undoResult, undoBusy, undoArmed, setUndoArmed })
-      else if (view === 'auto') content = renderAuto(T, h, P, autoPlan, { onAutoPlan, run: runApply, busy, inv })
+      else if (view === 'auto') content = renderAuto(T, h, P, autoPlan,
+        { onAutoPlan, goApply: goApplyFromAuto, inv })
       else if (view === 'ai') content = renderAI(T, h, P,
-        { data: aiData, pack, packBusy, packError, sprout, sproutBusy },
+        { data: aiData, pack, packBusy, packError, sprout, sproutBusy, pick: aiPick },
         { noteId: aiNoteId, setNoteId: setAiNoteId, loadPack, checkSprout,
           activeAction, setActiveAction, buildPayload, payload, copyPayload })
       else content = renderLog(T, h, P, log, loadLog)
+
+      // 场景导航：用户打开面板时想的是「我要干什么」，不是「这几个页签叫什么」。
+      // 直接把「我要…」翻译成页签，省掉一次判断。
+      const scen = [
+        { id: 'structure', label: T('scenStruct', '归整一批笔记') },
+        { id: 'auto', label: T('scenAuto', '一次归完未归库的') },
+        { id: 'apply', label: T('scenApply', '执行 / 回退') },
+        { id: 'ai', label: T('scenAI', '让 AI 帮我想') },
+        { id: 'overview', label: T('scenOverview', '看库的情况') },
+      ]
 
 
       return h('div', { style: P.root },
@@ -1561,6 +1755,13 @@ window.__ModuleLoader__.load({
               T('subtitle', '本地镜像是安全网：所有改动先在这里预演，确认后才写线上。'))),
           h('span', { style: P.pill }, T('localFirst', '本地优先'))),
 
+        h('div', { style: P.scenBar },
+          h('span', { style: P.scenLabel }, T('scenLabel', '我要：')),
+          scen.map((s) => h('button', {
+            key: 'scen-' + s.id,
+            style: view === s.id ? { ...P.scenChip, ...P.scenChipActive } : P.scenChip,
+            onClick: () => setView(s.id),
+          }, s.label))),
         h('nav', { style: P.tabs },
           tabs.map((x) => h('button', {
             key: x.id,
@@ -1940,6 +2141,12 @@ window.__ModuleLoader__.load({
       const dropOn = act.dropOn[0]
       const setDrag = act.drag[1]
       const setDropOn = act.dropOn[1]
+      // 讲内笔记展开（懒加载）：默认全收起，不看不动。
+      const lecOpen = act.lecOpen || new Set()
+      const lecNotes = act.lecNotes || {}
+      const toggleLec = act.toggleLec || (() => {})
+      const copyText = act.copyText || (async () => {})
+      const copiedKey = act.copiedKey || ''
       if (inv.phase === 'loading') {
         return h('section', { style: P.card }, h('p', { style: P.muted }, T('invLoading', '正在本地重建层级（不联网，扫 4000+ 个文件头，约 1–3 秒）…')))
       }
@@ -2115,10 +2322,52 @@ window.__ModuleLoader__.load({
 
             // 「讲」这一层：一本书拆成多讲，每讲的划线分散成多条笔记。
             // 每讲单独一行（带勾框），这是最小粒度，也是唯一能精确选到单篇的粒度。
+            // 一个「讲」下的笔记列表。懒加载：只有展开了才发请求。
+            const renderLecNotes = (lk, lc, query) => {
+              const ln = lecNotes[lk] || { phase: 'idle', notes: [] }
+              let body = null
+              if (ln.phase === 'loading') {
+                body = h('p', { style: { ...P.muted, paddingLeft: 40 } },
+                  T('lecNotesLoading', '正在读这一讲的笔记…'))
+              } else if (ln.phase === 'error') {
+                body = h('p', { style: {
+                  ...P.muted, paddingLeft: 40,
+                  color: 'var(--dsw-alias-state-error-primary)',
+                } }, T('lecNotesFail', '读取失败：') + String(ln.error || ''))
+              } else if (!ln.notes.length) {
+                body = h('p', { style: { ...P.muted, paddingLeft: 40 } },
+                  T('lecNotesEmpty', '这一讲下没有笔记。'))
+              } else {
+                body = h('div', null, ln.notes.map((n, i) => {
+                  const ck = 'cp-' + lk + '-' + i
+                  return h('div', {
+                    key: ck,
+                    style: { display: 'flex', alignItems: 'center', gap: 8,
+                      paddingLeft: 40, paddingTop: 2, paddingBottom: 2, fontSize: 11.5 },
+                  },
+                    h('span', { style: { flex: 1, minWidth: 0, overflow: 'hidden',
+                      textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                      (n.title || '(无标题)').slice(0, 60)),
+                    h('span', { style: { ...P.muted, fontVariantNumeric: 'tabular-nums' } },
+                      String(n.note_id)),
+                    h('button', {
+                      style: { ...P.btn, padding: '2px 8px', fontSize: 11 },
+                      onClick: () => copyText(String(n.note_id), ck),
+                    }, copiedKey === ck ? T('copiedId', '已复制') : T('copyId', '复制 ID')))
+                }))
+              }
+              return h('div', { key: 'ln-' + lk,
+                style: { borderBottom: '1px solid var(--dsw-alias-border-l2)' } }, body)
+            }
+
             const lectureRows = (bk.lectures || []).map((lc) => {
               const lk = bKey + '\u0000' + lc.name
               const picked = sel.has(lk)
-              return h('div', {
+              const isOpen = lecOpen.has(lk)
+              // 传给 lecture-notes 的查询：扁形书（无书名）用空书名
+              const query = { kb: kb.name, course: co.name,
+                book: isFlat ? '' : (bk.name || ''), lecture: lc.name }
+              const row = h('div', {
                 key: 'lc-' + lk,
                 style: { ...rowStyle(isFlat ? 2 : 3, picked), cursor: 'pointer' },
                 onClick: () => pick(lk),
@@ -2126,7 +2375,14 @@ window.__ModuleLoader__.load({
               },
                 h('span', { style: P.treeCheck }, picked ? '☑' : '☐'),
                 h('span', { style: P.treeName }, lc.name || '(无标题)'),
-                h('span', { style: P.treeCount }, String(lc.count) + T('unitNotes', ' 条')))
+                h('span', {
+                  style: { ...P.treeCount, cursor: 'pointer',
+                    color: 'var(--dsw-alias-label-secondary)' },
+                  title: T('lecToggleHint', '展开这一讲下的每条笔记，可复制 note_id'),
+                  onClick: (e) => { e.stopPropagation(); toggleLec(lk, query) },
+                }, String(lc.count) + T('unitNotes', ' 条') + (isOpen ? ' ▴' : ' ▾')))
+              if (!isOpen) return row
+              return [row, renderLecNotes(lk, lc, query)]
             })
 
             // 展平：不画书行，讲直接接在目录下
@@ -2467,7 +2723,7 @@ window.__ModuleLoader__.load({
           : null)
     }
 
-    /** 「确认执行」页：列出计划、干跑、双重闸门。 */
+    /** 「确认执行」页：唯一的写入口。清单 → 干跑 → 真写 → 撤销。 */
     function renderApply(T, h, P, plan, apply) {
       if (plan.phase === 'building') {
         return h('section', { style: P.card },
@@ -2480,79 +2736,129 @@ window.__ModuleLoader__.load({
           h('p', { style: { ...P.muted, color: 'var(--dsw-alias-state-error-primary)' } },
             T('applyFail', '生成计划失败：') + plan.error))
       }
+
+      const out = plan.result
       const p = plan.data
+      const actions = (p && p.actions) || []
+
+      // 三步说明：用户反复问的「先干跑后面确认再点」到底是什么顺序，写死在页首。
+      const steps = h('section', { style: { ...P.card, marginBottom: 12 } },
+        h('h2', { style: P.cardTitle }, T('applyTitle', '确认与执行')),
+        h('p', { style: { ...P.muted, marginBottom: 4 } }, T('applyStepTitle', '三步走完才写线上')),
+        h('p', { style: { ...P.muted, fontSize: 11.5, margin: '2px 0' } },
+          T('applyStep1', '① 看清单：下面每一行都是一个真实动作。')),
+        h('p', { style: { ...P.muted, fontSize: 11.5, margin: '2px 0' } },
+          T('applyStep2', '② 先干跑：一个请求都不发，只把「会改哪些」打出来。')),
+        h('p', { style: { ...P.muted, fontSize: 11.5, margin: '2px 0' } },
+          T('applyStep3', '③ 再真写：按钮要连点两次，写完立刻能撤销。')),
+        plan.source
+          ? h('p', { style: { ...P.muted, fontSize: 11, marginTop: 6 } },
+              plan.source === 'auto'
+                ? T('applySourceAuto', '自动归类')
+                : T('applySourceManual', '手工选择'))
+          : null)
+
+      // 执行区：先干跑，再真写；真写要连点两次。没有计划路径就不给点。
+      const bar = h('div', { style: P.selBar },
+        h('span', null, T('applyGuard', '先干跑预览，确认后才发写请求。')),
+        h('button', {
+          style: { ...P.btn, ...P.primary },
+          disabled: apply.busy || !plan.planPath,
+          onClick: () => apply.run(true, plan.planPath),
+        }, apply.busy ? T('applyRunning', '执行中…') : T('applyDryRun', '先干跑（不发写请求）')),
+        h('button', {
+          style: { ...P.btn, ...(apply.armed ? P.danger : null) },
+          disabled: apply.busy || !plan.planPath,
+          onClick: () => (apply.armed ? apply.run(false, plan.planPath) : apply.setArmed(true)),
+        }, apply.armed
+          ? T('applyRealNow', '确认写入线上（不可撤销）')
+          : T('applyRealArm', '我要真写 → 需再点一次')))
+
+      // 干跑/真写的结果：单独一张卡，紧贴在按钮下方。
+      // 以前是扔在页面最底下的 <pre>，用户反映「刚跑完找不到」。
+      const resultCard = out ? h('section', { style: { ...P.card, marginBottom: 12 } },
+        h('h2', { style: P.cardTitle },
+          out.dryRun ? T('applyDryCardTitle', '干跑结果（线上未动）')
+            : out.ok ? T('applyRealCardTitle', '已写入线上')
+            : T('applyFailCardTitle', '失败')),
+        out.dryRun
+          ? h('p', { style: { ...P.muted, fontSize: 11.5 } },
+              T('applyDryCardHint', '确认清单和这里的结果一致，再点上面的「真写」。'))
+          : null,
+        out.ok && !out.dryRun
+          ? h('p', { style: { ...P.muted, fontSize: 11.5 } },
+              T('applyRealCardHint', '这次改动已拍快照，可在下面「撤销」里回退。'))
+          : null,
+        out.undoPath ? h('p', { style: P.dirLine }, String(out.undoPath)) : null,
+        h('pre', { style: P.logPre },
+          String(out.error && !out.ok
+            ? (T('applyErr', '失败：') + out.error + '\n' + (out.output || ''))
+            : (out.output || '')).slice(0, 8000)))
+        : null
+
       if (!p) {
-        // 没有待执行计划时，也必须能看到撤销区：
-        // 用户可能刚写完（计划已被消费），或想去回退上次的操作。
-        // 早期版本这里直接 return，导致“撤销”永远不出现——与“可回退”的目标相违。
-        return h('div', null,
+        // 没有动作清单时（自动归类且计划过大，或还没生成计划）：摘要 + 空态 + 撤销。
+        // 无清单也不能不显示撤销：用户可能是刚写完（计划已被活用）才回到这一页。
+        const sum = plan.summary || {}
+        return h('div', null, steps,
           h('section', { style: P.card },
-            h('h2', { style: P.cardTitle }, T('applyTitle', '确认与执行')),
-            h('p', { style: P.muted }, T('applyEmpty',
-              '还没有待执行的计划。先去「分类调整」勾选要动的笔记，生成计划。')),
-            h('p', { style: { ...P.muted, fontSize: 11.5 } }, T('applyEmptyUndoHint',
-              '若刚才已经写过，可直接在下面回退。'))),
+            plan.actions
+              ? h('p', { style: P.muted },
+                  T('applyAutoSummaryHint', '这份计划的动作较多，界面只显示摘要；点「干跑」会打印逐批清单。'))
+              : h('p', { style: P.muted }, T('applyEmpty',
+                  '还没有待执行的计划。去「分类调整」勾选要动的笔记，或去「自动归类」一次归完。')),
+            plan.actions
+              ? h('div', { style: { ...P.statRow, marginTop: 10 } },
+                  h(Stat, { label: T('autoStatGroups', '拟建知识库'), value: sum.groups || 0,
+                    hint: T('autoStatGroupsHint', '成规模的组') }),
+                  h(Stat, { label: T('autoStatMove', '将归位'), value: sum.notes_to_move || 0,
+                    hint: T('autoStatMoveHint', '条笔记') }),
+                  h(Stat, { label: T('autoStatKeep', '不动'), value: sum.notes_untouched || 0,
+                    hint: T('autoStatKeepHint', '零碎目录，保留原样') }),
+                  h(Stat, { label: T('autoStatActions', '动作数'), value: plan.actions || 0,
+                    hint: T('autoStatActionsHint', '干跑后再真写') }))
+              : null,
+            h('p', { style: { ...P.muted, fontSize: 11.5, marginTop: 8 } },
+              T('applyEmptyUndoHint', '若刚才已经写过，可直接在下面回退。')),
+            plan.planPath
+              ? h('p', { style: P.dirLine }, T('planFile', '计划文件：') + plan.planPath)
+              : null),
+          bar,
+          resultCard,
           apply.undo ? renderUndo(T, h, P, apply.undo, apply) : null)
       }
-      const actions = p.actions || []
+
       // 计划可能很长（一整个目录就是一条 kb_batch_add，但标签是逐条），
       // 只展示前 50 条，剩下的给数量。
       const shown = actions.slice(0, 50)
-      const out = plan.result
-
-      return h('section', { style: P.card },
-        h('h2', { style: P.cardTitle }, T('applyTitle', '确认与执行')),
-        h('p', { style: P.muted },
-          T('applySummary', '共 {n} 个动作。这一步只预览，不连网；点下面的按钮才真正写线上。')
-            .replace('{n}', actions.length)),
-        h('table', { style: P.planTable },
-          h('thead', null, h('tr', null,
-            h('th', { style: P.planTh }, '#'),
-            h('th', { style: P.planTh }, T('colOp', '动作')),
-            h('th', { style: P.planTh }, T('colTarget', '目标')),
-            h('th', { style: P.planTh }, T('colCount', '条数')))),
-          h('tbody', null, ...shown.map((s, i) => h('tr', { key: i },
-            h('td', { style: P.planTd }, String(i + 1)),
-            h('td', { style: P.planTd }, String(s.op || '')),
-            h('td', { style: P.planTd },
-              s.op === 'kb_batch_add'
-                ? T('targetKb', '知识库 ') + String((s.args && s.args.topic_id) || '')
-                : String((s.args && (s.args.note_id || (s.args.tags || []).join(','))) || '')),
-            h('td', { style: P.planTd },
-              s.op === 'kb_batch_add' ? String(((s.args && s.args.note_ids) || []).length) : '1'))))),
-        actions.length > shown.length
-          ? h('p', { style: { ...P.muted, marginTop: 6 } },
-              T('moreRows', '…还有 {n} 个动作未展开').replace('{n}', actions.length - shown.length))
-          : null,
-        h('p', { style: P.dirLine }, T('planFile', '计划文件：') + (plan.planPath || '（未写入磁盘）')),
-
-        // —— 执行区：先干跑，再真写 ——
-        h('div', { style: P.selBar },
-          h('span', null, T('applyGuard', '先干跑预览，确认后才发写请求。')),
-          h('button', {
-            style: { ...P.btn, ...P.primary },
-            disabled: apply.busy,
-            onClick: () => apply.run(true, plan.planPath),
-          }, apply.busy ? T('applyRunning', '执行中…') : T('applyDryRun', '先干跑（不发写请求）')),
-          h('button', {
-            style: { ...P.btn, ...(apply.armed ? P.danger : null) },
-            disabled: apply.busy,
-            onClick: () => (apply.armed ? apply.run(false, plan.planPath) : apply.setArmed(true)),
-          }, apply.armed
-            ? T('applyRealNow', '确认写入线上（不可撤销）')
-            : T('applyRealArm', '我要真写 → 需再点一次'))),
-
-        // —— 撤销区 ——
-        // 为何放在这一页而不是做成全局「撤销上一步」：
-        // 这个面板容易被误触，而「上一步」是隐式的——用户以为是刚才那次，
-        // 实际可能是别处改的。所以显式列出「哪一批、多少条、什么状态」，让他选。
-        apply.undo ? renderUndo(T, h, P, apply.undo, apply) : null,
-
-        out
-          ? h('pre', { style: P.logPre }, out.error
-              ? (T('applyErr', '失败：') + out.error + '\n' + (out.output || ''))
-              : (out.output || ''))
-          : null)
+      return h('div', null, steps,
+        h('section', { style: P.card },
+          h('p', { style: P.muted },
+            T('applySummary', '共 {n} 个动作。这一步只预览，不连网；点下面的按钮才真正写线上。')
+              .replace('{n}', actions.length)),
+          h('table', { style: P.planTable },
+            h('thead', null, h('tr', null,
+              h('th', { style: P.planTh }, '#'),
+              h('th', { style: P.planTh }, T('colOp', '动作')),
+              h('th', { style: P.planTh }, T('colTarget', '目标')),
+              h('th', { style: P.planTh }, T('colCount', '条数')))),
+            h('tbody', null, ...shown.map((s, i) => h('tr', { key: i },
+              h('td', { style: P.planTd }, String(i + 1)),
+              h('td', { style: P.planTd }, String(s.op || '')),
+              h('td', { style: P.planTd },
+                s.op === 'kb_batch_add'
+                  ? T('targetKb', '知识库 ') + String((s.args && s.args.topic_id) || '')
+                  : String((s.args && (s.args.note_id || (s.args.tags || []).join(','))) || '')),
+              h('td', { style: P.planTd },
+                s.op === 'kb_batch_add' ? String(((s.args && s.args.note_ids) || []).length) : '1'))))),
+          actions.length > shown.length
+            ? h('p', { style: { ...P.muted, marginTop: 6 } },
+                T('moreRows', '…还有 {n} 个动作未展开').replace('{n}', actions.length - shown.length))
+            : null,
+          h('p', { style: P.dirLine }, T('planFile', '计划文件：') + (plan.planPath || '（未写入磁盘）'))),
+        bar,
+        resultCard,
+        apply.undo ? renderUndo(T, h, P, apply.undo, apply) : null)
     }
     /**
      * 撤销区：列出可回退的批次，双点确认才执行。
@@ -2664,6 +2970,40 @@ window.__ModuleLoader__.load({
      *    否则用户无法预期结果，也不会信任它。
      *  · 结果只展示，不写回笔记。改正文不可撤销（见 docs/UNDO-DESIGN.md §7）。
      */
+    /**
+     * 「从分类调整带入」的结果区。
+     *
+     * 为何不直接填第一条：一个「讲」下可能几十条笔记，默默取第一条
+     * 会让人以为选的就是自己勾的那个。必须列出来让人点。
+     */
+    function renderAiPick(T, h, P, pick, ctl) {
+      const p = pick || { phase: 'idle', notes: [], error: '' }
+      if (p.phase === 'idle') return null
+      if (p.phase === 'loading') {
+        return h('p', { style: { ...P.muted, fontSize: 11.5 } },
+          T('lecNotesLoading', '正在读这一讲的笔记…'))
+      }
+      if (p.phase === 'error') {
+        return h('p', { style: { ...P.muted, fontSize: 11.5, color: 'var(--dsw-alias-state-error-primary)' } },
+          T('aiPickFail', '带入失败：') + String(p.error || ''))
+      }
+      return h('div', { style: { marginTop: 8 } },
+        h('div', { style: P.cardTitle }, T('aiPickTitle', '选一条笔记')),
+        h('p', { style: { ...P.muted, fontSize: 11 } },
+          T('aiPickSub', '这次勾选解析出 {n} 条笔记，点一条填进去。').replace('{n}', p.notes.length)),
+        h('div', null, p.notes.slice(0, 12).map((n, i) => h('div', {
+          key: 'ap-' + i, style: P.rowLine,
+        },
+          h('span', { style: { flex: 1, minWidth: 0, overflow: 'hidden',
+            textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+            (n.title || '(无标题)').slice(0, 60)),
+          h('span', { style: { ...P.muted, fontVariantNumeric: 'tabular-nums' } },
+            String(n.note_id)),
+          h('button', { style: { ...P.btn, padding: '2px 8px', fontSize: 11 },
+            onClick: () => ctl.setNoteId(String(n.note_id)) },
+            T('aiPickUse', '用它'))))))
+    }
+
     function renderAI(T, h, P, ai, ctl) {
       const head = h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 } },
         h('h2', { style: { ...P.cardTitle, margin: 0 } }, T('aiTitle', 'AI 动作')),
@@ -2673,7 +3013,7 @@ window.__ModuleLoader__.load({
       const noteId = ctl.noteId || ''
       const input = h('section', { style: { ...P.card, marginBottom: 12 } },
         h('p', { style: P.muted }, T('aiHow',
-          '填一条笔记的 id（在「分类调整」里展开到「讲」能看到），先生成素材包，再点按钮。')),
+          '两条路都行：直接填笔记 id；或去「分类调整」勾一个「讲」，回来点下面的「从「分类调整」带入」。')),
         h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
           h('input', {
             style: { ...P.input, width: 220 },
@@ -2690,13 +3030,20 @@ window.__ModuleLoader__.load({
             style: P.btn,
             disabled: !/^\d{6,}$/.test(noteId) || ctl.sproutBusy,
             onClick: () => ctl.checkSprout(),
-          }, T('aiCheckSprout', '查平台发芽'))),
+          }, T('aiCheckSprout', '查平台发芽')),
+          h('button', {
+            style: P.btn,
+            onClick: () => ctl.pickFromTree(),
+          }, T('aiPickFromTree', '从「分类调整」带入选中的讲'))),
+        h('p', { style: { ...P.muted, fontSize: 11 } }, T('aiPickHint',
+          '不用手填 ID：去「分类调整」勾一个「讲」，再回来点上面的「从「分类调整」带入」。')),
         ai.sprout && ai.sprout.checked
           ? h('p', { style: P.dirLine },
               ai.sprout.hasSprout
                 ? T('aiSproutHas', '平台侧已有发芽内容，已取回。')
                 : T('aiSproutNone', '平台侧还没有发芽。要生成，用下面的按钮由 AI 做；或在得到 App 里点发芽。'))
-          : null)
+          : null,
+        renderAiPick(T, h, P, ai.pick, ctl))
 
       if (ai.pack && ai.pack.pack) {
         const pk = ai.pack.pack
@@ -2861,14 +3208,15 @@ window.__ModuleLoader__.load({
         h('section', { style: { ...P.card, marginTop: 14 } },
           h('h2', { style: P.cardTitle }, T('autoNextTitle', '下一步')),
           h('p', { style: P.muted }, T('autoNext',
-            '先干跑：不发任何请求，只把每批 20 条的完整清单打出来。确认无误再回「确认执行」页真写。')),
+            '计划已生成（只算了，没写）。执行统一去「确认执行」页：先干跑看清单，再真写，写完可撤销。')),
           h('p', { style: P.dirLine }, d.planPath || ''),
-          h('div', { style: { display: 'flex', gap: 8, marginTop: 10 } },
+          h('div', { style: { display: 'flex', gap: 8, marginTop: 10, alignItems: 'center' } },
             h('button', {
               style: { ...P.btn, ...P.primary },
-              disabled: ctl.busy,
-              onClick: () => ctl.run(true, d.planPath),
-            }, ctl.busy ? T('autoRunning', '执行中…') : T('autoDry', '先干跑（不发包）')))))
+              onClick: () => ctl.goApply(),
+            }, T('autoGoApply', '去「确认执行」干跑 →')),
+            h('span', { style: { ...P.muted, fontSize: 11 } },
+              T('autoGoApplyHint', '干跑/真写只在那一页，避免两边都能写、不知道刚点的是哪个。')))))
     }
 
     /** 「执行日志」页。 */
@@ -2920,6 +3268,18 @@ window.__ModuleLoader__.load({
           flexShrink: 0, fontSize: 11, padding: '3px 9px', borderRadius: 999,
           background: 'var(--dsw-alias-bg-layer-2)',
           color: txt2, border: bd,
+        },
+        // 场景导航：一行「我要…」，把用户的目标直接换成页签。
+        scenBar: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 10 },
+        scenLabel: { fontSize: 11.5, color: txt2 },
+        scenChip: {
+          font: 'inherit', fontSize: 11.5, cursor: 'pointer',
+          padding: '3px 10px', borderRadius: 999,
+          border: bd, background: 'transparent', color: txt2,
+        },
+        scenChipActive: {
+          background: 'var(--dsw-alias-interactive-bg-hover)',
+          color: 'var(--dsw-alias-label-primary)', fontWeight: 600,
         },
         tabs: { display: 'flex', gap: 4, borderBottom: bd },
         tab: {

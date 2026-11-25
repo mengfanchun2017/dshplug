@@ -927,9 +927,9 @@ export function apply(ctx, config) {
             groups: plan.groups,
             skipped_sample: plan.skipped_sample,
             actions: (plan.actions || []).length,
-            // 不入 plan：动作清单可能上千条，界面只需摘要；
-            // 真要逐条看，去终端干跑（apply --dry-run 会把每批打出来）。
-            exceededHighRisk: (plan.actions || []).length > 200,
+            // 计划本体只在动作数可控时回传：界面要拿它渲染「确认执行」页的动作清单。
+            // 超过 2000 条就不传（几十 KB 变几 MB，表格也渲不动），界面退回只显示摘要。
+            ...(plan.actions.length <= 2000 ? { plan } : {}),
             note: '本接口只生成计划，不发写请求。真写走 /apply（confirm=APPLY）。',
           })
         } catch (error) {
@@ -1337,12 +1337,56 @@ export function apply(ctx, config) {
             return send(400, { ok: false, error: out.error || ('resolve 失败：' + txt.slice(0, 200)) })
           }
           const data = JSON.parse(txt.slice(a, b + 1))
-          send(200, { ok: true, noteIds: data.note_ids || [], count: (data.note_ids || []).length })
+          send(200, { ok: true, noteIds: data.note_ids || [], count: (data.note_ids || []).length,
+            // 标题随 ID 一起给：界面要「看着标题挑一条」，只给数字没法选。
+            titles: data.titles || {} })
         } catch (error) {
           send(400, { ok: false, error: String(error && error.message || error) })
         }
       },
     }), 'getnote: resolve route')
+
+    // 12b) 讲内笔记清单：GET /plugins/getnote/lecture-notes
+    //
+    // 为何需要：「讲」下通常有多条划线（实测 660 个讲、4322 条笔记，平均 6.5 条），
+    // 而 inventory --summary 只给条数。用户要复制某条笔记的 ID 去「AI 动作」用，
+    // 光看「这一讲有 6 条」是拿不到 ID 的——这才是「填 ID 麻烦」的根。
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/getnote/lecture-notes',
+      handler: async (req, res) => {
+        const send = (code, obj) => {
+          res.writeHead(code, { 'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store' })
+          res.end(JSON.stringify(obj))
+        }
+        if (req.method !== 'GET') return send(405, { ok: false, error: 'GET only' })
+        try {
+          const u = new URL(req.url, 'http://localhost')
+          const course = u.searchParams.get('course') || ''
+          const lecture = u.searchParams.get('lecture') || ''
+          if (!course || !lecture) {
+            return send(400, { ok: false, error: '需要 course 与 lecture 两个参数' })
+          }
+          const out = await runGn(config, resolveCreds(),
+            ['lecture-notes',
+              '--kb', u.searchParams.get('kb') || '',
+              '--course', course,
+              '--book', u.searchParams.get('book') || '',
+              '--lecture', lecture], undefined, 60000)
+          const txt = String(out.output || '')
+          const a = txt.indexOf('{')
+          const b = txt.lastIndexOf('}')
+          if (!out.ok || a < 0 || b <= a) {
+            return send(400, { ok: false, error: out.error || txt.slice(0, 300) })
+          }
+          const data = JSON.parse(txt.slice(a, b + 1))
+          send(200, { ok: true, notes: data.notes || [], count: data.count || 0 })
+        } catch (error) {
+          send(400, { ok: false, error: String(error && error.message || error) })
+        }
+      },
+    }), 'getnote: lecture-notes route')
 
     // 13) 合并：POST /plugins/getnote/merge
     //
