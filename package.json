@@ -1,11 +1,11 @@
 {
-  "name": "dshplug",
+  "name": "dswp-plugin",
   "version": "0.0.0",
   "private": true,
   "description": "本仓库是多个 DSH 插件的 monorepo（扁平布局）。这个根 package.json 只是标记文件：每个插件在自己的子目录里各有独立 package.json，安装时用 dsh plugin add github:<owner>/<repo>#path:/<子目录>。本文件不发布、不承载依赖。",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/mengfanchun2017/dshplug.git"
+    "url": "https://github.com/mengfanchun2017/dswp-plugin.git"
   }
 }

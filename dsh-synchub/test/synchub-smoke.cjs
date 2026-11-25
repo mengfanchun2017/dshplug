@@ -258,13 +258,11 @@ const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
   assert.ok(!clientSrc.includes('const saveRemotes'),
     'bug2 回归：侧边栏不得再有 saveRemotes（配置写入只允许在设置页一处）');
   assert.ok(clientSrc.includes('const doSave'), '设置页必须保留唯一的保存实现 doSave');
-  /* bug2 的实质防线：只 PATCH channels 时，其他字段必须原封不动（用真实 mergeConfig）。 */
+  /* bug2 的实质防线：只 PATCH remote 时，其他字段必须原封不动（用真实 mergeConfig）。 */
   const partial = idx.__test.mergeConfig(
-    { machine: 'T', workspaceRoot: 'C:\\dsh', workspaceMap: [{ name: 'dshplug', path: 'C:\\dsh\\dshplug' }],
-      channels: { config: { remote: 'https://x/old', enabled: true }, sessions: { remote: 'https://x/sess', enabled: true } }, surfaces: {} },
-    { channels: { config: { remote: 'https://x/new' } } });
-  assert.equal(partial.channels.config.remote, 'https://x/new', '目标字段应更新');
-  assert.equal(partial.channels.sessions.remote, 'https://x/sess', '未提交的通道应保持原值');
+    { machine: 'T', workspaceRoot: 'C:\\dsh', workspaceMap: [{ name: 'dshplug', path: 'C:\\dsh\\dshplug' }], remote: 'https://x/old', surfaces: {} },
+    { remote: 'https://x/new' });
+  assert.equal(partial.remote, 'https://x/new', '目标字段应更新');
   assert.equal(partial.workspaceMap.length, 1, 'bug2 回归：局部 PATCH 不得清空 workspaceMap');
   assert.equal(partial.machine, 'T', '局部 PATCH 不得改动 machine');
 

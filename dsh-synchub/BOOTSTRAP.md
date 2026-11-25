@@ -55,7 +55,7 @@
 # 目标：C:\dsh\dshplug 存在且是 git 仓库
 New-Item -ItemType Directory -Path 'C:\dsh' -Force | Out-Null
 cd C:\dsh
-git clone https://github.com/mengfanchun2017/dshplug.git dshplug
+git clone https://github.com/mengfanchun2017/dswp-plugin.git dshplug
 ```
 
 **验证**（应该输出 `dshplug` 和若干文件名）：
@@ -455,13 +455,13 @@ Invoke-RestMethod http://127.0.0.1:<当前端口>/api/dsh-synchub/preflight | Co
 DSH 官方入口 **设置 → 插件 → 添加插件**（dsh-market / 插件管理器），填：
 
 ```text
-https://github.com/mengfanchun2017/dshplug#path:dsh-synchub
+https://github.com/mengfanchun2017/dswp-plugin#path:dsh-synchub
 ```
 
 命令行等价：
 
 ```powershell
-dsh plugin add https://github.com/mengfanchun2017/dshplug#path:dsh-synchub
+dsh plugin add https://github.com/mengfanchun2017/dswp-plugin#path:dsh-synchub
 ```
 
 - **必须带 `#path:dsh-synchub`**：dshplug 是多插件 monorepo，仓库根不是 bundle，不指子目录会报「没有声明组合包」。

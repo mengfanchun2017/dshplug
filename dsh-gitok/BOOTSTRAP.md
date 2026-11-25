@@ -83,7 +83,7 @@ then fully quit it before running dsh plugin --profile desktop.
 设置 → 插件 → 添加插件
   → 在「包名或地址」里粘贴整行（含 #path: 部分）：
 
-github:mengfanchun2017/dshplug#path:/dsh-gitok
+github:mengfanchun2017/dswp-plugin#path:/dsh-gitok
 ```
 
 装完会提示「已安装，请重启 DSH 加载它」—— **完全退出再打开**。
@@ -93,7 +93,7 @@ github:mengfanchun2017/dshplug#path:/dsh-gitok
 
 ```powershell
 # 引号不能省：spec 里带 #，PowerShell 裸写会把 # 之后当注释截掉
-dsh plugin --profile desktop add 'github:mengfanchun2017/dshplug#path:/dsh-gitok'
+dsh plugin --profile desktop add 'github:mengfanchun2017/dswp-plugin#path:/dsh-gitok'
 ```
 
 - `--profile desktop` 是桌面应用的 profile；纯 CLI 用户一般用 `--profile web`，按自己的改。
@@ -103,7 +103,7 @@ dsh plugin --profile desktop add 'github:mengfanchun2017/dshplug#path:/dsh-gitok
 
 ```powershell
 & "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd" `
-    plugin --profile desktop add 'github:mengfanchun2017/dshplug#path:/dsh-gitok'
+    plugin --profile desktop add 'github:mengfanchun2017/dswp-plugin#path:/dsh-gitok'
 ```
 
 三个常见错误改法：
@@ -119,7 +119,7 @@ dsh plugin --profile desktop add 'github:mengfanchun2017/dshplug#path:/dsh-gitok
 ```powershell
 # A) 依赖声明与 bundle 列表里都要有它（两者是不同东西，缺一不可）
 Get-Content "$env:USERPROFILE\.dsh\profiles\desktop\package.json"
-#   dependencies → "dsh-gitok": "github:mengfanchun2017/dshplug#path:/dsh-gitok"
+#   dependencies → "dsh-gitok": "github:mengfanchun2017/dswp-plugin#path:/dsh-gitok"
 #   dsh.profile.bundles → 数组里有 "dsh-gitok"
 
 # B) 装下来的文件数（实测 17 个）
@@ -629,9 +629,9 @@ OAuth 那条路做不到 —— 详见 ADR-014 的 v0.3.11 补遗。
 ```text
 # ① 装插件（只需一次）—— 给地址，不要去 clone
 #    A) 图形界面：设置 → 插件 → 添加插件，粘这一行：
-#       github:mengfanchun2017/dshplug#path:/dsh-gitok
+#       github:mengfanchun2017/dswp-plugin#path:/dsh-gitok
 #    B) 或命令行：
-#       dsh plugin --profile desktop add 'github:mengfanchun2017/dshplug#path:/dsh-gitok'
+#       dsh plugin --profile desktop add 'github:mengfanchun2017/dswp-plugin#path:/dsh-gitok'
 #    前置：桌面版已打开过一次并完全退出（否则会报 requireDesktopProfile）
 #    装完完全退出 DSH 再打开
 ```
@@ -730,7 +730,7 @@ CLI 不许凭空造一个。实测（把 `DSH_HOME` 指到空目录再跑 `add`�
 设置 → 插件 → 添加插件
   → 在「包名或地址」里粘贴（整行，含 #path: 部分）：
 
-github:mengfanchun2017/dshplug#path:/dsh-gitok
+github:mengfanchun2017/dswp-plugin#path:/dsh-gitok
 ```
 
 装完界面会提示「已安装，请重启 DSH 加载它」—— **按提示完全退出再打开**。
@@ -745,7 +745,7 @@ dsh --version
 
 # 不在 PATH 里（提示「无法将 dsh 项识别为 cmdlet」）就直接用完整路径：
 & "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd" `
-    plugin --profile desktop add 'github:mengfanchun2017/dshplug#path:/dsh-gitok'
+    plugin --profile desktop add 'github:mengfanchun2017/dswp-plugin#path:/dsh-gitok'
 ```
 
 **引号不能省**：spec 里带 `#`，PowerShell 里裸写会把 `#` 之后当注释截掉，
@@ -759,7 +759,7 @@ dsh --version
 ```powershell
 # ① 依赖声明与 bundle 列表里都要有它（两者是不同的东西，缺一不可）
 Get-Content "$env:USERPROFILE\.dsh\profiles\desktop\package.json"
-#   dependencies → "dsh-gitok": "github:mengfanchun2017/dshplug#path:/dsh-gitok"
+#   dependencies → "dsh-gitok": "github:mengfanchun2017/dswp-plugin#path:/dsh-gitok"
 #   dsh.profile.bundles → 数组里有 "dsh-gitok"
 
 # ② 包内容完整（git 安装取源码，实测 17 个文件）
@@ -773,7 +773,7 @@ Get-Content "$env:USERPROFILE\.dsh\profiles\desktop\package.json"
 只有想在 B 上也改代码时才 clone：
 
 ```powershell
-git clone https://github.com/mengfanchun2017/dshplug.git C:\dsh\dw-plugin
+git clone https://github.com/mengfanchun2017/dswp-plugin.git C:\dsh\dw-plugin
 & C:\dsh\dw-plugin\install.ps1 -Only dsh-gitok
 ```
 
@@ -829,10 +829,10 @@ git clone https://github.com/mengfanchun2017/dshplug.git C:\dsh\dw-plugin
 ```powershell
 # ── 第 1 步：装插件（B 上只需一次，详见 §9A.0）──────
 # 全新 B 上没有仓库，所以不是 install.ps1，而是：
-#   设置 → 插件 → 添加插件 → 粘 github:mengfanchun2017/dshplug#path:/dsh-gitok
+#   设置 → 插件 → 添加插件 → 粘 github:mengfanchun2017/dswp-plugin#path:/dsh-gitok
 #
 # 命令行写法（= 号）：
-dsh plugin --profile desktop add 'github:mengfanchun2017/dshplug#path:/dsh-gitok'
+dsh plugin --profile desktop add 'github:mengfanchun2017/dswp-plugin#path:/dsh-gitok'
 # → 然后完全退出 DSH 再打开（首次装 dsh.client 必须重启，刷新页面不够）
 ```
 
@@ -863,7 +863,7 @@ dsh plugin --profile desktop add 'github:mengfanchun2017/dshplug#path:/dsh-gitok
 ```powershell
 # ── 第 4 步：自己在 PowerShell 里验证一次（不靠插件）──
 # 插件说 OK 是一回事，git 真能用是另一回事，两者都要看：
-git ls-remote https://github.com/mengfanchun2017/dshplug.git HEAD
+git ls-remote https://github.com/mengfanchun2017/dswp-plugin.git HEAD
 # 能输出一行 <sha>\tHEAD 就成了
 ```
 
@@ -908,7 +908,7 @@ for h in github.com gist.github.com; do
 done
 
 # ⑤ 验收（必须真跑通，别只看配置写对了）
-git ls-remote https://github.com/mengfanchun2017/dshplug.git HEAD
+git ls-remote https://github.com/mengfanchun2017/dswp-plugin.git HEAD
 ```
 
 **也可以不手打**，让插件代劳（前提是插件已装进 B 的 DSH，且 B 的 WSL 在 `targets` 里）：

@@ -171,40 +171,33 @@ advisory 项全部折叠在「明细与整洁项」里，**不进一键修复**�
 
 ---
 
-## 2. 两种仓库模式：单仓库 / 双仓库
+## 2. 唯一仓库：dsh-msynchub
 
-`config.mode` 决定用哪种。**默认 `split`（双仓库）**，老配置不改就能继续用；
-想要「只填一个地址」就切到 `single`（ADR-036，0.10.0 新增）。
+**一个仓库装下所有 DSH 状态**（ADR-037，0.11.0 起为唯一模式，不再有双仓库/分组开关）。
 
-| 模式 | 物理仓库 | 配置面 | 适合 |
-|---|---|---|---|
-| `split`（默认） | 两个：`repos/config`、`repos/sessions` | 两个地址 + 两个开关 | 想要「一个坏了另一个能救」的隔离 |
-| `single` | 一个：`repos/all` | **一个地址 + 两个分组开关** | 数据量不大、不想管两个仓库 |
+| 项 | 值 |
+|---|---|
+| 远端 | `cfg.remote` 一个地址（例如 `https://github.com/<你>/dsh-msynchub`） |
+| 本地工作副本 | `$DSH_HOME/dsh-synchub/repos/all/` |
+| 镜像目录 | `repos/all/dsh-home/`（= `$DSH_HOME` 的镜像） |
+| 仓库根 | 一个 `README.md`（插件自动生成，解释每个目录） |
 
-### 单仓库模式（`single`）
+### 仓库长什么样
 
-一个物理仓库、一个 `cfg.remote`；`config` / `sessions` 变成**逻辑分组**，
-`channels.config.enabled` / `channels.sessions.enabled` 两个开关决定同步哪几组：
+```
+dsh-msynchub/
+├─ README.md                 ← 插件自动生成：这个仓库是什么、目录怎么读
+└─ dsh-home/                 ← $DSH_HOME 的镜像（路径一一对应）
+   ├─ sessions/              ← 会话日志（zstd；子目录名 = 工作区绝对路径编码）
+   ├─ storages/              ← 工作区登记表 workspace.json + 投影缓存
+   ├─ attachments/           ← 附件池（sha256 内容寻址）
+   ├─ skills/                ← 技能文件本体
+   ├─ profiles/<profile>/    ← DSH 配置层（cordis*.yml，不含密钥）
+   └─ AGENTS.md              ← 用户全局规则
+```
 
-- 开「配置组」= 技能库 + 配置层 + 全局 `AGENTS.md`；
-- 开「会话组」= 会话记录 + 工作区登记表 + 附件。
-
-两组的文件顶层路径不冲突（`sessions/` `storages/` `attachments/` `skills/` `profiles/` `AGENTS.md`），
-所以能共存于同一个 `payload/`。设置页切到「单仓库」后只填一个地址 + 两个勾选。
-
-### 双仓库模式（`split`）两个通道各自独立
-
-| 通道 | 装什么 | 为什么分开 |
-|---|---|---|
-| `config` | 技能文件、`profiles/<p>/cordis*.yml`、全局 `AGENTS.md` | 体积小、改动少、冲突要人看 |
-| `sessions` | 会话日志、`storages`（工作区登记表）、`attachments` | 体积大、写入频繁，独立历史才不会把配置提交冲爆 |
-
-两个通道**互相独立**：一个落后不影响另一个推送，一个坏了另一个照样能救。
-### 为什么不放一个仓库
-
-会话日志每次对话都在长，如果和配置同仓，
-「我就想改个设置」也会连带产生一条几十 MB 的提交，
-`git log` 变得不可读，回滚配置时还得挑拣。
+> 旧版曾用 `payload/` 这个名字，0.11.0 已统一改为 `dsh-home/`；
+> 插件首次运行时会自动把旧的 `payload/` 迁过来，不用手动搬。
 
 ### 为什么用 Git 而不是自己写 manifest
 
@@ -696,7 +689,7 @@ synchub 地址：<remote>#path:dsh-synchub
 等价命令：    dsh plugin add <remote>#path:dsh-synchub
 ```
 
-本机实测（本仓库当前 remote）：`https://github.com/mengfanchun2017/dshplug#path:dsh-synchub`。
+本机实测（本仓库当前 remote）：`https://github.com/mengfanchun2017/dswp-plugin#path:dsh-synchub`。
 如果仓库没配 remote，面板会**直接说“无法给出 git 安装地址，请用本机脚本”**，不会编一个。
 
 **为什么要带 `#path:dsh-synchub`**：dshplug 是多插件 monorepo，**仓库根不是 bundle**；
@@ -709,7 +702,7 @@ synchub 地址：<remote>#path:dsh-synchub
 
 ```powershell
 # 1. 克隆整个插件仓到与单位机相同的位置（install.ps1 依赖这个布局）
-git clone https://github.com/mengfanchun2017/dshplug.git C:\dsh\dshplug
+git clone https://github.com/mengfanchun2017/dswp-plugin.git C:\dsh\dshplug
 # 2. 装本插件（junction + link，与单位机完全一致）
 & C:\dsh\dshplug\install.ps1 -Only dsh-synchub
 # 3. 完全重启 DSH，然后 Msynchub 面板里点「拉取并应用」把数据拉下来

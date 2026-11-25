@@ -48,8 +48,8 @@ function ok(name, cond, extra) {
     const st = await t.channelState(ch, cfg, {});
     // channelState 不返回 dir（它不向外暴露路径），自己算同一个路径。
     const dir = path.join(os.homedir(), '.dsh', 'dsh-synchub', 'repos', ch);
-    const realMissing = !fs.existsSync(path.join(dir, 'payload'));
     const realMissing = !fs.existsSync(path.join(dir, 'dsh-home'));
+    ok(`${ch}: payloadMissing=${st.payloadMissing} 与磁盘一致（实际缺失=${realMissing}）`,
       st.payloadMissing === realMissing);
   }
 

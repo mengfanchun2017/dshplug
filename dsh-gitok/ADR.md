@@ -743,7 +743,7 @@ smoke-route.mjs     → exit 1        （FAIL: 期望 200，实际 500）
 ## ADR-015 · 分发走「公开 git 直装 + 社区索引」，不发布到 npm
 
 **结论（2026-11-20，v0.4.0）**：本插件的官方分发路径确定为
-`dsh plugin add github:mengfanchun2017/dshplug#path:/dsh-gitok`，
+`dsh plugin add github:mengfanchun2017/dswp-plugin#path:/dsh-gitok`，
 并提 PR 收录进社区索引 `awesome-dsh-plugin`。**不**发布到 npm，`"private": true` 保留。
 
 **理由**：

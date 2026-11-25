@@ -439,12 +439,12 @@ v0.1.0 时**没有** `lib/client.js`，是纯模型工具插件。v0.2.0 新增�
 
 | 场景 | 装法 | 需要本地有仓库吗 |
 |---|---|---|
-| 另一台机器 / 给别人装 / 从零装 | `dsh plugin --profile desktop add 'github:mengfanchun2017/dshplug#path:/dsh-gitok'` | **不需要** |
+| 另一台机器 / 给别人装 / 从零装 | `dsh plugin --profile desktop add 'github:mengfanchun2017/dswp-plugin#path:/dsh-gitok'` | **不需要** |
 | 在本机改代码（要 `link:` 热更新） | `& C:\dsh\dw-plugin\install.ps1 -Only dsh-gitok` | 需要 |
 
 ```powershell
 # 【要给一台新 DSH 装】给地址就行，不要去 clone（详见 §6.6 与 BOOTSTRAP §1.1）
-dsh plugin --profile desktop add 'github:mengfanchun2017/dshplug#path:/dsh-gitok'
+dsh plugin --profile desktop add 'github:mengfanchun2017/dswp-plugin#path:/dsh-gitok'
 # → 完全退出 DSH 再打开
 
 # 【本机开发装】仓库已在本机时才适用
@@ -493,14 +493,14 @@ $node = "$env:USERPROFILE\AppData\Local\Programs\DeepSeek Harness\resources\runt
 图形界面里的「包名或地址」就填这一行（**整行，含 `#path:` 部分**）：
 
 ```text
-github:mengfanchun2017/dshplug#path:/dsh-gitok
+github:mengfanchun2017/dswp-plugin#path:/dsh-gitok
 ```
 
 命令行版：
 
 ```powershell
 # 引号不能省：spec 里带 #，PowerShell 裸写会把 # 之后当注释截掉
-dsh plugin --profile desktop add 'github:mengfanchun2017/dshplug#path:/dsh-gitok'
+dsh plugin --profile desktop add 'github:mengfanchun2017/dswp-plugin#path:/dsh-gitok'
 ```
 
 - `--profile desktop` 是本机 profile 名；CLI 用户一般用 `--profile web`，按自己的改。
@@ -620,7 +620,7 @@ WSL 里的 `127.0.0.1` **不是** Windows 的 `127.0.0.1`。要么让 WSL 走 NA
 
 ```bash
 # 验收：能列出 ref 且 GCM 有弹窗/无报错，才算通
-git ls-remote https://github.com/mengfanchun2017/dshplug.git HEAD
+git ls-remote https://github.com/mengfanchun2017/dswp-plugin.git HEAD
 ```
 
 ### 6.7.3 各 Agent 的具体做法
@@ -1247,7 +1247,7 @@ $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\nod
 cd C:\dsh\dw-plugin
 
 # 方式 B：新机器 clone（目录名可自选，不需要和旧机器一致）
-git clone https://github.com/mengfanchun2017/dshplug.git C:\dsh\dw-plugin
+git clone https://github.com/mengfanchun2017/dswp-plugin.git C:\dsh\dw-plugin
 
 # clone 完跑一次，把 profile 里的 link: 指向新位置（本机开发形态）
 & .\install.ps1 -Only dsh-gitok -Force

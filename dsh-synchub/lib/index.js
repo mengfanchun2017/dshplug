@@ -34,7 +34,7 @@ const execFileAsync = promisify(execFile);
 
 const name = 'dsh-synchub';
 const inject = ['webServer'];
-const VERSION = '0.10.0';
+const VERSION = '0.11.0';
 /* 分支不能写死。远端仓库可能是 master（GitHub 旧默认）也可能是 main，
    写死一个就会在已有仓库上推出一个**平行的空历史分支**。
    优先级：config.channels[ch].branch → 远端 HEAD 指向的分支 → DEFAULT_BRANCH。 */
@@ -1110,6 +1110,7 @@ function belongsTo(surface, rel) {
 /* -------------------------------------------------------------- 动作：stage */
 
 async function stageChanges(cfg, opts = {}) {
+  ensureRepoScaffold(repoDir('all', cfg));
   const diff = await diffLocalToPayload(cfg);
   const written = [];
   const deleted = [];

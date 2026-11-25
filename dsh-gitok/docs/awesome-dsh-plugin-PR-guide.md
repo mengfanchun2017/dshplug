@@ -45,7 +45,7 @@
 | 仓库**公开** | ✅ HTTP 200 | |
 | 仓库**存在 ≥1 天** | ✅ 2026-11-11 建，已 9 天 | `MIN_AGE_DAYS = 1` |
 | **提交数门槛** | ✅ 无门槛 | 旧版有 `MIN_COMMITS = 10`，**现已删除**——别为凑数去灌提交 |
-| 文件名 = slug | ✅ `mengfanchun2017__dshplug--dsh-gitok.yml` | `slugFor()`：`owner__repo--sub-路径` |
+| 文件名 = slug | ✅ `mengfanchun2017__dswp-plugin--dsh-gitok.yml` | `slugFor()`：`owner__repo--sub-路径` |
 | `category` 在白名单内 | ✅ `security` | 23 个可选值之一 |
 | `description.en` 必填且单行 | ✅ 500 字符单行 | 中文可选（本文件已带） |
 | 描述里含 `: ` 必须加引号 | ✅ 已用单引号包裹 | 否则 YAML 解析失败 |
@@ -68,14 +68,14 @@
 在**你 fork 的仓库**里点 `Add file` → `Create new file`，路径填：
 
 ```
-data/plugins/mengfanchun2017__dshplug--dsh-gitok.yml
+data/plugins/mengfanchun2017__dswp-plugin--dsh-gitok.yml
 ```
 
 内容 = 本目录 `awesome-dsh-plugin-entry.yml` 的内容：
 
 ```yaml
-url: https://github.com/mengfanchun2017/dshplug/tree/master/dsh-gitok
-name: mengfanchun2017/dshplug#dsh-gitok
+url: https://github.com/mengfanchun2017/dswp-plugin/tree/master/dsh-gitok
+name: mengfanchun2017/dswp-plugin#dsh-gitok
 category: security
 description:
   en: '...上一步文件里的英文...'
@@ -89,7 +89,7 @@ description:
 
 ### 2.3 提 PR
 
-标题建议：`Add mengfanchun2017/dshplug#dsh-gitok (git credential management)`
+标题建议：`Add mengfanchun2017/dswp-plugin#dsh-gitok (git credential management)`
 
 描述里写清三件事（提高过审率，审核者要看源码核对描述）：
 1. 插件做什么 —— 把 git 凭据收敛到 Windows 凭据管理器，WSL 借 interop
@@ -128,7 +128,7 @@ description:
 1. `sync-readme.yml` 重新生成英/中两份 README —— **所以千万别手动改 README**
 2. `build-site.yml`（每天 02:23 UTC）重建站点并发布到 npm 的 `dsh-plugin-catalog`
 3. 站点会自动生成安装命令：
-   `dsh plugin --profile web add github:mengfanchun2017/dshplug#path:/dsh-gitok`
+   `dsh plugin --profile web add github:mengfanchun2017/dswp-plugin#path:/dsh-gitok`
    —— 这正好就是我 README §6.6 里写的命令，两边一致。
 
 ---
