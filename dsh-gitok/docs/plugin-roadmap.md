@@ -54,7 +54,7 @@ credentialStore: (default = wincredman)
 http.proxy:      http://127.0.0.1:7897
 ```
 
-`credential.helper=manager` 配在 **MinGit 的系统级 gitconfig**，用户级本来就不该有；报告只查了用户级。`gitok_verify` 实测 Windows 端点 `https://github.com/mengfanchun2017/dswp-plugin.git` → `1e31aed3...` ✅。
+`credential.helper=manager` 配在 **MinGit 的系统级 gitconfig**，用户级本来就不该有；报告只查了用户级。`gitok_verify` 实测 Windows 端点 `https://github.com/mengfanchun2017/dshwp-plugin.git` → `1e31aed3...` ✅。
 
 > **⇒ 插件需求（Init 层）**：`gitok_bootstrap` 的环境自检**必须同时读系统级与用户级 gitconfig**
 > （`git config --list --show-origin`），不能只看 `~/.gitconfig`；否则会在一台其实已经配好的机器上

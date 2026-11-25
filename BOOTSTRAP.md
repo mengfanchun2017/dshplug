@@ -5,7 +5,7 @@
 > 本文是**操作手册**；设计理由看 [`dsh-synchub/ADR.md`](<dsh-synchub/ADR.md>)，插件总览看 [`README.md`](<README.md>)。
 >
 > 环境基线（写死，避免以后腐烂）：Windows / PowerShell 5.1+ / DSH `0.2.2-rc.1`（`desktop` profile）/
-> 仓库根 `C:\dsh\dshplug` / 远端 `github.com/mengfanchun2017/dswp-plugin.git` 分支 `master`。
+> 仓库根 `C:\dsh\dshplug` / 远端 `github.com/mengfanchun2017/dshwp-plugin.git` 分支 `master`。
 > 日期：2026-11-12。
 
 ---
@@ -388,7 +388,7 @@ Get-Process -Id $pid0 | Select-Object Id, StartTime
 
 | 项 | 值 |
 |---|---|
-| 分支 / 远端 | `master` → `https://github.com/mengfanchun2017/dswp-plugin.git`（GitHub 上已改名为 `dshwp-plugin`，本地目录仍是 `C:\dsh\dshplug`） |
+| 分支 / 远端 | `master` → `https://github.com/mengfanchun2017/dshwp-plugin.git`（GitHub 上已改名为 `dshwp-plugin`，本地目录仍是 `C:\dsh\dshplug`） |
 | 基线仓库 | `C:\dsh\dw-base`，分支 `main`，**尚未建远端**（本地 `7bf9e2d`，128 文件 / 1.28 MB） |
 | 认证 | GCM + Windows 凭据管理器（`gitok_bootstrap` 一键配）。不再手工贴 PAT，见第 0 步 ④ |
 | 同步中心 | `C:\Users\franc\.dsh\dsh-synchub\`（`config.json` / `payload/` / `state.json` / `repos/{config,sessions}` / `backups/`） |

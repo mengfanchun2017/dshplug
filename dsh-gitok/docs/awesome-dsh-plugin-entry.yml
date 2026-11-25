@@ -1,5 +1,5 @@
-url: https://github.com/mengfanchun2017/dswp-plugin/tree/master/dsh-gitok
-name: mengfanchun2017/dswp-plugin#dsh-gitok
+url: https://github.com/mengfanchun2017/dshwp-plugin/tree/master/dsh-gitok
+name: mengfanchun2017/dshwp-plugin#dsh-gitok
 category: security
 description:
   en: 'Git credential management for DSH: it inspects, logs in, verifies, lists and revokes git credentials, then consolidates them into the Windows Credential Manager (DPAPI-encrypted, unusable off the machine) so WSL borrows them over interop instead of storing a plaintext token. Nine gitok_* tools plus a settings panel with a four-state status model (ok/warn/error/unknown), six continuous monitors, and a five-step dependency chain for WSL interop. Pure ESM, no build step and no runtime dependencies.'

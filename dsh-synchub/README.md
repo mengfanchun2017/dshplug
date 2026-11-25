@@ -722,7 +722,7 @@ synchub 地址：<remote>#path:dsh-synchub
 等价命令：    dsh plugin add <remote>#path:dsh-synchub
 ```
 
-本机实测（本仓库当前 remote）：`https://github.com/mengfanchun2017/dswp-plugin#path:dsh-synchub`。
+本机实测（本仓库当前 remote）：`https://github.com/mengfanchun2017/dshwp-plugin#path:dsh-synchub`。
 如果仓库没配 remote，面板会**直接说“无法给出 git 安装地址，请用本机脚本”**，不会编一个。
 
 **为什么要带 `#path:dsh-synchub`**：dshplug 是多插件 monorepo，**仓库根不是 bundle**；
@@ -735,7 +735,7 @@ synchub 地址：<remote>#path:dsh-synchub
 
 ```powershell
 # 1. 克隆整个插件仓到与单位机相同的位置（install.ps1 依赖这个布局）
-git clone https://github.com/mengfanchun2017/dswp-plugin.git C:\dsh\dshplug
+git clone https://github.com/mengfanchun2017/dshwp-plugin.git C:\dsh\dshplug
 # 2. 装本插件（junction + link，与单位机完全一致）
 & C:\dsh\dshplug\install.ps1 -Only dsh-synchub
 # 3. 完全重启 DSH，然后 Msynchub 面板里点「拉取并应用」把数据拉下来

@@ -32,7 +32,7 @@
 
 | | A. git 地址安装 | B. 本地目录 link: 安装 |
 |---|---|---|
-| 怎么做 | 设置 → 插件 → 添加插件，填 `github:mengfanchun2017/dswp-plugin#path:/dsh-synchub` | 先 clone 到固定路径，再 `install.ps1 -Only dsh-synchub` |
+| 怎么做 | 设置 → 插件 → 添加插件，填 `github:mengfanchun2017/dshwp-plugin#path:/dsh-synchub` | 先 clone 到固定路径，再 `install.ps1 -Only dsh-synchub` |
 | 适合谁 | 只想装这一个插件的第三方 | **自己的每一台机器**（0.6.0 起推荐；含开发机） |
 | 拿到什么 | 远端当前提交的快照 | 指向本地源码的 Junction（改源码即时生效） |
 | 升级 | 界面「更新」或卸载后用同一地址重装 | `git pull` 一次即升级（无需重装；改了 index.js 完全重启） |
@@ -41,10 +41,10 @@
 **本插件的 git 地址（整行复制）**：
 
 ```text
-github:mengfanchun2017/dswp-plugin#path:/dsh-synchub
+github:mengfanchun2017/dshwp-plugin#path:/dsh-synchub
 ```
 
-等价的完整写法：`https://github.com/mengfanchun2017/dswp-plugin#path:dsh-synchub`（实测都 `exit 0`）。
+等价的完整写法：`https://github.com/mengfanchun2017/dshwp-plugin#path:dsh-synchub`（实测都 `exit 0`）。
 
 **为什么 git 地址要带 `#path:dsh-synchub`**：dshplug 是多插件 monorepo，仓库根不是 bundle；
 不指子目录，DSH 在根上找不到 `dsh.bundle.patch`，会报「没有声明组合包」。
@@ -67,7 +67,7 @@ github:mengfanchun2017/dswp-plugin#path:/dsh-synchub
 # 目标：C:\dsh\dw-plugin 存在且是 git 仓库
 New-Item -ItemType Directory -Path 'C:\dsh' -Force | Out-Null
 cd C:\dsh
-git clone https://github.com/mengfanchun2017/dswp-plugin.git dw-plugin
+git clone https://github.com/mengfanchun2017/dshwp-plugin.git dw-plugin
 ```
 
 **验证**（应该输出 `dw-plugin` 和若干文件名）：
@@ -123,7 +123,7 @@ test -f C:\dsh\dw-plugin\list.json; "list.json 存在: $?"
 
 ```powershell
 # 新机器（没有本地仓库）—— 用 git 地址装，详见 §6.1
-dsh plugin --profile desktop add 'github:mengfanchun2017/dswp-plugin#path:/dsh-gitok'
+dsh plugin --profile desktop add 'github:mengfanchun2017/dshwp-plugin#path:/dsh-gitok'
 
 # 本机开发（已有 clone 的仓库，路径按实际改）
 & "C:\dsh\dw-plugin\install.ps1" -Only dsh-gitok
@@ -473,20 +473,20 @@ Invoke-RestMethod http://127.0.0.1:<当前端口>/api/dsh-synchub/preflight | Co
 DSH 官方入口 **设置 → 插件 → 添加插件**（dsh-market / 插件管理器），填：
 
 ```text
-github:mengfanchun2017/dswp-plugin#path:/dsh-synchub
+github:mengfanchun2017/dshwp-plugin#path:/dsh-synchub
 ```
 
 命令行等价（**必须用单引号**：spec 里带 `#`，PowerShell 裸写会把 `#` 之后当注释截掉）：
 
 ```powershell
-dsh plugin --profile desktop add 'github:mengfanchun2017/dswp-plugin#path:/dsh-synchub'
+dsh plugin --profile desktop add 'github:mengfanchun2017/dshwp-plugin#path:/dsh-synchub'
 ```
 
 `dsh` 不在 PATH 时用完整路径：
 
 ```powershell
 & "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd" `
-    plugin --profile desktop add 'github:mengfanchun2017/dswp-plugin#path:/dsh-synchub'
+    plugin --profile desktop add 'github:mengfanchun2017/dshwp-plugin#path:/dsh-synchub'
 ```
 
 > 桌面版 profile 的前置条件：**先打开过 DSH 至少一次、再完全退出**，否则会报
@@ -503,13 +503,13 @@ dsh plugin --profile desktop add 'github:mengfanchun2017/dswp-plugin#path:/dsh-s
 新机器上通常两个一起装。**git 地址**（与本插件同一个仓库，只换子目录）：
 
 ```text
-github:mengfanchun2017/dswp-plugin#path:/dsh-gitok
+github:mengfanchun2017/dshwp-plugin#path:/dsh-gitok
 ```
 
 命令行等价：
 
 ```powershell
-dsh plugin --profile desktop add 'github:mengfanchun2017/dswp-plugin#path:/dsh-gitok'
+dsh plugin --profile desktop add 'github:mengfanchun2017/dshwp-plugin#path:/dsh-gitok'
 ```
 
 **两者分工**：Msynchub 管「把什么内容同步过去」，Mgitok 管「git 有没有权限推」。

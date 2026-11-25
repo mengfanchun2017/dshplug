@@ -588,7 +588,7 @@ $DSH_HOME\sessions\
 - **理由**：这五项都是「用户看得到但猜不到」的信息差；写进面板 + 文档 + 断言，比口头解释更持久。
 - **反面代价**：
   - 侧栏开关是「先注册再异步移除」，首帧可能闪一下侧栏项；换来的是不阻塞首屏。
-  - 安装卡写死了 `mengfanchun2017/dswp-plugin` 地址（本仓库唯一远端）；换仓库要改代码。
+  - 安装卡写死了 `mengfanchun2017/dshwp-plugin` 地址（本仓库唯一远端）；换仓库要改代码。
   - `#path:` 子目录安装依赖 pnpm 对该片段的支持，**本轮未在真机实测从 git 地址安装**（需重启 + 联网）。
 - **已否决的替代方案**：
   - 把 `#path:` 前端拼成可选，只给仓库根地址 → 否决：根不是 bundle，装必失败。
@@ -602,7 +602,7 @@ $DSH_HOME\sessions\
 - **日期**：2026-11-17
 - **状态**：已采纳（已实现，待真机重启验收）
 - **背景**：ADR-019 把安装卡做出来时留下了两个**自己也不满意**的毛病：① 仓库地址在代码里写死
-  `https://github.com/mengfanchun2017/dswp-plugin`，换仓库/改 remote 就要改代码；
+  `https://github.com/mengfanchun2017/dshwp-plugin`，换仓库/改 remote 就要改代码；
   ② 卡片里写了一句“当前远端 master 仍是旧版本”，这是**当时的事实**，但写死成文案后，
   一旦推送就会变成假话。这正是本仓库反复强调的“不要把没查当成查过”。
 - **结论**：
@@ -626,7 +626,7 @@ $DSH_HOME\sessions\
 - **验证**：`synchub-smoke.cjs` 增加两套断言——① 有 remote 时地址必须是 HTTPS `.git`、必须带 `#path:dsh-synchub`、且与 remote 同源；
   无 remote 时必须 `null`（不得编造）；② 版本只能 `same/differs/unknown`，`unknown` 时必须说明原因。
   另对**纯函数** `normalizeRemoteToHttps` 单独覆盖 8 种输入（scp、git+、ssh://、尾斜杠、空串、本地路径等）。
-  真实 remote 实测：`https://github.com/mengfanchun2017/dswp-plugin.git` → `https://github.com/mengfanchun2017/dswp-plugin#path:dsh-synchub`，
+  真实 remote 实测：`https://github.com/mengfanchun2017/dshwp-plugin.git` → `https://github.com/mengfanchun2017/dshwp-plugin#path:dsh-synchub`，
   与 `git@github.com:…` 写法收敛到同一结果。四份 smoke + `node --check` 全绿。
 
 ---

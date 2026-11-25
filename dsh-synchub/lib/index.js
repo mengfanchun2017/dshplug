@@ -4059,7 +4059,7 @@ async function tidyMemoryNow(reason) {
       ? HOST_CTX.reflect.get('llm', false) : null;
     if (!llm) return { ok: false, error: '该 profile 没有可用的 llm 服务，跳过整理' };
     const route = await resolveLlmRoute(llm, cfg);
-    if (!route.provider || !route.model) return { ok: false, error: '无法确定 provider/model' };
+    if (!route.provider || !route.model) return { ok: false, error: '无法确定 provider/model（providers=' + (route.providers || []).join(',') + '）' };
     const all = await realWorkspaces();
     if (!all.ok) return { ok: false, error: all.error };
     const list = Array.isArray(m.workspaces) ? m.workspaces : [];
@@ -4137,23 +4137,30 @@ async function resolveLlmRoute(llm, cfg) {
   const m = memoryConfigOf(cfg);
   let provider = String(m.provider || '').trim();
   let model = String(m.model || '').trim();
+  let providers = [];
   try {
-    if (!provider && typeof llm.listProviders === 'function') {
-      const ps = llm.listProviders() || [];
-      const first = ps[0];
-      provider = typeof first === 'string' ? first : (first && (first.id || first.name)) || '';
+    if (typeof llm.listProviders === 'function') {
+      providers = (llm.listProviders() || []).map(x => (typeof x === 'string' ? x : (x && (x.id || x.name)) || '')).filter(Boolean);
     }
   } catch { /* 拿不到不抛 */ }
-  try {
-    if (!model && typeof llm.listModels === 'function') {
-      const ms = await llm.listModels(provider);
-      const arr = Array.isArray(ms) ? ms : ((ms && ms.models) || []);
-      const f = arr[0];
-      model = typeof f === 'string' ? f : (f && (f.id || f.name)) || '';
+  if (!provider && providers.length) provider = providers[0];
+  if (!model && typeof llm.listModels === 'function') {
+    const order = provider ? [provider, ...providers.filter(x => x !== provider)] : providers;
+    for (const pid of order) {
+      try {
+        const ms = await llm.listModels(pid);
+        const arr = Array.isArray(ms) ? ms : ((ms && (ms.models || ms.data)) || []);
+        if (arr.length) {
+          const f = arr[0];
+          provider = pid;
+          model = typeof f === 'string' ? f : (f && (f.id || f.name)) || '';
+          break;
+        }
+      } catch { /* 换下一个 */ }
     }
-  } catch { /* 拿不到不抛 */ }
-  return { provider, model };
-}
+  }
+  return { provider, model, providers };
+};
 
 async function summarizeWithLlm(llm, provider, model, messages) {
   const sys = { role: 'system', content: [{ type: 'text', text: '你是会话归档助手。把下面的对话整理成简洁 Markdown：只写确定的结论、决策与理由、待办、涉及的文件路径。不要编造。' }] };
@@ -4186,7 +4193,7 @@ async function archiveSessionById(sessionId) {
       ? HOST_CTX.reflect.get('llm', false) : null;
     if (!llm) return { ok: false, error: '该 profile 没有可用的 llm 服务，跳过总结', plan };
     const route = await resolveLlmRoute(llm, cfg);
-    if (!route.provider || !route.model) return { ok: false, error: '无法确定 provider/model（请在设置的记忆区填写）', plan };
+    if (!route.provider || !route.model) return { ok: false, error: '无法确定 provider/model（providers=' + (route.providers || []).join(',') + '，可在设置的记忆区手填）', plan };
     const summary = await summarizeWithLlm(llm, route.provider, route.model, t.messages);
     if (!summary) return { ok: false, error: '总结为空', plan };
     const block = `## ${new Date().toISOString().slice(0, 10)} 归档：${sessionId}\n\n- 工作区：${plan.title}\n- 模型：${route.provider}/${route.model}\n\n${summary}`;
