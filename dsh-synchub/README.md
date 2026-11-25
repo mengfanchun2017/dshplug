@@ -5,14 +5,13 @@
 
 > **三份文档分工**：本 [`README.md`](./README.md)=怎么用；[`BOOTSTRAP.md`](./BOOTSTRAP.md)=怎么做（安装/验证/排错/迁移/命令行）；[`ADR.md`](./ADR.md)=为什么（决策+反面代价+已否决方案）。详细调研在 [`docs/`](./docs/)。
 >
-> **0.11.0（ADR-037，设计中）**：把「插件清单」也纳入同步中心——备份只记名字（npm）与
-> 名字+位置（link），恢复「预览 → 确认 → 执行」，复用 config 仓库、带开关。本文以下章节描述的是
-> 已实现的 0.10.0；插件备份/恢复的落地细节以 ADR-037 为准。
+> **0.11.0（ADR-037）**：合并为**唯一仓库** `dsh-msynchub`——去掉模式切换与分组开关，只留一个 `cfg.remote`；
+> 镜像目录从 `payload/` 改为 `dsh-home/`，并自动生成仓库 `README.md`（打开仓库就能看懂）。
+> 旧 `dsh-config` 仓库已删除。本文以下章节描述的就是 0.11.0。
 
-0.10.0 是**单仓库模式版**（ADR-036）：设置页可选「单仓库」——一个地址、一个 `repos/all`、
-两个分组开关（配置组 / 会话组），不再需要建两个仓库、填两个地址。同时新增同步面
-`agentInstructions`，把**全局 `~/.dsh/AGENTS.md`** 纳入同步（工作区内的 AGENTS.md 仍归各工作区自己的
-git 管）。引擎与客户端都改成「按 `channelsOf(cfg)` 动态渲染」，双仓库模式保留为默认。
+0.10.0 是**单仓库模式版**（ADR-036，已被 0.11.0 取代）：曾提供「单仓库/双仓库」切换与两个分组开关。
+
+
 
 0.9.0 是**会话救援版**（ADR-034 收窄），只回答一个问题：**会话现在能不能打开。**
 
@@ -497,27 +496,20 @@ $DSH_HOME/dsh-synchub/
 ├─ config.json          ← 本机设置（不进任何通道，两台各设各的）
 ├─ hash-cache.json      ← mtime/size 指纹缓存，避免每次全量哈希
 ├─ repos/
-│  ├─ config/           ← 配置通道工作副本（payload/ 是镜像子树）
-│  └─ sessions/         ← 会话通道工作副本
+│  └─ all/              ← 唯一仓库工作副本（dsh-home/ 是 $DSH_HOME 镜像）
 └─ backups/<ts>/        ← 每次覆盖/删除的原文件
 ```
 
-payload 是镜像子树：`payload/sessions/...` 对应 `$DSH_HOME/sessions/...`。
-这样仓库根还能放 `.gitattributes`、`README` 等仓库自身的东西，不会和同步内容混在一起。
+`dsh-home/` 是镜像子树：`dsh-home/sessions/...` 对应 `$DSH_HOME/sessions/...`。
+这样仓库根还能放 `.gitattributes`、`README.md` 等仓库自身的东西，不会和同步内容混在一起。
 
 ### 配置项
 
 ```json
 {
   "machine": "<你的机器名>",
-  "mode": "split",
-  "remote": "",
+  "remote": "https://github.com/<你>/dsh-msynchub",
   "workspace": "C:\\dsh\\workspace1",
-  "channels": {
-    "config":   { "remote": "https://github.com/<you>/dsh-config.git",   "enabled": true },
-    "sessions": { "remote": "https://github.com/<you>/dsh-sessions.git", "enabled": true }
-  },
-  "surfaces": { "sessions": true, "storages": true, "attachments": true,
   "surfaces": { "sessions": true, "storages": true, "attachments": true,
                 "skills": true, "agentInstructions": true, "profileConfig": true, "profileManifest": false },
   "idlePushMinutes": 20,
@@ -596,17 +588,16 @@ payload 是镜像子树：`payload/sessions/...` 对应 `$DSH_HOME/sessions/...`
 ## 11. 首次配置
 
 ```powershell
-# 1. 两个私有仓库（各建一个，都私有）
-#    dsh-config   ← 配置通道
-#    dsh-sessions ← 会话通道
+# 1. 一个私有仓库（私有、空，不勾 README/.gitignore/License）
+#    建议叫 dsh-msynchub —— 所有 DSH 状态都进这一个仓库
 
 # 2. 装插件
-& "C:\dsh\dshplug\install.ps1" -Only dsh-synchub
+& "C:\dsh\dw-plugin\install.ps1" -Only dsh-synchub
 
-# 3. 完全退出 DSH 再打开，进 侧边栏「Msynchub」，在「先连上两个私有仓库」里直接填地址（也可在 设置 → Msynchub）
+# 3. 完全退出 DSH 再打开，进 设置 → Msynchub，在「① 必做：仓库地址」填地址
 
-# 4. 第一台：面板里「① 推送」建立基线
-# 5. 第二台：克隆到同一路径后装插件，面板里「① 拉取」接收基线
+# 4. 第一台：侧边栏点「立即同步」建立基线
+# 5. 其它机器：装插件后在设置里填同一地址，侧边栏点「拉取并应用」
 ```
 
 ### 认证
@@ -614,7 +605,7 @@ payload 是镜像子树：`payload/sessions/...` 对应 `$DSH_HOME/sessions/...`
 **Git 认证请你自己搞定，本插件不接收、不存储、不转发任何凭据。**
 
 本插件不预设你必须用哪种认证方式（HTTPS + PAT、GCM OAuth、SSH key 都行）；
-只要本机的 git 能读写你那两个私有仓库，Msynchub 就能用——它会按 **DSH 当前已经配通的方式**
+只要本机的 git 能读写那个私有仓库，Msynchub 就能用——它会按 **DSH 当前已经配通的方式**
 做一次真实连通性确认，不自己实现一套认证。
 
 > 推荐装 [`dsh-gitok`](../dsh-gitok/README.md)：它的「设置 → Mgitok」能一键初始化，
