@@ -3857,16 +3857,16 @@ async function pluginRestorePreview(cfg) {
   for (const p of manifest.plugins || []) {
     const cur = curByName.get(p.name);
     if (cur && cur.kind === p.kind) {
-      // 已装同类：link 还要确认目标目录真的在（目标没了等于要重新链接）。
+      // 已装同类：link 还要确认目标目录真的在（按 codeRepos 找，不写死路径）。
       if (p.kind === 'link') {
-        const exists = Boolean(cur.linkPath) && fs.existsSync(cur.linkPath);
-        if (!exists) { linkMissing.push({ ...p, linkPath: cur.linkPath || p.linkPath }); continue; }
+        const hit = await findLinkTarget(cfg, p.name, cur.linkPath || p.linkPath);
+        if (!hit) { linkMissing.push({ ...p, linkPath: cur.linkPath || p.linkPath }); continue; }
       }
       already.push(p.name); continue;
     }
     if (p.kind === 'link') {
-      const exists = Boolean(p.linkPath) && fs.existsSync(p.linkPath);
-      (exists ? addLink : linkMissing).push(p);
+      const hit = await findLinkTarget(cfg, p.name, p.linkPath);
+      (hit ? addLink : linkMissing).push(hit ? { ...p, linkPath: hit.path, via: hit.via } : p);
     } else if (p.kind === 'npm') {
       addNpm.push(p);
     }
@@ -3911,6 +3911,40 @@ async function resolvePnpmInvocation(cfg) {
   return null;
 }
 
+/**
+ * 为一个 link 插件找本地目标目录（ADR-038）。不写死路径：
+ *   1) 先看清单记的 linkPath（A 机位置，仅供参考）；
+ *   2) 再在用户配置的代码仓库（cfg.codeRepos）里按名字找，支持三级子目录
+ *      （例：dw-base/demo-rag/dsh-rag）；
+ *   3) 都没有 → null（恢复时跳过并提示）。
+ * 这样用户把仓库放在不同目录也能用，只要 codeRepos 配了。
+ */
+async function findLinkTarget(cfg, name, hint) {
+  if (hint && fs.existsSync(hint)) return { path: hint, via: 'manifest' };
+  const repos = codeRepoList(cfg).filter(r => r.enabled !== false && fs.existsSync(r.path));
+  const maxDepth = 3;
+  for (const r of repos) {
+    const walk = async (dir, depth) => {
+      if (depth > maxDepth) return null;
+      let entries = [];
+      try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return null; }
+      for (const e of entries) {
+        if (!e.isDirectory() || e.name === '.git' || e.name === 'node_modules') continue;
+        if (e.name === name) return path.join(dir, e.name);
+      }
+      for (const e of entries) {
+        if (!e.isDirectory() || e.name === '.git' || e.name === 'node_modules') continue;
+        const hit = await walk(path.join(dir, e.name), depth + 1);
+        if (hit) return hit;
+      }
+      return null;
+    };
+    const found = await walk(r.path, 1);
+    if (found) return { path: found, via: r.id || path.basename(r.path) };
+  }
+  return null;
+}
+
 /** link 恢复：写回 package.json 的 link: 依赖与 bundles，再跑 pnpm install。 */
 async function restoreLinkPlugins(cfg, links) {
   const pjPath = path.join(PROFILE_DIR, 'package.json');
@@ -3933,7 +3967,10 @@ async function restoreLinkPlugins(cfg, links) {
     ? pj.dsh.profile.bundles
     : [];
   for (const p of links) {
-    deps[p.name] = 'link:' + String(p.linkPath || '').split('/').join('/');
+    // 不写死路径：优先按 codeRepos 找（预览时已解析好 linkPath）。
+    const hit = await findLinkTarget(cfg, p.name, p.linkPath);
+    if (!hit) { failed.push({ name: p.name, kind: 'link', error: '找不到目标目录（codeRepos 里没有同名目录）' }); continue; }
+    deps[p.name] = 'link:' + hit.path.split(path.sep).join('/');
     if (!bundles.includes(p.name)) bundles.push(p.name);
   }
   if (!pj.dsh) pj.dsh = {};
@@ -4378,4 +4415,4 @@ async function codeRepoAutoTick(ctx) {
 export { name, inject, apply };
 export const VERSION_INFO = VERSION;
 // 供离线 smoke 测试用（node --check 查不出逻辑错，必须真跑一遍）。
-export const __test = { memoryMap, archiveSessionById, tidyMemoryNow, editMemoryFile, resolveMemoryEditPath, llmOptions, codeRepoList, codeRepoState, codeReposPayload, syncCodeRepo, syncAllCodeRepos, divergeInfo, resolveKeepLocal, resolveKeepRemote, stampTrailer, purgePreview, purgeExecute, purgeVerify, sessionIdForms, walkSessionRefs, bareSessionId, sessionNoteTemplate, sessionNotePreview, sessionNoteWrite, resolveNotePath, sessionMigrateGroup, sessionMigratePreview, sessionMigrateExecute, sessionMigrateVerify, encodeWorkspaceGroup, decodeWorkspaceGroup, stateInfo, installInfo, idleStandard, mergeConfig, normalizeRemoteToHttps, repoFacts, normalizeWorkspaceMap, realWorkspaces, workspaceReport, selfCheck, channelState, readConfig, statusPayload, preflightReport: selfCheck, sessionDoctorScan, sessionDoctorApply, channelsOf, repoKeyOf, remoteOf, surfaceEnabled, diffLocalToPayload, stageChanges, commitChanges, pushChannels, pullChannels, applyPayload, ensureRepo, channelLabel, classifyPluginSpec, readInstalledPlugins, buildPluginManifest, readPluginManifest, writePluginManifest, backupPluginManifest, pluginRestorePreview, pluginRestoreExecute, pluginManifestPath, PLUGIN_BACKUP_RUNTIME };
+export const __test = { memoryMap, archiveSessionById, tidyMemoryNow, editMemoryFile, resolveMemoryEditPath, llmOptions, codeRepoList, codeRepoState, codeReposPayload, syncCodeRepo, syncAllCodeRepos, divergeInfo, resolveKeepLocal, resolveKeepRemote, stampTrailer, purgePreview, purgeExecute, purgeVerify, sessionIdForms, walkSessionRefs, bareSessionId, sessionNoteTemplate, sessionNotePreview, sessionNoteWrite, resolveNotePath, sessionMigrateGroup, sessionMigratePreview, sessionMigrateExecute, sessionMigrateVerify, encodeWorkspaceGroup, decodeWorkspaceGroup, stateInfo, installInfo, idleStandard, mergeConfig, normalizeRemoteToHttps, repoFacts, normalizeWorkspaceMap, realWorkspaces, workspaceReport, selfCheck, channelState, readConfig, statusPayload, preflightReport: selfCheck, sessionDoctorScan, sessionDoctorApply, channelsOf, repoKeyOf, remoteOf, surfaceEnabled, diffLocalToPayload, stageChanges, commitChanges, pushChannels, pullChannels, applyPayload, ensureRepo, channelLabel, classifyPluginSpec, readInstalledPlugins, buildPluginManifest, readPluginManifest, writePluginManifest, backupPluginManifest, pluginRestorePreview, pluginRestoreExecute, pluginManifestPath, PLUGIN_BACKUP_RUNTIME, findLinkTarget };

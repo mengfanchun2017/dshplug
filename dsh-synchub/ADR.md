@@ -1701,9 +1701,11 @@ DSH 在目录改名后会为该新路径**新建**一个 `workspaceId`，旧记�
      备份是只读+写 payload，风险低；**恢复绝不自动**，只能手动。
   5. **恢复 = 预览 → 确认 → 执行**：
      - 预览（只读）：对比「清单 vs 当前已装」，列出 新增 npm / 新增 link / link 目标缺失；
-       link 目标是否存在，用 `codeRepoState`（`cfg.codeRepos`，如 `C:\dsh\dw-plugin`）判断。
+     - **link 目标不写死位置**：`findLinkTarget(cfg, name, hint)` 先试清单记的 linkPath（仅供参考），
+       再在用户配置的 `cfg.codeRepos` 里按名字找（支持三级子目录，如 `dw-base/demo-rag/dsh-rag`），
+       都没有才进 linkMissing。这样仓库放不同目录也能用，只要 codeRepos 配了。
      - 执行：npm 走 `pluginManager.installBundle(name)`（运行时生效，无需退出 DSH）；
-       link 走「校验目标存在 → 备份 `package.json` → 写 `link:` 依赖与
+       link 走「找到目标 → 备份 `package.json` → 写 `link:` 依赖与
        `dsh.profile.bundles` → 跑 bundled pnpm install」。执行前必须备份被覆盖的
        `package.json`（规则二），失败可回滚。
   6. **开关**：`cfg.pluginSync.enabled`（默认 **关**）。语义是「插件清单是否由本插件备份/恢复」。

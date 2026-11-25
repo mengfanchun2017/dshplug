@@ -58,6 +58,7 @@ function ok(name, cond, extra) {
   const cfg = {
     machine: 'T', remote: '',
     pluginSync: { enabled: true, autoMinutes: 0, includeLink: true },
+    codeRepos: [{ id: 'dshwp-plugin', path: path.join(root, 'dw-plugin'), enabled: true }],
   };
 
   console.log('A. classifyPluginSpec：npm / link / git');
@@ -154,6 +155,30 @@ function ok(name, cond, extra) {
   const exNo = await t.pluginRestoreExecute(emptyCfg, { confirm: 'RESTORE' });
   ok('执行被拒 manifest-missing', exNo.ok === false && exNo.reason === 'manifest-missing');
   fs.writeFileSync(manifestPath, saved);
+
+  console.log('K. findLinkTarget：不写死路径，按 codeRepos 找');
+  // H 段把 linkTarget 删了，这里重建
+  fs.mkdirSync(linkTarget, { recursive: true });
+  fs.writeFileSync(path.join(linkTarget, 'package.json'), '{"name":"dsh-gitok"}');
+  const nested = path.join(root, 'dw-plugin', 'demo-rag', 'dsh-rag');
+  fs.mkdirSync(nested, { recursive: true });
+  fs.mkdirSync(path.join(root, 'hint', 'dsh-gitok'), { recursive: true });
+  const alt = { ...cfg, codeRepos: [{ id: 'alt', path: path.join(root, 'elsewhere'), enabled: true }] };
+  fs.mkdirSync(path.join(root, 'elsewhere', 'dsh-gitok'), { recursive: true });
+  const h1 = await t.findLinkTarget(cfg, 'dsh-gitok', null);
+  ok('在 codeRepos 直接子目录找到', h1 && h1.path === path.join(root, 'dw-plugin', 'dsh-gitok'), JSON.stringify(h1));
+  ok('via 标出仓库 id', h1 && h1.via === 'dshwp-plugin');
+  const h2 = await t.findLinkTarget(cfg, 'dsh-rag', null);
+  ok('三级子目录找到（demo-rag/dsh-rag）', h2 && h2.path === nested, JSON.stringify(h2));
+  const h3 = await t.findLinkTarget(alt, 'dsh-gitok', null);
+  ok('仓库在别的目录也能找到（不写死位置）', h3 && h3.path === path.join(root, 'elsewhere', 'dsh-gitok'), JSON.stringify(h3));
+  const h4 = await t.findLinkTarget(cfg, 'dsh-gitok', path.join(root, 'hint', 'dsh-gitok'));
+  ok('提示路径存在时优先用提示', h4 && h4.via === 'manifest', JSON.stringify(h4));
+  const h5 = await t.findLinkTarget(cfg, 'nope-not-there', null);
+  ok('找不到返回 null', h5 === null);
+  const h6 = await t.findLinkTarget({ ...cfg, codeRepos: [{ id: 'x', path: path.join(root, 'dw-plugin'), enabled: false }] }, 'dsh-gitok', null);
+  ok('禁用的仓库不参与', h6 === null);
+
 
   console.log(`\n${pass} passed, ${fail} failed`);
   if (fail) process.exit(1);
