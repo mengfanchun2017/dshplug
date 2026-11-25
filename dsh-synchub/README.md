@@ -8,6 +8,11 @@
 > **0.11.0（ADR-037）**：合并为**唯一仓库** `dsh-msynchub`——去掉模式切换与分组开关，只留一个 `cfg.remote`；
 > 镜像目录从 `payload/` 改为 `dsh-home/`，并自动生成仓库 `README.md`（打开仓库就能看懂）。
 > 旧 `dsh-config` 仓库已删除。本文以下章节描述的就是 0.11.0。
+>
+> **0.12.0（ADR-038）**：新增**插件清单备份/恢复**——只记名字（npm）与名字+位置（link），
+> 不记版本；清单落 `dsh-home/plugins/manifest.json`，随同步走；恢复是「预览 → 确认 → 执行」，
+> npm 走宿主 `pluginManager` 服务、link 写回依赖后 pnpm install；带开关（默认关，与 dsh-market
+> 的备份导出二选一）。
 
 0.10.0 是**单仓库模式版**（ADR-036，已被 0.11.0 取代）：曾提供「单仓库/双仓库」切换与两个分组开关。
 
@@ -265,11 +270,11 @@ surfaceEnabled(surface, cfg) => Boolean(cfg.surfaces[surface.id]) && surface.tie
 插件清单整份（`package.json`）不同步是刻意的：**插件由 `dsh-market` 管**，
 而 `link:` 规格里的绝对路径本来就不能跨机搬运。
 
-> **例外（ADR-037，0.11.0 起）**：新增「插件清单备份」——只记**名字**（npm）与
+> **例外（ADR-038，0.12.0 起）**：新增「插件清单备份」——只记**名字**（npm）与
 > **名字+目标位置**（link），不含绝对路径 spec、不含版本，落 `payload/plugins/manifest.json`，
 > 复用 config 仓库。恢复走「预览 → 确认 → 执行」，npm 用宿主 `pluginManager` 服务安装，
 > link 校验目标存在后重新链接。开关 `cfg.pluginSync.enabled`（默认关），与 dsh-market 的
-> 备份导出二选一。详见 [`ADR.md` ADR-037](./ADR.md)。
+> 备份导出二选一。详见 [`ADR.md` ADR-038](./ADR.md)。
 ---
 
 ## 4. 三条硬规则
@@ -481,6 +486,10 @@ profileManifest   2 文件     1.4 KB   ← 不同步
 > 删除后必须**完全退出 DSH 再重启**才会生效。该操作只删本机正文，不动同步镜像；要清远端需显式 `prune`。
 | `GET /session-note?id=<id>[&filename=…]` | 蒸馏模板预览（只读；落点=会话所属工作区 docs/session-notes/） | 否 |
 | `POST /session-note` `{id, content, confirm:'WRITE'}` | 人工蒸馏文档写盘（confirm 闸门，原样模板拒绝） | 是（写工作区文件） |
+| `GET /plugin-backup` | 插件清单备份状态（开关/间隔/清单摘要） | 否 |
+| `POST /plugin-backup` | **备份插件清单**（只记名字/位置，不记版本；无变化不写盘） | 是（写 dsh-home/plugins/manifest.json + 提交） |
+| `GET /plugin-restore` | 恢复预览（只读：新增 npm / 重新链接 link / 目标缺失） | 否 |
+| `POST /plugin-restore` `{confirm:'RESTORE'}` | 恢复执行：npm 走宿主服务，link 写回依赖 + pnpm install | 是（装插件 / 改 package.json） |
 
 > **会话蒸馏成文档**（0.5.0，ADR-006/015）：面板「⑤」给一份五章模板（确定结论 / 决策与理由 / 待办 / 文件路径 / 过程性细节），**由人填写后确认写盘**，不自动解码 compact 摘要。文档落在会话所属工作区的 `docs/session-notes/`，由工作区 git 管、跨机可见，`dsh-synchub` 不搬运它。
 

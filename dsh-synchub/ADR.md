@@ -1620,10 +1620,10 @@ DSH 在目录改名后会为该新路径**新建**一个 `workspaceId`，旧记�
 
 ---
 
-## ADR-037 · 0.11.0：插件清单备份/恢复（npm + link 两类）纳入同步中心
+## ADR-038 · 0.12.0：插件清单备份/恢复（npm + link 两类）纳入同步中心
 
 - **日期**：2026-11-25
-- **状态**：已采纳（设计定稿，待实现；实现前不要据本文改代码）
+- **状态**：已采纳（已实现，待真机重启验收）
 - **背景（用户原话）**：
   > 「有插件备份和恢复功能（手动，可以定期执行）」
   > 「执行时候如果没变化，就不更新文件，记录插件就是名字，不记录版本」
@@ -1638,10 +1638,10 @@ DSH 在目录改名后会为该新路径**新建**一个 `workspaceId`，旧记�
 
 - **调研结论（先纠正三个前提）**：
   1. **`profileManifest` 面硬编码不同步，但「只记名字」的清单是安全的**。
-     `surfaceEnabled()` 对 `danger` 直接返回 false（`lib/index.js:937-939`），理由是
+     `surfaceEnabled()` 对 `danger` 直接返回 false（`lib/index.js:952`），理由是
      `package.json` 含 `link:C:/dsh/...` 绝对路径，跨机搬运会让 DSH 起不来。
      而本功能只记**名字（npm）/ 名字+相对位置（link）**，不含绝对路径 spec，
-     因此可以作为一条**新路径**进 config 仓库，不必动 `profileManifest` 的 danger 定性。
+     因此可以作为一条**新路径**进唯一仓库（ADR-037），不必动 `profileManifest` 的 danger 定性。
   2. **桌面宿主已提供 `pluginManager` 服务，运行时可装 npm 插件，不必自己 spawn pnpm、
      也不必退出 DSH**。`ctx.get('pluginManager')` 暴露 `listBundles / installBundle /
      removeBundle / cancelInstall`（证据：dsh-market `lib/index.js:304`、
@@ -1659,14 +1659,14 @@ DSH 在目录改名后会为该新路径**新建**一个 `workspaceId`，旧记�
      `lib/backup.js:15-17,94-151,153-202,204-240,609-654`、`lib/gist.js:29-33,312-330`、
      `lib/snapshot.js:37,388-485`、`client/client.js:15164-15188`。
      **它的「插件清单」是配置快照的一部分，和本功能重叠**，所以本功能必须带开关。
-  5. **synchub 已有全部所需机制**：sha256 diff（`lib/index.js:1027`，内容相同即 `unchanged`
-     不写盘）、60s 单定时器（`lib/index.js:3510`，`autoPushTick` + `codeRepoAutoTick`）、
+  5. **synchub 已有全部所需机制**：sha256 diff（`lib/index.js:1043`，内容相同即 `unchanged`
+     不写盘）、60s 单定时器（`lib/index.js:3517`，`autoPushTick` + `codeRepoAutoTick` + 本功能的备份 tick）、
      预览→确认范式（`purge-session` / `session-move`）、覆盖前备份（规则二）、
      `codeRepos` 只读状态（`lib/index.js:1419`，可判断 link 目标目录是否存在）。
 
 - **决策**：
-  1. **新增「插件清单」备份，落 `payload/plugins/manifest.json`（config 组）**，
-     复用现有 config 仓库，**不新增第三个仓库**。`profileManifest` 面的 danger 定性不变。
+  1. **新增「插件清单」备份，落 `dsh-home/plugins/manifest.json`**，
+     复用唯一仓库（ADR-037），**不新增仓库**。`profileManifest` 面的 danger 定性不变。
   2. 清单结构只记最小信息，**不记版本**：
      `{ "plugins": [ { "name": "dsh-free-search", "kind": "npm" },
                    { "name": "dsh-gitok", "kind": "link",
@@ -1676,7 +1676,7 @@ DSH 在目录改名后会为该新路径**新建**一个 `workspaceId`，旧记�
   3. **备份**：优先 `pluginManager.listBundles()` 取已装 bundle（含 `source` spec，可区分
      npm/link/git）；宿主服务不可用时回退读 `profiles/<p>/package.json` 的 dependencies。
      写入走现有 `diffLocalToPayload`/`stageChanges`，**内容相同则不写盘、不产生提交**
-     （用户要求「没变化就不更新文件」由 sha256 天然满足）。
+     （用户要求「没变化就不更新文件」由 sha256 比对天然满足；写盘后进提交）。
   4. **周期执行**：复用 60s 定时器，新增 `cfg.pluginSync.autoMinutes`（0=不自动，仅手动）。
      备份是只读+写 payload，风险低；**恢复绝不自动**，只能手动。
   5. **恢复 = 预览 → 确认 → 执行**：
@@ -1695,8 +1695,8 @@ DSH 在目录改名后会为该新路径**新建**一个 `workspaceId`，旧记�
   - 用户的两台机器插件要一致，而插件清单是唯一还没被任何自研通道覆盖的同步面；
     放进 synchub 后，「会话 / 配置 / 技能 / 插件清单」一个面板管完，符合用户
     「与其装很多插件，不如 synchub 把所有要同步的事在这里处理」的诉求。
-  - 复用 config 仓库而非新开仓库：清单只有几十行 JSON，独立仓库的管理成本大于收益；
-    且 ADR-036 已把配置面压到「1 地址 + 2 开关」，再加仓库会把它变回去。
+  - 复用唯一仓库而非新开仓库：清单只有几十行 JSON，独立仓库的管理成本大于收益；
+    且 ADR-037 已把配置面收束为「一个地址、一个仓库」，再加仓库会把它变回去。
   - npm 走宿主服务而不是自己 spawn pnpm：宿主服务已处理写锁、`restart-required`、
     build 审批、平台校验，自造轮子会重蹈 dsh-market 上千行 pnpm 兼容逻辑。
   - link 之所以只「检查 + 重新链接」而不是备份源码：源码归 `dshplug` 仓库管（ADR-001），
@@ -1711,21 +1711,21 @@ DSH 在目录改名后会为该新路径**新建**一个 `workspaceId`，旧记�
     但用户要自己知道该关哪个。
   - **`pluginManager` 服务并非所有宿主都有**：CLI/web 宿主可能没有，
     此时 npm 恢复要回退到生成命令让用户执行，能力降级（必须在预览里写清）。
-  - **清单由 sync 时机决定**：自动备份间隔内新装的插件，要等下一次备份才进清单。
+  - **清单由备份时机决定**：自动备份间隔内新装的插件，要等下一次备份才进清单。
 
 - **已否决的替代方案**：
   | 方案 | 否决原因 |
   |---|---|
-  | 打开现有 `profileManifest` 面的开关 | `surfaceEnabled()` 对 danger 硬编码 false（`lib/index.js:939`），且它含 `link:` 绝对路径，跨机会让 DSH 起不来 |
+  | 打开现有 `profileManifest` 面的开关 | `surfaceEnabled()` 对 danger 硬编码 false（`lib/index.js:952`），且它含 `link:` 绝对路径，跨机会让 DSH 起不来 |
   | 让 synchub 自己 spawn `dsh plugin --profile desktop add ...` | 官方桌面端 CLI 拒绝该 profile（要求 DSH 完全退出）；运行中调用必然失败 |
   | 用 `pluginManager.installBundle` 装 link: 插件 | manager 只接受 npm 目标（`TARGET_RE`），link 目标被拒（127） |
   | 恢复时只生成命令让用户贴终端 | 用户明确要「点击确认后再更新」；且 npm 走宿主服务可自动完成，只给命令是能力浪费 |
-  | 新增第三个同步仓库放插件清单 | 几十行 JSON 不值得一个仓库；ADR-036 刚把配置面压到一地址 |
+  | 新增一个同步仓库放插件清单 | 几十行 JSON 不值得一个仓库；ADR-037 刚把配置面收束为唯一仓库 |
   | 记版本号以便精确复现 | 用户明确「不记录版本、都装最新」 |
   | 把 link 源码也备份进 synchub | 源码归 `dshplug` 仓库（ADR-001），且跨机路径不同；备份源码会重复且失真 |
 
 - **验证（实现时补）**：
-  - 备份：清单写入 `payload/plugins/manifest.json`，内容相同重复执行不产生新提交（sha256 diff 归零）。
+  - 备份：清单写入 `dsh-home/plugins/manifest.json`，内容相同重复执行不产生新提交（sha256 比对）。
   - 无变化：连续两次备份 `git log` 无新提交。
   - 预览：只读，不改 `package.json`；能区分 npm/link，link 目标缺失要显式列出。
   - 恢复：执行前 `package.json` 有备份；npm 走宿主服务；link 恢复后目标目录存在且 profile 依赖含 `link:`。

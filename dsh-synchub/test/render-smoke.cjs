@@ -184,7 +184,7 @@ ok('main 首帧有可见文字', p0.text.length > 100, 'text=' + p0.text.length)
 console.log('\nC. 有数据渲染（配置已读回 —— 线上白屏就发生在这里）');
 const conf = CONF.config;
 // SettingsSection 的 useState 顺序：form, saved, check, status, map, busy, msg, deep
-const settingsFilled = [conf, conf, { ok: true, checks: [] }, STATUS, MAP, '', { text: '', kind: '' }, false];
+const settingsFilled = [conf, conf, { ok: true, checks: [] }, STATUS, MAP, '', { text: '', kind: '' }, false, null];
 const s1 = renderTree(slots['settings.section'], settingsFilled);
 ok('settings.section 有数据不抛错', !s1.threw, s1.threw && s1.threw.message);
 ok('settings.section 有数据无子组件报错', s1.errors.length === 0, s1.errors.join('; '));
@@ -406,7 +406,7 @@ const doctorFixture = {
 /* baseArgs 已填 index 0~15（own…notePreview）。
    后面依次是 repos=16、divergeData=17、doctor=18、doctorBusy=19、doctorErr=20、doctorPick=21。
    repos/divergeData 显式传 null（与其 useState 初值一致），否则 undefined 会把初始化函数盖掉。 */
-const pad = (doctorVals) => [null, null, doctorVals[0], doctorVals[1], doctorVals[2], doctorVals[3]];
+const pad = (doctorVals) => [null, null, doctorVals[0], doctorVals[1], doctorVals[2], doctorVals[3], null];
 const baseStatus = JSON.parse(JSON.stringify(STATUS));
 const baseArgs = [baseStatus, { ok: true, checks: [] }, MAP, '', '', '', [], null,
   { ok: true, ready: true, headline: '可以同步' }, '', '', null, '', '', null, null];
@@ -550,6 +550,23 @@ ok('candsOf 对非数组 candidates 返回空数组',
   /Array\.isArray\(p\.candidates\)\)\s*\?\s*p\.candidates\s*:\s*\[\]/.test(srcNoComments));
 ok('settings.section 标签为 Msynchub', /label: 'Msynchub'/.test(src));
 ok('侧栏标签为 Msynchub', /label: 'Msynchub'/.test(src));
+/* F. 记忆地图卡（阶段①只读）：有数据时能渲染出表格与「同步/归工作区」用词。 */
+const MEMORY = {
+  ok: true,
+  counts: { files: 1, bytes: 20, workspaces: 1 },
+  layers: [{ id: 'memory', label: '记忆文件', rows: [{
+    layerLabel: '记忆文件', label: '用户级记忆',
+    path: 'C:\\Users\\u\\.dsh\\memory\\USER.md', note: '所有工作区共享',
+    sync: 'synchub', files: 1, size: 20,
+  }] }],
+};
+const pMem = renderTree(slots.main, baseArgs.concat([null, null, null, '', '', {}, MEMORY]));
+ok('记忆地图有数据时不抛错', !pMem.threw, pMem.threw && pMem.threw.message);
+ok('记忆地图渲染出标题', !pMem.threw && pMem.text.indexOf('记忆地图') >= 0);
+ok('记忆地图渲染出行', !pMem.threw && pMem.text.indexOf('用户级记忆') >= 0);
+const sMem = renderTree(slots['settings.section'], [conf, conf, { ok: true, checks: [] }, STATUS, MAP, '', { text: '', kind: '' }, false, MEMORY]);
+ok('设置页记忆地图有数据不抛错', !sMem.threw, sMem.threw && sMem.threw.message);
+ok('设置页记忆地图渲染出行', !sMem.threw && sMem.text.indexOf('用户级记忆') >= 0);
 
 console.log('\n' + (failed ? 'FAILED: ' + failed + ' 项' : 'ALL PASS'));
 process.exit(failed ? 1 : 0);

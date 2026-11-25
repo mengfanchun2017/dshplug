@@ -8,8 +8,11 @@
 > | [`BOOTSTRAP.md`](./BOOTSTRAP.md)（本文） | 怎么做（安装 / 验证 / 排错 / 迁移 / 命令行手册） | 首次安装、换机器、出问题要动手时 |
 > | [`ADR.md`](./ADR.md) | 为什么（决策 + 反面代价 + 已否决方案） | 想改设计、质疑「为什么这样」时 |
 >
-> 详细调研证据在 [`docs/`](./docs/)。本文日期与版本写死：0.5.3 / 2026-11-17。
+> 详细调研证据在 [`docs/`](./docs/)。本文日期与版本写死：0.12.0 / 2026-11-25。
 
+> **先只看这一条**：新机器要装**本插件 + Mgitok** 两个时，两条 git 地址、
+> 两者的分工、装完怎么验收、以及「先装插件 vs 先跑一键装齐」的顺序陷阱，
+> 统一写在 [`../dsh-gitok/BOOTSTRAP.md`](../dsh-gitok/BOOTSTRAP.md) 的 **§1.4**。本文只讲 Msynchub 自己。
 ---
 
 ## 0. 先记住这一条：改哪部分要重启，哪部分刷页面就行
@@ -29,15 +32,22 @@
 
 | | A. git 地址安装 | B. 本地目录 link: 安装 |
 |---|---|---|
-| 怎么做 | 设置 → 插件 → 添加插件，填 `<仓库>#path:dsh-synchub` | 先 clone 到固定路径，再 `install.ps1 -Only dsh-synchub` |
+| 怎么做 | 设置 → 插件 → 添加插件，填 `github:mengfanchun2017/dswp-plugin#path:/dsh-synchub` | 先 clone 到固定路径，再 `install.ps1 -Only dsh-synchub` |
 | 适合谁 | 只想装这一个插件的第三方 | **自己的每一台机器**（0.6.0 起推荐；含开发机） |
 | 拿到什么 | 远端当前提交的快照 | 指向本地源码的 Junction（改源码即时生效） |
 | 升级 | 界面「更新」或卸载后用同一地址重装 | `git pull` 一次即升级（无需重装；改了 index.js 完全重启） |
 | 代价 | 没有版本自动升级；要手动重装；拿不到 install.ps1 / 其余插件 / 文档 | 路径写死、每台都要 clone + install；磁盘上多一份仓库 |
 
+**本插件的 git 地址（整行复制）**：
+
+```text
+github:mengfanchun2017/dswp-plugin#path:/dsh-synchub
+```
+
+等价的完整写法：`https://github.com/mengfanchun2017/dswp-plugin#path:dsh-synchub`（实测都 `exit 0`）。
+
 **为什么 git 地址要带 `#path:dsh-synchub`**：dshplug 是多插件 monorepo，仓库根不是 bundle；
 不指子目录，DSH 在根上找不到 `dsh.bundle.patch`，会报「没有声明组合包」。
-
 **上架 dsh-market 是不是最优？** 长期看是多机分发的终点——上架后变成「市场一键安装 + 市场内升级」，
 省去上面两条路径的手动步骤。但现在**没上**：需要去掉 `private: true`、选 npm 包名、执行发布，
 这是发布决策（ADR-017），本会话不做。在那之前 A/B 两条已够用。
@@ -108,15 +118,22 @@ test -f C:\dsh\dshplug\list.json; "list.json 存在: $?"
 
 ### 第 6 步：把 Git 认证配通
 
-本插件**不接收也不保存凭据**。推荐装 `dsh-gitok`：
+本插件**不接收也不保存凭据**。推荐装同一个仓库的 `dsh-gitok`：
 
 ```powershell
-& "C:\dsh\dshplug\install.ps1" -Only dsh-gitok
+# 新机器（没有本地仓库）—— 用 git 地址装，详见 §6.1
+dsh plugin --profile desktop add 'github:mengfanchun2017/dswp-plugin#path:/dsh-gitok'
+
+# 本机开发（已有 clone 的仓库，路径按实际改）
+& "C:\dsh\dw-plugin\install.ps1" -Only dsh-gitok
 # 完全退出 DSH 再打开，到「设置 → Mgitok」点一键初始化
 ```
 
 它会检查 Windows 凭据管理器、credential helper、明文凭据、代理、SSH 私钥口令。
 
+> **顺序提醒**：如果 B 机打算用 `sync-plugins.ps1` 一键装齐插件，
+> 那个脚本只在本机**还没有** `package.json` 时才恢复清单（详见
+> [`../dsh-gitok/BOOTSTRAP.md`](../dsh-gitok/BOOTSTRAP.md) §9A.0.2）。先手动装插件会让它只装到这两个。
 **验证**（不装 gitok 也能自己验）：
 
 ```powershell
@@ -182,19 +199,19 @@ $P = 'C:\dsh\dw-plugin\dsh-synchub'
 & $node --check "$P\lib\client.js"
 & $node --check "$P\lib\sessiondoctor.js"
 
-# 全部 11 份；任何一份非 0 就停
+# 全部 12 份；任何一份非 0 就停
 Get-ChildItem "$P\test" -Filter *.cjs | Sort-Object Name | ForEach-Object {
   & $node $_.FullName
   if ($LASTEXITCODE -ne 0) { throw "FAIL $($_.Name)" }
 }
 ```
 各套件自己的通过标志（`ALL PASS` / `SYNCHUB_SMOKE_OK` / … / `会话体检 smoke：23 通过 / 0 失败`）。
-全绿 = 11/11 套件 exit 0。
+全绿 = 12/12 套件 exit 0。
 
 | 套件 | 盯什么 |
 |---|---|
 | `render-smoke.cjs` | 浏览器半**真渲染**：首帧/有数据/报错/钩子序（含 E0b+E0c 体检卡） |
-| `synchub-smoke.cjs` | 27 路由注册 + 三槽 + CSS + 新卡片 |
+| `synchub-smoke.cjs` | 29 路由注册 + 三槽 + CSS + 新卡片 |
 | `sessiondoctor-smoke.cjs` | 体检引擎：**23 条**，只读性/confirm 闸门/不误报 subagent/回滚点原文 + **J 组 6 条职责边界**（impact 不漏网 / health 三态 / 一键救援不碰空组） |
 | `sessionmove-smoke.cjs` | 单条+批量迁移（含 14 个真实目录交叉验证） |
 | `purge-smoke.cjs` | 受控删除 |
@@ -204,8 +221,9 @@ Get-ChildItem "$P\test" -Filter *.cjs | Sort-Object Name | ForEach-Object {
 | `diverge-smoke.cjs` | 分叉二选一 |
 | `repo-sync-smoke.cjs` | 代码仓库四态 |
 | `single-smoke.cjs` | 单仓库模式（ADR-036）：模式抽象 / 分组开关 / payload 落点 / 单通道状态 / 失败态 |
+| `pluginbackup-smoke.cjs` | 插件清单备份/恢复（ADR-038）：分类 npm/link/git、不记版本、无变化不写盘、预览只读、确认闸门、开关关闭拒绝 |
 
-十一份 smoke 用临时夹具，**不碰真实 DSH 会话数据、不发网络请求**
+十二份 smoke 用临时夹具，**不碰真实 DSH 会话数据、不发网络请求**
 （`unsynced-smoke` / `repo-sync-smoke` 会读真实仓库目录，但**只读**：不 stage、不 commit、不 push）。
 
 > **为什么必须有 `render-smoke`（2026-11-18 踩过）**：`node --check` 只查语法。
@@ -455,19 +473,49 @@ Invoke-RestMethod http://127.0.0.1:<当前端口>/api/dsh-synchub/preflight | Co
 DSH 官方入口 **设置 → 插件 → 添加插件**（dsh-market / 插件管理器），填：
 
 ```text
-https://github.com/mengfanchun2017/dswp-plugin#path:dsh-synchub
+github:mengfanchun2017/dswp-plugin#path:/dsh-synchub
+```
+
+命令行等价（**必须用单引号**：spec 里带 `#`，PowerShell 裸写会把 `#` 之后当注释截掉）：
+
+```powershell
+dsh plugin --profile desktop add 'github:mengfanchun2017/dswp-plugin#path:/dsh-synchub'
+```
+
+`dsh` 不在 PATH 时用完整路径：
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd" `
+    plugin --profile desktop add 'github:mengfanchun2017/dswp-plugin#path:/dsh-synchub'
+```
+
+> 桌面版 profile 的前置条件：**先打开过 DSH 至少一次、再完全退出**，否则会报
+> `Open DeepSeek Harness Desktop once to initialize its profile...`。
+> `--profile web` 不受此限。
+
+- **必须带 `#path:dsh-synchub`**：dshplug 是多插件 monorepo，仓库根不是 bundle，不指子目录会报「没有声明组合包」。
+- 重复 add 一次是安全的（输出 `Already up to date`），不确定装没装上就直接再粘一次。
+- 这些地址在面板「⑥ 新主机安装」卡里可以一键复制（复制失败会明说「只是选中了」）。
+- 来源是 GitHub，本机必须能直连或配代理。
+
+#### 同一仓库的另一个插件：Mgitok
+
+新机器上通常两个一起装。**git 地址**（与本插件同一个仓库，只换子目录）：
+
+```text
+github:mengfanchun2017/dswp-plugin#path:/dsh-gitok
 ```
 
 命令行等价：
 
 ```powershell
-dsh plugin add https://github.com/mengfanchun2017/dswp-plugin#path:dsh-synchub
+dsh plugin --profile desktop add 'github:mengfanchun2017/dswp-plugin#path:/dsh-gitok'
 ```
 
-- **必须带 `#path:dsh-synchub`**：dshplug 是多插件 monorepo，仓库根不是 bundle，不指子目录会报「没有声明组合包」。
-- 这些地址在面板「⑥ 新主机安装」卡里可以一键复制（复制失败会明说「只是选中了」）。
-- 来源是 GitHub，本机必须能直连或配代理。
-
+**两者分工**：Msynchub 管「把什么内容同步过去」，Mgitok 管「git 有没有权限推」。
+本插件**不接收也不保存凭据**，所以推送报 401 时需要 Mgitok 先把认证配通。
+两条地址、装完怎么验收、以及「先装插件还是先跑 `sync-plugins.ps1`」的顺序陷阱，
+统一写在 [`../dsh-gitok/BOOTSTRAP.md`](../dsh-gitok/BOOTSTRAP.md) 的 **§1.4**。
 ### 6.2 方式 B：clone 仓库 + link:（本机开发用）
 
 `install.ps1 -Only dsh-synchub` 建 `link:` Junction，**改代码即时生效**，适合开发。

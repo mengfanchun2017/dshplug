@@ -350,6 +350,28 @@ window.__ModuleLoader__.load({
             e('td', null, hide ? '—' : bytes(r.bytes)));
         })));
     }
+
+    /* 记忆地图的同步状态用词：要回答「它归谁管」，不是内部枚举名。 */
+    const SYNC_LABEL = { synchub: 'synchub 同步', 'workspace-git': '工作区 git', none: '不同步', memory: '记忆文件' };
+
+    /* 记忆地图表：层 / 位置 / 同步 / 文件数 / 大小。
+       只做展示，不提供任何编辑（阶段①只读）。 */
+    function MemoryTable({ layers }) {
+      const th = t => e('th', null, t);
+      const rows = (layers || []).flatMap(l => (l.rows || []).map(r => Object.assign({ layerLabel: l.label }, r)));
+      if (!rows.length) return e('div', { className: 'muted' }, '没有可列出的记忆文件。');
+      return e('table', null,
+        e('thead', null, e('tr', null, th('层'), th('位置'), th('同步'), th('文件'), th('大小'))),
+        e('tbody', null, rows.map((r, i) => {
+          const tone = r.sync === 'synchub' ? 'good' : r.sync === 'workspace-git' ? 'warn' : 'muted';
+          return e('tr', { key: i },
+            e('td', null, e('div', null, r.layerLabel), e('div', { className: 'muted' }, r.label)),
+            e('td', null, e('code', null, r.path), e('div', { className: 'muted' }, r.note)),
+            e('td', null, e('span', { className: tone }, SYNC_LABEL[r.sync] || r.sync)),
+            e('td', null, String(r.files || 0)),
+            e('td', null, bytes(r.size || 0)));
+        })));
+    }
 /* ──────────────────────────────────────────────────────────────────────────────
    跨挂载缓存：侧边栏关掉再打开不该重新联网
 
@@ -554,6 +576,15 @@ function checkedAtText(atMs) {
         return () => { mounted.current = false; clearInterval(id); clearInterval(slowId); };
       }, [refresh]);
 
+      /* 记忆地图：只读枚举，变化慢，单独拉一次即可。
+         不放进 refresh 的两批结构 —— 那会改动已有 allSettled 的下标与 render-smoke 的注入顺序。 */
+      useEffect(() => {
+        if (!mounted.current) return;
+        getJSON(`${API}/memory-map`, undefined, 20000)
+          .then(M => { if (mounted.current && M) setMemoryMap(M); })
+          .catch(() => { /* 读不到不算故障：空表也要能打开面板 */ });
+      }, []);
+
       /* saveRemotes 已删除：侧边栏不再写配置（ADR-022）。
          配置写入只在设置页的 doSave 一处，避免两条保存链路互踩。 */
 
@@ -629,6 +660,8 @@ function checkedAtText(atMs) {
       /* 改指时用户选中目标工作区：key 是 actionId，值是 wsId。
          必须单独存，不能只靠下拉的 defaultValue —— 受控组件不回传就拿不到选择。 */
       const [doctorPick, setDoctorPick] = useState({});
+      /* 记忆地图（阶段①只读）：追加到 Panel 末尾，不插中间 —— render-smoke 按位置注入。 */
+      const [memoryMap, setMemoryMap] = useState(null);
       const doDivergePreview = useCallback(async () => {
         setErr('');
         try { setDivergeData(await getJSON(`${API}/diverge`, undefined, 30000)); }
@@ -1245,6 +1278,17 @@ function checkedAtText(atMs) {
         e('div', { className: 'note' },
           e('strong', null, '为什么要带 #path:dsh-synchub：'), 'dshplug 是多插件 monorepo，**仓库根不是 bundle**；',
           '不指子目录，DSH 在根上找不到 dsh.bundle.patch，会报「没有声明组合包，无法安装」。'));
+      /* 记忆地图卡（阶段①只读）：默认折叠，不占首屏；要看再展开。 */
+      const memoryCard = memoryMap ? e('div', { className: 'card' },
+        e('h3', null, '⑦ 记忆地图',
+          e('span', { className: 'muted' }, ` ${memoryMap.counts.files} 项`)),
+        e('details', null,
+          e('summary', { style: { cursor: 'pointer', fontSize: 12.5 } },
+            '展开查看全部记忆（用户级 / 项目级 / 技能 / 会话日志）'),
+          e('div', { style: { marginTop: 8 } }, e(MemoryTable, { layers: memoryMap.layers }))),
+        e('div', { className: 'note' },
+          '「记忆文件」是 Msynchub 的落点（<工作区>/memory/ 与 ~/.dsh/memory/USER.md），归档时自动写入；',
+          '项目规则与项目技能归各工作区 git 管，Msynchub 只列不动。')) : null;
 
       return e('div', { className: 'dsc' },
         e('style', null, STYLES),
@@ -1271,6 +1315,7 @@ function checkedAtText(atMs) {
              （「会话不见了」「侧边栏空了」），而且是可点的。而且它不自动扫描，
              首屏不会多一次磁盘往返。 */
           doctorCard,
+          memoryCard,
           selfCheckCard,
 
           /* 说明性内容折叠：不需要每次进来都看到，但它又必须可查。 */
@@ -1372,6 +1417,8 @@ function checkedAtText(atMs) {
       // 安装地址与 Panel 同源（/status.install，由宿主从真实 git remote 推导）。
       const installInfo = (status && status.install) || null;
       const [deep, setDeep] = useState(false);
+      /* 记忆地图（阶段①只读）：追加到 Settings 末尾，不插中间（render-smoke 按位置注入）。 */
+      const [memoryMap, setMemoryMap] = useState(null);
 
       const load = useCallback(async () => {
         try {
@@ -1380,6 +1427,7 @@ function checkedAtText(atMs) {
         } catch (ex) { setMsg({ text: '配置读取失败：' + String((ex && ex.message) || ex), kind: 'err' }); }
         try { const s = await getJSON(`${API}/status`); if (s.ok) setStatus(s); } catch { /* 可选 */ }
         try { const m = await getJSON(`${API}/map`); if (m.ok) setMap(m); } catch { /* 可选 */ }
+        try { const mm = await getJSON(`${API}/memory-map`); if (mm.ok) setMemoryMap(mm); } catch { /* 可选 */ }
       }, []);
 
       useEffect(() => { load(); }, [load]);
@@ -1482,6 +1530,58 @@ function checkedAtText(atMs) {
         } catch (ex) { setMsg({ text: '保存失败：' + String((ex && ex.message) || ex), kind: 'err' }); }
         finally { setBusy(''); }
       }, [form]);
+
+      /* ── 插件清单备份/恢复（ADR-038）────────────────────────────
+         开关/间隔在 form.pluginSync 里编辑，随「保存」一起写入；
+         备份与恢复是即时动作，不走草稿保存。 */
+      const [pluginBackup, setPluginBackup] = useState(null);
+      const [pluginPreview, setPluginPreview] = useState(null);
+      const [pluginConfirm, setPluginConfirm] = useState('');
+      const ps = (form && form.pluginSync) || {};
+
+      const doPluginBackup = useCallback(async () => {
+        setBusy('备份插件清单'); setMsg({ text: '', kind: '' });
+        try {
+          const r = await post(`${API}/plugin-backup`, {});
+          setPluginBackup(r);
+          setMsg({
+            text: r.ok === false
+              ? `备份失败：${r.hint || r.reason || r.error || '未知原因'}`
+              : (r.unchanged ? '清单没变化，未更新文件。' : `已写入清单（${r.count} 个插件）${r.commit && r.commit.committed ? '并提交。' : '。'}`),
+            kind: r.ok === false ? 'err' : 'ok',
+          });
+        } catch (ex) { setMsg({ text: '备份失败：' + String((ex && ex.message) || ex), kind: 'err' }); }
+        finally { setBusy(''); }
+      }, []);
+
+      const doPluginPreview = useCallback(async () => {
+        setBusy('预览恢复'); setPluginConfirm(''); setMsg({ text: '', kind: '' });
+        try {
+          const r = await getJSON(`${API}/plugin-restore`, undefined, 30000);
+          setPluginPreview(r);
+          if (!r.manifestOk) setMsg({ text: '还没有可用清单：' + (r.manifestError || '请先备份'), kind: 'err' });
+        } catch (ex) { setMsg({ text: '预览失败：' + String((ex && ex.message) || ex), kind: 'err' }); }
+        finally { setBusy(''); }
+      }, []);
+
+      const doPluginRestore = useCallback(async () => {
+        if (pluginConfirm.trim() !== 'RESTORE') { setMsg({ text: '确认框里输入 RESTORE 才能执行。', kind: 'err' }); return; }
+        setBusy('恢复插件'); setMsg({ text: '', kind: '' });
+        try {
+          const r = await post(`${API}/plugin-restore`, { confirm: 'RESTORE' }, 600000);
+          setPluginPreview(r.preview || null);
+          const bits = [];
+          if (r.npm && r.npm.length) bits.push(`npm 装好 ${r.npm.length} 个`);
+          if (r.link && r.link.length) bits.push(`link 恢复 ${r.link.length} 个`);
+          if (r.failed && r.failed.length) bits.push(`失败 ${r.failed.length} 个`);
+          setMsg({
+            text: r.ok ? `恢复完成：${bits.join('，') || '无需变动'}` : `恢复未全部成功：${bits.join('，') || r.error || r.reason || ''}`,
+            kind: r.ok ? 'ok' : 'err',
+          });
+        } catch (ex) { setMsg({ text: '恢复失败：' + String((ex && ex.message) || ex), kind: 'err' }); }
+        finally { setBusy(''); }
+      }, [pluginConfirm]);
+
 
       const F = (k, label, hint, type) => e(react.Fragment, { key: k },
         e('div', { className: 'field' },
@@ -1681,6 +1781,72 @@ function checkedAtText(atMs) {
         e('div', { className: 'note' },
           '只同步你在这里明确登记的仓库。未跟踪文件也会一起提交 —— '
           + '想排除就在那个仓库自己的 .gitignore 里写规则。'));
+      const pluginCard = e('div', { className: 'card' },
+        e('h3', null, '插件清单备份 / 恢复'),
+        e('div', { className: 'hint', style: { marginBottom: 8 } },
+          '只记插件名字（npm）与名字+位置（link），不记版本；清单落 ',
+          e('code', null, 'dsh-home/plugins/manifest.json'), '，跟同步走。',
+          e('br'),
+          '与 dsh-market 的备份导出二选一：用那个就关掉这里的开关。'),
+        e('div', { className: 'chk' },
+          e('input', {
+            type: 'checkbox', checked: Boolean(ps.enabled),
+            onChange: ev => set('pluginSync', { ...(form?.pluginSync || {}), enabled: ev.target.checked }),
+          }),
+          e('span', null, '开启插件清单备份'),
+          e('span', { className: 'why' }, '关掉后不再生成清单，恢复按钮也不可用。')),
+        e('div', { className: 'field' },
+          e('label', null, '自动备份间隔（分钟）'),
+          e('input', {
+            type: 'number', value: ps.autoMinutes ?? 0,
+            onChange: ev => set('pluginSync', { ...(form?.pluginSync || {}), autoMinutes: Number(ev.target.value) }),
+          }),
+          e('div', { className: 'hint' }, '默认 0 = 不自动，只在下面手动点。')),
+        e('div', { className: 'chk' },
+          e('input', {
+            type: 'checkbox', checked: ps.includeLink !== false,
+            onChange: ev => set('pluginSync', { ...(form?.pluginSync || {}), includeLink: ev.target.checked }),
+          }),
+          e('span', null, '清单里包含 link: 插件'),
+          e('span', { className: 'why' }, 'link 目标必须在本机（源码仓库已在），恢复时会先检查再重新链接。')),
+        e('div', { className: 'btns', style: { marginTop: 10 } },
+          e('button', { type: 'button', disabled: Boolean(busy) || !ps.enabled, onClick: doPluginBackup },
+            busy === '备份插件清单' ? '备份中…' : '立即备份'),
+          e('button', { type: 'button', disabled: Boolean(busy), onClick: doPluginPreview },
+            busy === '预览恢复' ? '预览中…' : '预览将恢复什么'),
+          e('button', { type: 'button', disabled: Boolean(busy) || !pluginPreview || !pluginPreview.canInstall || pluginConfirm.trim() !== 'RESTORE',
+            onClick: doPluginRestore, className: 'danger' },
+            busy === '恢复插件' ? '恢复中…' : '确认恢复')),
+        pluginBackup && pluginBackup.ok
+          ? e('div', { className: 'note' },
+              pluginBackup.unchanged ? '清单与上次一致，未更新文件。'
+                : `已写入 ${pluginBackup.count} 个插件${pluginBackup.commit && pluginBackup.commit.committed ? '并提交' : ''}。`,
+              pluginBackup.source ? e('span', { className: 'muted' }, ` 来源：${pluginBackup.source}`) : null)
+          : pluginBackup ? e('div', { className: 'note' }, e('span', { className: 'red' },
+              pluginBackup.hint || pluginBackup.reason || pluginBackup.error || '备份失败')) : null,
+        pluginPreview && pluginPreview.ok ? e(react.Fragment, null,
+          e('div', { className: 'note' },
+            e('strong', null, '将恢复：'),
+            pluginPreview.addNpm.length ? `新增 npm ${pluginPreview.addNpm.length} 个（${pluginPreview.addNpm.map(p => p.name).join('、')}）；` : '',
+            pluginPreview.addLink.length ? `重新链接 ${pluginPreview.addLink.length} 个（${pluginPreview.addLink.map(p => p.name).join('、')}）；` : '',
+            pluginPreview.already.length ? `已一致 ${pluginPreview.already.length} 个；` : '',
+            pluginPreview.extra.length ? `本机多出 ${pluginPreview.extra.length} 个（保留不动：${pluginPreview.extra.join('、')}）` : '',
+            (!pluginPreview.addNpm.length && !pluginPreview.addLink.length) ? '无需变动。' : ''),
+          pluginPreview.linkMissing.length
+            ? e('div', { className: 'note' }, e('span', { className: 'red' },
+                `找不到目标（${pluginPreview.linkMissing.map(p => p.name).join('、')}）——先把对应仓库 clone 到本机再恢复。`))
+            : null,
+          pluginPreview.canInstall
+            ? e('div', { className: 'note' },
+                '确认后才会改动；恢复前会备份 package.json。请在下方输入 RESTORE：',
+                e('input', {
+                  type: 'text', value: pluginConfirm, placeholder: 'RESTORE',
+                  style: { font: 'inherit', padding: 4, borderRadius: 5, border: '1px solid rgba(128,128,128,.4)', background: 'transparent', color: 'inherit' },
+                  onChange: ev => setPluginConfirm(ev.target.value),
+                }))
+            : null)
+          : pluginPreview ? e('div', { className: 'note' }, e('span', { className: 'red' },
+              pluginPreview.manifestError || '还没有可用清单')) : null);
       const surfCard = e('div', { className: 'card' },
         e('h3', null, '同步面开关'),
         form === null ? e('div', { className: 'k' }, '读取中…')
@@ -1709,6 +1875,13 @@ function checkedAtText(atMs) {
         e('div', { className: 'note' },
           '这张表就是排查与迁移的唯一入口：换机器时按它的「同步中」搬，按「永不同步」重新登录/重建。',
           '运行时与依赖（dsh-runtimes、node_modules）达数百 MB 且平台相关，重装比同步快。')) : null;
+      /* 记忆地图卡（设置页完整版，阶段①只读）。 */
+      const memoryCard = memoryMap ? e('div', { className: 'card' },
+        e('h3', null, '记忆文件（用户级 / 项目级）',
+          e('span', { className: 'muted' }, ` ${memoryMap.counts.files} 项`)),
+        e(MemoryTable, { layers: memoryMap.layers }),
+        e('div', { className: 'note' },
+          'Msynchub 的记忆落点是 <工作区>/memory/ 与 ~/.dsh/memory/USER.md；项目规则与项目技能归各工作区 git 管，这里只列不动。')) : null;
 
       const checkCard = check ? e('div', { className: 'card' },
         e('h3', null, '检查结果', e('span', { className: check.ok ? 'good' : 'red' }, check.ok ? ' ● 全部可用' : ' ● 有问题')),
@@ -1813,12 +1986,14 @@ function checkedAtText(atMs) {
         e('div', { className: 'groupTitle' }, '② 可选：本机与同步面'),
         formCard,
         surfCard,
+        pluginCard,
         repoCard,
 
         e('div', { className: 'groupTitle' }, '③ 诊断与维护'),
         statusCard,
         checkCard,
         mapCard,
+        memoryCard,
         e('div', { className: 'btns' },
           e('button', { disabled: Boolean(busy), onClick: () => doCheck(form) }, busy === 'check' ? '检查中…' : '全面检查'),
           e('button', { className: 'primary', disabled: Boolean(busy) || !dirty, onClick: doSave },

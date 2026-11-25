@@ -34,7 +34,7 @@ const execFileAsync = promisify(execFile);
 
 const name = 'dsh-synchub';
 const inject = ['webServer'];
-const VERSION = '0.11.0';
+const VERSION = '0.12.0';
 /* 分支不能写死。远端仓库可能是 master（GitHub 旧默认）也可能是 main，
    写死一个就会在已有仓库上推出一个**平行的空历史分支**。
    优先级：config.channels[ch].branch → 远端 HEAD 指向的分支 → DEFAULT_BRANCH。 */
@@ -87,6 +87,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 /* ADR-034：会话体检与修复。为了不让 index.js 继续膨胀（已 3500+ 行）且好单测，
    引擎放在兄弟模块里；它只拿 dshHome 做纯文件操作，不注册路由、不读配置。 */
 import { doctorScan as sessionDoctorScan, doctorApply as sessionDoctorApply } from './sessiondoctor.js';
+import { memoryMap } from './memory.js';
 
 /** 宿主 profile 目录：从本文件往上找 node_modules 的父目录。 */
 function resolveProfileDir() {
@@ -341,7 +342,11 @@ const DEFAULTS = {
      codeRepoAutoMinutes=0 表示不自动，只在面板手动触发。 */
   codeRepos: [],
   codeRepoAutoMinutes: 60,   // 全局默认：60 分钟自动提交一次
-  codeRepoAutoEnabled: false // 默认关：首次接入需用户明确打开，不默默改别人仓库
+  codeRepoAutoEnabled: false, // 默认关：首次接入需用户明确打开，不默默改别人仓库
+  /* 插件清单备份/恢复（ADR-038）。只记名字（npm）与名字+位置（link），不记版本。
+     enabled 默认关：与 dsh-market 的备份导出二选一，避免两处同时判定插件清单；
+     autoMinutes=0 表示不自动，只在面板手动触发。 */
+  pluginSync: { enabled: false, autoMinutes: 0, includeLink: true },
 };
 
 /* dshplug 仓库：布局与可复制安装信息（新主机用）。
@@ -537,6 +542,15 @@ function mergeConfig(base, patch) {
     out.codeRepoAutoMinutes = Math.min(1440, Math.max(0, Math.trunc(Number(patch.codeRepoAutoMinutes))));
   }
   if (typeof patch.codeRepoAutoEnabled === 'boolean') out.codeRepoAutoEnabled = patch.codeRepoAutoEnabled;
+  // 插件清单备份/恢复（ADR-038）：插件清单是否由本插件管。
+  if (patch.pluginSync && typeof patch.pluginSync === 'object') {
+    const ps = patch.pluginSync;
+    if (typeof ps.enabled === 'boolean') out.pluginSync.enabled = ps.enabled;
+    if (Number.isFinite(Number(ps.autoMinutes))) {
+      out.pluginSync.autoMinutes = Math.min(1440, Math.max(0, Math.trunc(Number(ps.autoMinutes))));
+    }
+    if (typeof ps.includeLink === 'boolean') out.pluginSync.includeLink = ps.includeLink;
+  }
   return out;
 }
 
@@ -2975,6 +2989,12 @@ async function statusPayload(cfg, opts = {}) {
       standard: idleStandard(),
       nextAt: nextAutoPushAt(cfg),
     },
+    pluginSync: {
+      enabled: Boolean(cfg.pluginSync && cfg.pluginSync.enabled),
+      autoMinutes: Number(cfg.pluginSync && cfg.pluginSync.autoMinutes) || 0,
+      includeLink: cfg.pluginSync ? cfg.pluginSync.includeLink !== false : true,
+      lastResult: PLUGIN_BACKUP_RUNTIME.lastResult,
+    },
     workspaces: Array.isArray(cfg.workspaces) ? cfg.workspaces : (cfg.workspace ? [cfg.workspace] : []),
     // 这两项各自要跑 git / 扫目录，fast 模式下跳过（面板首屏用全量，侧边栏轮询用 fast）。
     install: fast ? null : await installInfo(),
@@ -3058,6 +3078,14 @@ function routesFor() {
         } catch (e) {
           return json(res, 500, { ok: false, error: String(e.message || e) });
         }
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/api/dsh-synchub/memory-map',
+      handler: async (_req, res) => {
+        try { return json(res, 200, await memoryMap()); }
+        catch (e) { return json(res, 500, { ok: false, error: String(e.message || e) }); }
       },
     },
     {
@@ -3457,6 +3485,48 @@ function routesFor() {
         }
       },
     },
+    {
+      kind: 'exact',
+      path: '/api/dsh-synchub/plugin-backup',
+      handler: async (req, res) => {
+        try {
+          const cfg = await readConfig();
+          if (req.method === 'POST') {
+            touchActivity();
+            return json(res, 200, await backupPluginManifest(cfg));
+          }
+          const manifest = await readPluginManifest(cfg);
+          return json(res, 200, {
+            ok: true,
+            enabled: Boolean(cfg.pluginSync && cfg.pluginSync.enabled),
+            autoMinutes: Number(cfg.pluginSync && cfg.pluginSync.autoMinutes) || 0,
+            includeLink: cfg.pluginSync ? cfg.pluginSync.includeLink !== false : true,
+            lastResult: PLUGIN_BACKUP_RUNTIME.lastResult,
+            manifest: { ok: manifest.ok, at: manifest.at || null, count: (manifest.plugins || []).length, error: manifest.error || null },
+          });
+        } catch (e) {
+          return json(res, 500, { ok: false, error: String(e.message || e) });
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/api/dsh-synchub/plugin-restore',
+      handler: async (req, res) => {
+        try {
+          const cfg = await readConfig();
+          if (req.method === 'POST') {
+            touchActivity();
+            const body = await readBody(req).catch(() => ({}));
+            const r = await pluginRestoreExecute(cfg, { confirm: body.confirm });
+            return json(res, r.ok === false ? 400 : 200, r);
+          }
+          return json(res, 200, await pluginRestorePreview(cfg));
+        } catch (e) {
+          return json(res, 500, { ok: false, error: String(e.message || e) });
+        }
+      },
+    },
   ];
 }
 
@@ -3472,9 +3542,331 @@ async function autoPushTickManually(cfg) {
   }
 }
 
+/* ================================================== ADR-038 插件清单备份/恢复
+ *
+ * 只记「名字（npm）/ 名字+位置（link）」，**不记版本**（用户明确要求装最新）。
+ * 清单落唯一仓库的 `dsh-home/plugins/manifest.json`，跟着 stage/pull 走。
+ *
+ * 两类来源：
+ *   · npm —— 恢复时用宿主 `pluginManager.installBundle(name)`（运行时可装，无需退出 DSH）；
+ *   · link —— 恢复时写回 profile `package.json` 的 `link:` 依赖并跑 pnpm install。
+ *     因为 link 目标必须已在本地（源码归 dshplug 仓库管），所以先「检查」再装。
+ */
+
+let HOST_CTX = null;
+
+function pluginManifestPath(cfg) {
+  return path.join(payloadDir('config', cfg), 'plugins', 'manifest.json');
+}
+
+/** 把一个依赖 spec 分类成 npm / link / git。 */
+function classifyPluginSpec(name, spec, baseDir) {
+  const s = String(spec || '').trim();
+  if (/^(link|file):/i.test(s)) {
+    let p = s.replace(/^(link|file):/i, '');
+    if (!path.isAbsolute(p)) p = path.resolve(baseDir || PROFILE_DIR, p);
+    return { name, kind: 'link', linkPath: p.split(path.sep).join('/') };
+  }
+  if (/^(git\+|github:|git:)/i.test(s) || /^https?:\/\/.*\.git(?:[?#]|$)/i.test(s)) {
+    return { name, kind: 'git' };
+  }
+  return { name, kind: 'npm' };
+}
+
+/** 读当前 profile 实际装了什么。优先宿主 listBundles（source 已解析），回退 package.json。 */
+async function readInstalledPlugins(cfg = {}) {
+  const plugins = [];
+  const seen = new Set();
+  const add = (name, kind, linkPath) => {
+    if (!name || seen.has(name)) return;
+    seen.add(name);
+    const item = { name, kind };
+    if (kind === 'link' && linkPath) item.linkPath = linkPath;
+    plugins.push(item);
+  };
+  let source = '';
+  // 1) 宿主 pluginManager：能拿到已解析好的 source spec，还能区分宿主自带 bundle。
+  try {
+    const mgr = HOST_CTX && typeof HOST_CTX.get === 'function' ? HOST_CTX.get('pluginManager') : null;
+    if (mgr && typeof mgr.listBundles === 'function') {
+      const bundles = await mgr.listBundles();
+      if (Array.isArray(bundles) && bundles.length) {
+        for (const b of bundles) {
+          if (!b || !b.name) continue;
+          const spec = String(b.source || '');
+          // 宿主自带 bundle（安装时提供、无 source）不进清单：它们每台都有，不用同步。
+          if (!spec && /^@deepseek-ai\//.test(b.name)) continue;
+          const c = classifyPluginSpec(b.name, spec, PROFILE_DIR);
+          add(c.name, c.kind, c.linkPath);
+        }
+        source = 'pluginManager';
+      }
+    }
+  } catch { /* 回退 package.json */ }
+  // 2) 回退：profile 的 package.json（离线/无宿主服务时也能用）
+  if (!source) {
+    let deps = {};
+    try {
+      const pj = JSON.parse(await fsp.readFile(path.join(PROFILE_DIR, 'package.json'), 'utf8'));
+      deps = pj.dependencies || {};
+    } catch (e) {
+      return { ok: false, error: `package.json 读不到：${e.message}`, plugins: [] };
+    }
+    for (const [name, spec] of Object.entries(deps)) {
+      const c = classifyPluginSpec(name, spec, PROFILE_DIR);
+      add(c.name, c.kind, c.linkPath);
+    }
+    source = 'package.json';
+  }
+  plugins.sort((a, b) => a.name.localeCompare(b.name));
+  return { ok: true, source, plugins };
+}
+
+/** 生成清单对象（不含时间戳/机器名：内容相同才叫「没变化」）。 */
+function buildPluginManifest(plugins, includeLink = true) {
+  const list = plugins
+    .filter(p => p.kind === 'npm' || (p.kind === 'link' && includeLink))
+    .map(p => (p.kind === 'link' ? { name: p.name, kind: 'link', linkPath: p.linkPath } : { name: p.name, kind: 'npm' }));
+  return { format: 'dsh-synchub-plugin-manifest', version: 1, plugins: list };
+}
+
+/** 读回已备份的清单（恢复预览用）。*/
+async function readPluginManifest(cfg) {
+  const p = pluginManifestPath(cfg);
+  let stat = null;
+  try { stat = await fsp.stat(p); } catch (e) {
+    return { ok: false, error: e.code === 'ENOENT' ? '清单不存在（还没备份过）' : e.message, plugins: [] };
+  }
+  try {
+    const doc = JSON.parse(await fsp.readFile(p, 'utf8'));
+    if (!doc || !Array.isArray(doc.plugins)) return { ok: false, error: '清单格式不对', plugins: [] };
+    return { ok: true, doc, plugins: doc.plugins, at: stat.mtime.toISOString() };
+  } catch (e) {
+    return { ok: false, error: e.message, plugins: [] };
+  }
+}
+
+/** 写清单进 payload。内容相同则不写盘（用户要求「没变化就不更新文件」）。 */
+async function writePluginManifest(cfg) {
+  if (!cfg.pluginSync || cfg.pluginSync.enabled !== true) return { ok: false, reason: 'disabled' };
+  const cur = await readInstalledPlugins(cfg);
+  if (!cur.ok) return { ok: false, reason: cur.error };
+  const doc = buildPluginManifest(cur.plugins, cfg.pluginSync.includeLink !== false);
+  const target = pluginManifestPath(cfg);
+  const text = JSON.stringify(doc, null, 2);
+  let same = false;
+  try { same = (await fsp.readFile(target, 'utf8')) === text; } catch { /* 还不存在 */ }
+  if (same) return { ok: true, unchanged: true, count: doc.plugins.length, source: cur.source };
+  await fsp.mkdir(path.dirname(target), { recursive: true });
+  await fsp.writeFile(target, text, 'utf8');
+  return { ok: true, written: true, count: doc.plugins.length, source: cur.source };
+}
+
+/** 手动备份：写清单 + 只提交这一个文件（不顺手带别的）。 */
+async function backupPluginManifest(cfg) {
+  if (!cfg.pluginSync || cfg.pluginSync.enabled !== true) {
+    return { ok: false, reason: 'disabled', hint: '先在「设置 → Msynchub」打开「插件清单备份」' };
+  }
+  const w = await writePluginManifest(cfg);
+  if (!w.ok) return w;
+  const dir = repoDir('config', cfg);
+  const commit = { ok: false, committed: false };
+  if (!fs.existsSync(path.join(dir, '.git'))) {
+    commit.reason = 'not-initialized';
+  } else {
+    await git(dir, ['add', '--', 'plugins/manifest.json']);
+    const st = await git(dir, ['status', '--porcelain', '-uno', '--', 'plugins/manifest.json']);
+    if (!st.ok) {
+      commit.ok = false; commit.reason = 'git-status-failed'; commit.output = st.err || st.out;
+    } else if (st.out && st.out.trim()) {
+      const c = await git(dir, ['commit', '-m', `synchub: plugin manifest @ ${new Date().toISOString()}` + stampTrailer(cfg)]);
+      commit.ok = c.ok; commit.committed = c.ok; commit.output = c.err || c.out;
+    } else {
+      commit.ok = true; commit.committed = false; commit.reason = 'nothing-to-commit';
+    }
+  }
+  return { ok: true, ...w, commit };
+}
+
+/** 恢复预览（只读）：清单 vs 当前已装，并列出去哪找 link 目标。 */
+async function pluginRestorePreview(cfg) {
+  if (!cfg.pluginSync || cfg.pluginSync.enabled !== true) {
+    return { ok: false, reason: 'disabled', hint: '插件清单备份/恢复开关未开' };
+  }
+  const manifest = await readPluginManifest(cfg);
+  const current = await readInstalledPlugins(cfg);
+  const curByName = new Map((current.plugins || []).map(p => [p.name, p]));
+  const addNpm = [], addLink = [], linkMissing = [], already = [];
+  for (const p of manifest.plugins || []) {
+    const cur = curByName.get(p.name);
+    if (cur && cur.kind === p.kind) {
+      // 已装同类：link 还要确认目标目录真的在（目标没了等于要重新链接）。
+      if (p.kind === 'link') {
+        const exists = Boolean(cur.linkPath) && fs.existsSync(cur.linkPath);
+        if (!exists) { linkMissing.push({ ...p, linkPath: cur.linkPath || p.linkPath }); continue; }
+      }
+      already.push(p.name); continue;
+    }
+    if (p.kind === 'link') {
+      const exists = Boolean(p.linkPath) && fs.existsSync(p.linkPath);
+      (exists ? addLink : linkMissing).push(p);
+    } else if (p.kind === 'npm') {
+      addNpm.push(p);
+    }
+  }
+  const manifestNames = new Set((manifest.plugins || []).map(p => p.name));
+  const extra = (current.plugins || []).filter(p => !manifestNames.has(p.name)).map(p => p.name);
+  const mgr = HOST_CTX && typeof HOST_CTX.get === 'function' ? HOST_CTX.get('pluginManager') : null;
+  return {
+    ok: true,
+    manifestOk: manifest.ok,
+    manifestError: manifest.error || null,
+    manifestAt: manifest.at || null,
+    currentSource: current.source,
+    addNpm, addLink, linkMissing, already, extra,
+    canInstall: addNpm.length > 0 || addLink.length > 0,
+    managerAvailable: Boolean(mgr && typeof mgr.installBundle === 'function'),
+  };
+}
+
+/** 找 pnpm 可执行入口：宿主提供的优先，其次 PATH，最后 bundled runtime。 */
+async function resolvePnpmInvocation(cfg) {
+  const pub = HOST_CTX && typeof HOST_CTX.get === 'function'
+    ? HOST_CTX.get('profileContext') : null;
+  const pm = pub && pub.packageManager;
+  if (pm && typeof pm.command === 'string' && pm.command.trim()) {
+    return { command: pm.command, args: Array.isArray(pm.args) ? pm.args : [], env: pm.env || {} };
+  }
+  // PATH 里的 pnpm
+  const probe = await execFileAsync('pnpm', ['--version'], { timeout: 15000, windowsHide: true }).catch(() => null);
+  if (probe && probe.stdout) return { command: 'pnpm', args: [], env: {} };
+  // bundled runtime
+  const dep = path.join(DSH_HOME, 'dsh-runtimes');
+  try {
+    const entries = await fsp.readdir(dep, { withFileTypes: true });
+    for (const d of entries) {
+      if (!d.isDirectory()) continue;
+      const node = path.join(dep, d.name, 'dependencies', 'node', 'bin', 'node.exe');
+      const pnpm = path.join(dep, d.name, 'dependencies', 'pnpm', 'bin', 'pnpm.cjs');
+      if (fs.existsSync(node) && fs.existsSync(pnpm)) return { command: node, args: [pnpm], env: {} };
+    }
+  } catch { /* 没有 runtime 目录 */ }
+  return null;
+}
+
+/** link 恢复：写回 package.json 的 link: 依赖与 bundles，再跑 pnpm install。 */
+async function restoreLinkPlugins(cfg, links) {
+  const pjPath = path.join(PROFILE_DIR, 'package.json');
+  const failed = [];
+  let pj;
+  try { pj = JSON.parse(await fsp.readFile(pjPath, 'utf8')); }
+  catch (e) {
+    return { installed: [], failed: links.map(p => ({ name: p.name, kind: 'link', error: 'package.json 读不到：' + e.message })) };
+  }
+  // 规则二：覆盖前备份。备份失败就停（否则回滚没有依据）。
+  const backupDir = path.join(BACKUP_ROOT, 'plugin-restore-' + new Date().toISOString().replace(/[:.]/g, '-'));
+  try {
+    await fsp.mkdir(backupDir, { recursive: true });
+    await fsp.copyFile(pjPath, path.join(backupDir, 'package.json'));
+  } catch (e) {
+    return { installed: [], failed: links.map(p => ({ name: p.name, kind: 'link', error: '备份 package.json 失败：' + e.message })) };
+  }
+  const deps = pj.dependencies || (pj.dependencies = {});
+  const bundles = pj.dsh && pj.dsh.profile && Array.isArray(pj.dsh.profile.bundles)
+    ? pj.dsh.profile.bundles
+    : [];
+  for (const p of links) {
+    deps[p.name] = 'link:' + String(p.linkPath || '').split('/').join('/');
+    if (!bundles.includes(p.name)) bundles.push(p.name);
+  }
+  if (!pj.dsh) pj.dsh = {};
+  if (!pj.dsh.profile) pj.dsh.profile = {};
+  pj.dsh.profile.bundles = bundles;
+  await fsp.writeFile(pjPath, JSON.stringify(pj, null, 2), 'utf8');
+
+  const inv = await resolvePnpmInvocation(cfg);
+  if (!inv) {
+    return {
+      installed: [], failed: links.map(p => ({ name: p.name, kind: 'link', error: '找不到 pnpm（宿主未提供、PATH 里没有、runtime 里也没有）' })),
+      backupDir, hint: '可手动执行：pnpm install（在 profile 目录）',
+    };
+  }
+  try {
+    const { stdout, stderr } = await execFileAsync(inv.command, [...inv.args, 'install', '--config.confirmModulesPurge=false'], {
+      cwd: PROFILE_DIR, timeout: 600000, windowsHide: true, maxBuffer: 8 * 1024 * 1024,
+      env: { ...process.env, ...inv.env, CI: 'true' },
+    });
+    return { installed: links.map(p => p.name), failed, backupDir, pnpmOutput: String(stdout || '').slice(0, 4000), pnpmError: String(stderr || '').slice(0, 2000) };
+  } catch (e) {
+    return {
+      installed: [], failed: links.map(p => ({ name: p.name, kind: 'link', error: String(e.message || e).slice(0, 500) })),
+      backupDir, hint: 'package.json 已改但 pnpm install 失败；原文件在 ' + backupDir,
+    };
+  }
+}
+
+/** 恢复执行：npm 走宿主服务；link 写依赖 + pnpm install。 */
+async function pluginRestoreExecute(cfg, opts = {}) {
+  if (opts.confirm !== 'RESTORE') return { ok: false, reason: 'need-confirm', hint: '确认闸门未过' };
+  if (!cfg.pluginSync || cfg.pluginSync.enabled !== true) {
+    return { ok: false, reason: 'disabled', hint: '插件清单备份/恢复开关未开' };
+  }
+  const preview = await pluginRestorePreview(cfg);
+  if (!preview.manifestOk) return { ok: false, reason: 'manifest-missing', error: preview.manifestError };
+  const mgr = HOST_CTX && typeof HOST_CTX.get === 'function' ? HOST_CTX.get('pluginManager') : null;
+  const npm = [], link = [], failed = [];
+  if (preview.addNpm.length) {
+    if (!mgr || typeof mgr.installBundle !== 'function') {
+      return {
+        ok: false, reason: 'manager-unavailable',
+        hint: '当前宿主没有 pluginManager 服务。可手动装：' + preview.addNpm.map(p => `dsh plugin add ${p.name}`).join('；'),
+        preview,
+      };
+    }
+    for (const p of preview.addNpm) {
+      try {
+        const r = await mgr.installBundle(p.name);
+        const ok = r && (r.application === 'applied' || r.application === 'restart-required' || r.application === 'overridden');
+        if (ok) npm.push({ name: p.name, application: r.application });
+        else failed.push({ name: p.name, kind: 'npm', error: (r && r.error) || 'install failed' });
+      } catch (e) {
+        failed.push({ name: p.name, kind: 'npm', error: String(e.message || e) });
+      }
+    }
+  }
+  if (preview.addLink.length) {
+    const r = await restoreLinkPlugins(cfg, preview.addLink);
+    link.push(...(r.installed || []));
+    failed.push(...(r.failed || []));
+    if (r.hint && !r.installed) return { ok: false, reason: 'link-restore-failed', error: r.hint, npm, link, failed, preview };
+  }
+  return { ok: failed.length === 0, npm, link, failed, preview };
+}
+
+/* 自动备份 tick：与 autoPush / codeRepoAuto 同一条 60s 定时器，各自判自杀条件。 */
+const PLUGIN_BACKUP_RUNTIME = { lastTickAt: null, lastResult: null };
+async function pluginBackupAutoTick(ctx) {
+  let cfg;
+  try { cfg = await readConfig(); } catch { return; }
+  if (!cfg.pluginSync || cfg.pluginSync.enabled !== true) return;
+  const minutes = Number(cfg.pluginSync.autoMinutes) || 0;
+  if (minutes <= 0) return;
+  const now = Date.now();
+  if (PLUGIN_BACKUP_RUNTIME.lastTickAt && now - PLUGIN_BACKUP_RUNTIME.lastTickAt < minutes * 60_000) return;
+  PLUGIN_BACKUP_RUNTIME.lastTickAt = now;
+  try {
+    const r = await backupPluginManifest(cfg);
+    PLUGIN_BACKUP_RUNTIME.lastResult = { at: new Date().toISOString(), ok: r.ok !== false, unchanged: r.unchanged === true };
+    diag({ phase: 'plugin-backup-auto', ok: r.ok !== false, unchanged: r.unchanged === true });
+  } catch (e) {
+    PLUGIN_BACKUP_RUNTIME.lastResult = { at: new Date().toISOString(), ok: false, error: String((e && e.message) || e) };
+  }
+}
+
 /* ------------------------------------------------------------------ 入口 */
 
 function apply(ctx) {
+  HOST_CTX = ctx;
   diag({
     phase: 'apply',
     node: process.versions && process.versions.node,
@@ -3517,6 +3909,7 @@ function apply(ctx) {
     runtime.timer = setInterval(() => {
       autoPushTick(ctx).catch(() => {});
       codeRepoAutoTick(ctx).catch(() => {});
+      pluginBackupAutoTick(ctx).catch(() => {});
     }, 60_000);
     if (runtime.timer.unref) runtime.timer.unref();
   } catch { /* 定时器失败不影响主功能 */ }
@@ -3581,4 +3974,4 @@ async function codeRepoAutoTick(ctx) {
 export { name, inject, apply };
 export const VERSION_INFO = VERSION;
 // 供离线 smoke 测试用（node --check 查不出逻辑错，必须真跑一遍）。
-export const __test = { codeRepoList, codeRepoState, codeReposPayload, syncCodeRepo, syncAllCodeRepos, divergeInfo, resolveKeepLocal, resolveKeepRemote, stampTrailer, purgePreview, purgeExecute, purgeVerify, sessionIdForms, walkSessionRefs, bareSessionId, sessionNoteTemplate, sessionNotePreview, sessionNoteWrite, resolveNotePath, sessionMigrateGroup, sessionMigratePreview, sessionMigrateExecute, sessionMigrateVerify, encodeWorkspaceGroup, decodeWorkspaceGroup, stateInfo, installInfo, idleStandard, mergeConfig, normalizeRemoteToHttps, repoFacts, normalizeWorkspaceMap, realWorkspaces, workspaceReport, selfCheck, channelState, readConfig, statusPayload, preflightReport: selfCheck, sessionDoctorScan, sessionDoctorApply, channelsOf, repoKeyOf, remoteOf, surfaceEnabled, diffLocalToPayload, stageChanges, commitChanges, pushChannels, pullChannels, applyPayload, ensureRepo, channelLabel };
+export const __test = { memoryMap, codeRepoList, codeRepoState, codeReposPayload, syncCodeRepo, syncAllCodeRepos, divergeInfo, resolveKeepLocal, resolveKeepRemote, stampTrailer, purgePreview, purgeExecute, purgeVerify, sessionIdForms, walkSessionRefs, bareSessionId, sessionNoteTemplate, sessionNotePreview, sessionNoteWrite, resolveNotePath, sessionMigrateGroup, sessionMigratePreview, sessionMigrateExecute, sessionMigrateVerify, encodeWorkspaceGroup, decodeWorkspaceGroup, stateInfo, installInfo, idleStandard, mergeConfig, normalizeRemoteToHttps, repoFacts, normalizeWorkspaceMap, realWorkspaces, workspaceReport, selfCheck, channelState, readConfig, statusPayload, preflightReport: selfCheck, sessionDoctorScan, sessionDoctorApply, channelsOf, repoKeyOf, remoteOf, surfaceEnabled, diffLocalToPayload, stageChanges, commitChanges, pushChannels, pullChannels, applyPayload, ensureRepo, channelLabel, classifyPluginSpec, readInstalledPlugins, buildPluginManifest, readPluginManifest, writePluginManifest, backupPluginManifest, pluginRestorePreview, pluginRestoreExecute, pluginManifestPath, PLUGIN_BACKUP_RUNTIME };

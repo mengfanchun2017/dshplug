@@ -54,6 +54,7 @@
 |---|---|---|
 | 另一台机器 / 给别人装 / 从零装 | **§1.1 公开仓库地址**（首选） | **不需要** |
 | 在本机改代码、要 `link:` 热更新 | §1.2 `install.ps1` | 需要 |
+| 把**同仓库的另一个插件**也装上（M* 配套） | 见 **§1.4 与 Msynchub 的关系** | **不需要** |
 
 ### 1.1 给一台新的 DSH 装（公开仓库地址，首选）
 
@@ -89,6 +90,17 @@ github:mengfanchun2017/dswp-plugin#path:/dsh-gitok
 装完会提示「已安装，请重启 DSH 加载它」—— **完全退出再打开**。
 这条路不需要 clone 仓库、不需要 `dsh` 在 PATH、不需要管引号。
 
+> **两条地址的形态对照**（实测都能装，`#` 后面的部分一字不能少）：
+>
+> | 写法 | 例子 |
+> |---|---|
+> | 宿主简写（**推荐**） | `github:mengfanchun2017/dswp-plugin#path:/dsh-gitok` |
+> | 完整 URL | `https://github.com/mengfanchun2017/dswp-plugin#path:/dsh-gitok` |
+> | 带 `.git` | `https://github.com/mengfanchun2017/dswp-plugin.git#path:/dsh-gitok` |
+> | `#path:` 后**不**带斜杠 | `github:mengfanchun2017/dswp-plugin#path:dsh-gitok`（也可以） |
+>
+> 两种写法装出来的是同一个包；`github:` 简写在网页表单里更不容易被自动补全改坏。
+
 #### 路线 B：命令行
 
 ```powershell
@@ -99,6 +111,9 @@ dsh plugin --profile desktop add 'github:mengfanchun2017/dswp-plugin#path:/dsh-g
 - `--profile desktop` 是桌面应用的 profile；纯 CLI 用户一般用 `--profile web`，按自己的改。
 - `#path:/dsh-gitok` **不能省**：本仓库是 monorepo，插件在子目录里，
   不带 `path:` 就指向仓库根，而根 `package.json` 不是插件（没有 `dsh.bundle`）。
+  省掉它会报「**这个包没有声明组合包，无法作为插件安装**」——不是网络问题。
+- 同一个插件**重复 add 一次是安全的**（输出 `Already up to date`，不改任何东西），
+  所以「不确定装没装上」时直接再粘一次即可，不用先卸载。
 - `dsh` 不在 PATH（提示「无法将 dsh 项识别为 cmdlet」）就用完整路径：
 
 ```powershell
@@ -111,9 +126,8 @@ dsh plugin --profile desktop add 'github:mengfanchun2017/dswp-plugin#path:/dsh-g
 | 症状 | 原因 | 改法 |
 |---|---|---|
 | `ERR_PNPM_ADDING_TO_ROOT` / 装到了奇怪位置 | 没给 `--profile` | 补上 `--profile desktop`（或 `web`） |
-| `没有 dsh.bundle` / 工具能跑但界面没有 | 漏了 `#path:` | 本仓库是 monorepo，必须 `#path:/dsh-gitok` |
+| `这个包没有声明组合包，无法作为插件安装` | 漏了 `#path:` | 本仓库是 monorepo，必须 `#path:/dsh-gitok` |
 | `ERR_PNPM_GIT_RESOLVE_FAILED` + `schannel` / `TLS connect error` | git 没走代理（pnpm 的代理配置对 git 无效） | `git config --global http.proxy http://127.0.0.1:7897` 与 `https.proxy` 同值 |
-
 #### 验证装对了没有
 
 ```powershell
@@ -122,14 +136,14 @@ Get-Content "$env:USERPROFILE\.dsh\profiles\desktop\package.json"
 #   dependencies → "dsh-gitok": "github:mengfanchun2017/dswp-plugin#path:/dsh-gitok"
 #   dsh.profile.bundles → 数组里有 "dsh-gitok"
 
-# B) 装下来的文件数（实测 17 个）
+# B) 装下来的文件数（实测 18 个）
 (Get-ChildItem "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-gitok" -Recurse -File).Count
-#   17
+#   18
 ```
 
 **为什么不需要 `prepare` / `allowBuilds`**：git 安装取源码而不是构建产物，一般确实需要构建步骤。
 本插件是纯 ESM JavaScript，没有构建、没有 `postinstall`、没有运行时依赖，所以 pnpm 不会拦脚本，
-用户也不用改 `pnpm-workspace.yaml`。实测装下来 17 个文件（`lib/`、`locale/`、`cordis.patch.yml`、
+用户也不用改 `pnpm-workspace.yaml`。实测装下来 18 个文件（`lib/`、`locale/`、`cordis.patch.yml`、
 `icon.svg`、三份文档、`docs/`、`tools/`）、`dsh.bundle.patch` 在位、
 DSH 的 `evaluatePluginCompatibility()` 返回「无未满足要求」。
 
@@ -174,6 +188,82 @@ DSH 的 `evaluatePluginCompatibility()` 返回「无未满足要求」。
 同一个 profile 里 `dependencies` 只能写一种形态：要么 `github:...#path:/dsh-gitok`，
 要么 `link:C:/...`。从一条切到另一条，装上就行（后装的覆盖声明）；
 回退用 §1.1 的地址重装一次即可。
+
+### 1.4 与 Msynchub 的关系（两个插件怎么一起装到另一台 DSH）
+
+#### 一句话
+
+**两个插件在同一个公开仓库里，各占一个子目录；各自用自己的 git 地址安装，互不依赖。**
+装好任一个都不需要另一个，但**多机同步这件事要两个一起才完整**：
+Msynchub 负责「把数据搬过去」，Mgitok 负责「让 git 有权限搬」。
+
+| | **Mgitok**（本插件） | **Msynchub** |
+|---|---|---|
+| 干什么 | git 凭据与认证：登录、体检、撤销、端到端验证 | 把会话 / 工作区 / 附件 / 技能 / 配置层 / 全局 `AGENTS.md` 同步到私有 Git 仓库 |
+| 管的是 | **权限**（能不能推） | **内容**（推什么过去） |
+| 能不能替对方 | 不能——它只碰凭据，不同步任何文件 | 不能——它**不接收也不保存凭据**，推送报 401 就卡住 |
+| 装在哪 | 设置里没有侧边栏（设计如此，ADR-011） | 侧边栏 + 设置两处都在 |
+
+> **顺序上的唯一硬要求**：`sync-plugins.ps1`（A 机导出的插件清单 → B 机一键装齐）
+> 只能在**本机还没有 `package.json`** 时恢复清单。所以「先装这两个、再跑一键装齐」
+> 会只装到这两个（详见 §9A.0.2）。
+
+#### 两条地址（整行复制，`#` 之后的部分一字不能少）
+
+```text
+# Mgitok（本插件）
+github:mengfanchun2017/dswp-plugin#path:/dsh-gitok
+
+# Msynchub
+github:mengfanchun2017/dswp-plugin#path:/dsh-synchub
+```
+
+Msynchub 那份文档里同一条地址写成 `https://github.com/mengfanchun2017/dswp-plugin#path:dsh-synchub`，
+**两种写法等价**（实测都 `exit 0`）。差异只在 `#path:` 后面那个斜杠：带不带都行。
+
+**Msynchub 的命令行等价写法**（要单引号，理由同 §1.1 路线 B）：
+
+```powershell
+dsh plugin --profile desktop add 'github:mengfanchun2017/dswp-plugin#path:/dsh-synchub'
+```
+
+图形界面走同一条入口：**设置 → 插件 → 添加插件**，两条地址分别粘一次。
+
+#### 装完怎么确认两个都到位
+
+```powershell
+$pkg = "$env:USERPROFILE\.dsh\profiles\desktop\package.json"
+$j  = Get-Content $pkg -Raw | ConvertFrom-Json
+
+# ① dependencies 里两条都在（值就是上面那两行地址）
+$j.dependencies.'dsh-gitok'
+$j.dependencies.'dsh-synchub'
+
+# ② dsh.profile.bundles 里也都要有 —— 只有 dependencies 不算数
+$j.dsh.profile.bundles
+
+# ③ 包内容都在（gitok 实测 18 个文件；synchub 看 client.js 在不在）
+(Get-ChildItem "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-gitok" -Recurse -File).Count
+Test-Path "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-synchub\lib\client.js"
+```
+
+**两处都要看**：`dependencies` 是「装没装」，`dsh.profile.bundles` 是「启没启用」。
+只有前者时，工具可能能用但设置里那一栏不会出现。
+
+#### 完整收尾（新机器从装插件到能用）
+
+```text
+① 装两个插件        §1.1 / 本节地址，装完完全退出 DSH 再打开
+② 配 Msynchub       设置 → Msynchub → 填两个私有仓地址 → 保存 → 重新检查
+③ 登录 Mgitok       设置 → Mgitok → 一键初始化（凭据进 Windows 凭据管理器）
+④ 重启 DSH          cordis.patch.yml 的 config 在行激活时读，改完必须重启
+⑤ 建基线            A 机「立即同步」；B 机「拉取并应用」
+```
+
+> **插件清单走 Git，不走 synchub**：`profile/package.json` 里含 `link:` 绝对路径，
+> 是 danger 级、代码里硬编码永不同步（`dsh-synchub/lib/index.js` 的 `surface.tier !== 'danger'`）。
+> 多台机器装齐插件用 `C:\dsh\dw-base\inside\tools\sync-plugins.ps1`，
+> 完整 8 步顺序见 `C:\dsh\dw-base\inside\两机同步-操作手册.md`。
 
 ## 2. 验证（三层，逐层加深）
 
@@ -625,6 +715,7 @@ OAuth 那条路做不到 —— 详见 ADR-014 的 v0.3.11 补遗。
 
 > 这里的「全新机器」指**从没装过这个插件的 DSH**。
 > 第①步给的是**公开仓库地址**，不需要先把仓库下载下来（详见 §1.1）。
+> 要**同时装 Msynchub**（同仓库的另一个插件）→ 见 **§1.4**，那里有两条地址和收尾顺序。
 
 ```text
 # ① 装插件（只需一次）—— 给地址，不要去 clone
@@ -762,10 +853,9 @@ Get-Content "$env:USERPROFILE\.dsh\profiles\desktop\package.json"
 #   dependencies → "dsh-gitok": "github:mengfanchun2017/dswp-plugin#path:/dsh-gitok"
 #   dsh.profile.bundles → 数组里有 "dsh-gitok"
 
-# ② 包内容完整（git 安装取源码，实测 17 个文件）
+# ② 包内容完整（git 安装取源码，实测 18 个文件）
 (Get-ChildItem "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-gitok" -Recurse -File).Count
-#   17
-```
+#   18
 
 **B 上不需要 clone 仓库**：git 安装会把源码取进 pnpm store 再链进 profile，
 `C:\dsh\dw-plugin` 只在本机开发（要 `link:` 热更新）时才需要。
@@ -949,6 +1039,38 @@ gitok_adopt targets=["claude"]               # 确认后写入
 [ ] WSL: git ls-remote —— 如果 B 的 Claude 在 WSL 里，这一步必须也过
 [ ] 两个 host 都查     —— github.com 和 gist.github.com 的 helper 都有值
 ```
+
+### 9A.0.2 先装插件还是先跑「一键装齐」？——必须后装插件
+
+B 机上还有另一条路：`sync-plugins.ps1` 会把 A 机导出的插件清单
+（`C:\dsh\dw-base\inside\profile-manifest.json`）一次性装齐 14 个依赖 / 15 个 bundle。
+**它和「先用 git 地址装这两个」不能同时成立**，原因在脚本里：
+
+```text
+本机 ~/.dsh/profiles/desktop/package.json 不存在  → 从仓库清单恢复
+本机已经有 package.json（哪怕只装了 1 个插件）   → 不恢复，只补缺的那几个
+```
+
+实测后果：**先装 Mgitok + Msynchub，再跑 `sync-plugins.ps1`，只会装到这两个**，
+其余 12 个插件不会补上，脚本也不会报错——它只提示「缺 2 个：dsh-gitok, dsh-synchub」然后正常结束。
+
+所以 B 机二选一：
+
+| 你想要 | 怎么做 |
+|---|---|
+| **装齐全部插件**（推荐） | 先 clone 两个仓库 → **不启动 DSH**（避免 profile 被建出来）→ 直接跑 `sync-plugins.ps1` → 再启动 DSH |
+| **只装这两个、手动补其余** | 先粘地址装 Mgitok + Msynchub → 完全退出 DSH → 跑 `sync-plugins.ps1`（它只会补缺的） |
+
+> **「不启动 DSH」为什么重要**：桌面版启动一次就会建出 `package.json`，
+> 于是清单永远走不到「恢复」分支。已经启动过了就先把清单改名再跑：
+>
+> ```powershell
+> Rename-Item "$env:USERPROFILE\.dsh\profiles\desktop\package.json" `
+>   "package.json.bak-$(Get-Date -f yyyyMMdd-HHmmss)"
+> pwsh -File C:\dsh\dw-base\inside\tools\sync-plugins.ps1 -Check   # 应看到 14 依赖 / 15 bundles
+> ```
+>
+> 完整 8 步顺序见 `C:\dsh\dw-base\inside\两机同步-操作手册.md`（手册里也写了「gitok 在最后，不是最前」）。
 
 ## 10. 日常维护：三件事要分开做
 
