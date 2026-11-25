@@ -373,4 +373,26 @@ export async function appendMemory(absPath, block) {
   return { ok: true, bytes: Buffer.byteLength(block, 'utf8'), existed: Boolean(prev) };
 }
 
-export const __test = { memoryMap, resolveAgentsHome, findProjectRoot, chainFromRoot, readSessionTranscript, archivePlan, appendMemory, encodeWorkspaceGroup };
+/** 覆盖式写回（整理用）：先备份已有文件，再整文件覆盖。 */
+export async function writeMemoryFile(absPath, content) {
+  if (!absPath) return { ok: false, error: '缺少落点' };
+  const prev = fs.existsSync(absPath) ? await fsp.readFile(absPath, 'utf8') : '';
+  await fsp.mkdir(path.dirname(absPath), { recursive: true });
+  if (prev) await fsp.copyFile(absPath, `${absPath}.bak-${Date.now()}`);
+  const text = String(content || '').trim() + '\n';
+  await fsp.writeFile(absPath, text, 'utf8');
+  return { ok: true, bytes: Buffer.byteLength(text, 'utf8'), existed: Boolean(prev), unchanged: prev === text };
+}
+
+/** 取某工作区最近 n 个会话的文本（整理时的输入）。 */
+export async function recentWorkspaceTranscript(dshHome, workspace, limit = 5) {
+  const ids = Array.isArray(workspace && workspace.sessionIds) ? workspace.sessionIds.slice(-limit) : [];
+  const out = [];
+  for (const sid of ids) {
+    const t = await readSessionTranscript(dshHome, sid);
+    if (t.ok) out.push({ sessionId: sid, messages: t.messages });
+  }
+  return out;
+}
+
+export const __test = { memoryMap, writeMemoryFile, recentWorkspaceTranscript, resolveAgentsHome, findProjectRoot, chainFromRoot, readSessionTranscript, archivePlan, appendMemory, encodeWorkspaceGroup };

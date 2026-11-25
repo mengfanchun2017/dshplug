@@ -92,6 +92,10 @@ function ok(name, cond, extra) {
   ok('计数正确', w1.count === 3, 'count=' + w1.count);
   const manifestPath = t.pluginManifestPath(cfg);
   ok('落在 dsh-home/plugins/manifest.json', manifestPath.endsWith(path.join('dsh-home', 'plugins', 'manifest.json')));
+  // 提交时用的是「相对仓库根」的路径；写死 plugins/ 会因 payload 目录改名而失效（真机踩到）。
+  const rel = path.relative(all, manifestPath).split(path.sep).join('/');
+  ok('相对仓库根的路径含 dsh-home', rel === 'dsh-home/plugins/manifest.json', rel);
+  ok('相对路径不越界（不以 .. 开头）', !rel.startsWith('..'));
   const text1 = fs.readFileSync(manifestPath, 'utf8');
   const w2 = await t.writePluginManifest(cfg);
   ok('二次无变化', w2.ok === true && w2.unchanged === true, JSON.stringify(w2));

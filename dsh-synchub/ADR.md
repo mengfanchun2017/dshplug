@@ -1752,3 +1752,30 @@ DSH 在目录改名后会为该新路径**新建**一个 `workspaceId`，旧记�
   | 首版就自动总结 | ADR-006/015 明确不自动导出，且需 LLM 依赖；留到阶段②并新 ADR 修订 |
   | 把项目规则纳入 synchub 同步 | 与「工作区 AGENTS.md 归各自 git」冲突 |
   | 按目录而非按工作区 | 「目录」在 DSH 里没有独立实体；项目链/技能根都以项目根（工作区）为单位 |
+
+## ADR-040 · 0.14.0：归档时自动总结并写入记忆（阶段②）
+
+- **日期**：2026-11-25
+- **状态**：已采纳（已实现，待真机重启验收）
+- **背景（用户原话）**：
+  > 「对于每个位置（目录）下的记忆，或者每个工作区，可以打开开关当 session 归档时，更新对应记忆，这样记忆就是逐渐扩展」
+  > 「这里统一下，直接放在 <workspace>/memory/ 下，不要 docs……每次归档时候就更新到这个文件，用户级位置不变，纳入 synchub 吧，统一」
+  > 「更新 ADR 为新策略」
+- **调研结论（源码级）**：
+  1. 归档有官方钩子：`workspace/session-archived`（`@mode parallel`，payload `{sessionId}`，归档持久化后触发，重复归档不触发，监听者自管后台工作，失败不影响归档）。证据：`dsh-workspace/src/index.ts` 的 `Events` 声明。
+  2. 模型调用走 `ctx.llm.stream({provider, model, messages})`，用 `BlockAssembler`/`createUserMessage` 组装；`llm` 是可选服务，用 `ctx.reflect.get('llm', false)` 取（`inject` 只声明必须存在的服务，llm 不能进 inject）。证据：`dsh-llm/README.md`、`cordis/src/reflect.ts`（`get(name, strict?)`「Read a service from the store without the inject requirement」）。
+  3. 会话正文是 zstd 多帧，单次 `zstdDecompressSync` 只解第一帧（实测 162 帧只出 196 字节），必须逐帧扫边界。证据：`dsh-session-persistence-jsonl/src/zstd.ts`。
+- **结论**：监听归档事件 → 查会话所属工作区（`workspace.json` 为唯一权威）→ 该工作区开关打开则读会话文本、调 `ctx.llm` 总结、追加写入 `<工作区>/memory/PROJECT.md`（可选同时写用户级）；新增同步面 `memory`（用户级），工作区级随各工作区 git。
+- **理由**：用户要的是「记忆随会话归档逐渐扩展」，而归档正是「这次会话告一段落」的自然时机；写前备份 + 只追加，不覆盖已有记忆。
+- **反面代价**：① 每次归档都会消耗一次模型调用；② 总结质量取决于模型，可能含不准确结论（所以只写「确定结论」由模型产出，人工可后续整理）；③ 工作区级 memory 不在 `~/.dsh`，synchub 的 payload 模型覆盖不到，只能随工作区 git 同步。
+- **已否决的替代方案**：
+  | 方案 | 否决理由 |
+  |---|---|
+  | 归档时把总结写进 `AGENTS.md` | 规则文件有 65536 字节预算，自动写入会挤占并污染规则（ADR-006/015 同源顾虑） |
+  | 把 `llm` 放进 `inject` | 没有 llm 的 profile 会让整个 synchub 不加载；必须可选降级 |
+  | 自动导出 compact 摘要（不总结） | 摘要面向模型、含敏感路径，「哪些算确定结论」需人判断（ADR-006/015） |
+  | 归档时立即覆盖旧记忆 | 用户明确「记忆逐渐扩展」，覆盖会丢历史；改为追加 + 备份 |
+- **验证**：
+  - `test/memoryarchive-smoke.cjs`：多帧会话提取（滤 system-reminder）、落点定位、备份后追加、会话不存在/损坏/未分组三种失败态。
+  - `synchub-smoke.cjs` 路由 30→32；`render-smoke` 全绿。
+  - 改 `index.js` 必须完全重启 DSH 验收。

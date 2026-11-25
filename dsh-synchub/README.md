@@ -14,6 +14,8 @@
 > npm 走宿主 `pluginManager` 服务、link 写回依赖后 pnpm install；带开关（默认关，与 dsh-market
 > 的备份导出二选一）。
 
+0.14.0 是**归档总结版**（阶段②，ADR-040）：会话归档时按工作区开关，用模型把会话整理成 Markdown 写入 `<工作区>/memory/PROJECT.md`（用户级 `~/.dsh/memory/USER.md` 可选）。新增归档事件监听（`workspace/session-archived`）、`GET /api/dsh-synchub/memory`、`POST /api/dsh-synchub/memory/archive`、同步面 `memory`，设置页新增「记忆管理」卡（总开关 / provider·model / 逐工作区开关 / 手动归档总结）。写前自动备份、只追加不覆盖。
+
 0.13.0 是**记忆地图版**（阶段①，只读，ADR-039）：把 DSH 的「记忆」讲清楚——它不是一个文件，而是四层（记忆文件 / 用户全局规则 / 项目规则 / 技能）加会话日志。新增 `lib/memory.js` 枚举，`GET /api/dsh-synchub/memory-map`，侧边栏「⑦ 记忆地图」卡（默认折叠）与设置页「记忆文件」卡。**只读、不写盘**。记忆落点约定：工作区级 `<workspace>/memory/`、用户级 `~/.dsh/memory/USER.md`（归档自动写入与纳入同步是后续阶段）。
 
 0.10.0 是**单仓库模式版**（ADR-036，已被 0.11.0 取代）：曾提供「单仓库/双仓库」切换与两个分组开关。

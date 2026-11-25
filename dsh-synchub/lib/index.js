@@ -34,7 +34,7 @@ const execFileAsync = promisify(execFile);
 
 const name = 'dsh-synchub';
 const inject = ['webServer'];
-const VERSION = '0.13.0';
+const VERSION = '0.14.0';
 /* 分支不能写死。远端仓库可能是 master（GitHub 旧默认）也可能是 main，
    写死一个就会在已有仓库上推出一个**平行的空历史分支**。
    优先级：config.channels[ch].branch → 远端 HEAD 指向的分支 → DEFAULT_BRANCH。 */
@@ -87,7 +87,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 /* ADR-034：会话体检与修复。为了不让 index.js 继续膨胀（已 3500+ 行）且好单测，
    引擎放在兄弟模块里；它只拿 dshHome 做纯文件操作，不注册路由、不读配置。 */
 import { doctorScan as sessionDoctorScan, doctorApply as sessionDoctorApply } from './sessiondoctor.js';
-import { memoryMap, archivePlan, readSessionTranscript, appendMemory } from './memory.js';
+import { memoryMap, archivePlan, readSessionTranscript, appendMemory, writeMemoryFile, recentWorkspaceTranscript, MEMORY_DIR, USER_MEMORY_FILE } from './memory.js';
 
 /** 宿主 profile 目录：从本文件往上找 node_modules 的父目录。 */
 function resolveProfileDir() {
@@ -3154,6 +3154,16 @@ function routesFor() {
     },
     {
       kind: 'exact',
+      path: '/api/dsh-synchub/memory/tidy',
+      handler: async (req, res) => {
+        try {
+          const r = await tidyMemoryNow('manual');
+          return json(res, r && r.ok ? 200 : 400, r);
+        } catch (e) { return json(res, 500, { ok: false, error: String(e.message || e) }); }
+      },
+    },
+    {
+      kind: 'exact',
       path: '/api/dsh-synchub/preflight',
       handler: async (_req, res) => {
         try {
@@ -3734,12 +3744,14 @@ async function backupPluginManifest(cfg) {
   const w = await writePluginManifest(cfg);
   if (!w.ok) return w;
   const dir = repoDir('config', cfg);
+  // 清单相对仓库根的路径（payload 目录名随版本变，不能写死 plugins/）。
+  const relManifest = path.relative(dir, pluginManifestPath(cfg)).split(path.sep).join('/');
   const commit = { ok: false, committed: false };
   if (!fs.existsSync(path.join(dir, '.git'))) {
     commit.reason = 'not-initialized';
   } else {
-    await git(dir, ['add', '--', 'plugins/manifest.json']);
-    const st = await git(dir, ['status', '--porcelain', '-uno', '--', 'plugins/manifest.json']);
+    await git(dir, ['add', '-A', '--', relManifest]);
+    const st = await git(dir, ['status', '--porcelain', '--', relManifest]);
     if (!st.ok) {
       commit.ok = false; commit.reason = 'git-status-failed'; commit.output = st.err || st.out;
     } else if (st.out && st.out.trim()) {
@@ -3929,6 +3941,85 @@ async function pluginBackupAutoTick(ctx) {
 
 /* ------------------------------------------------------------------ 入口 */
 
+/* ------------------------------------------------ 阶段③ 整理记忆（ADR-041） */
+
+function tidyConfigOf(cfg) {
+  const m = memoryConfigOf(cfg);
+  return (m && m.tidy) || { enabled: false, intervalHours: 0 };
+}
+
+async function tidyWithLlm(llm, provider, model, prev, recent) {
+  const sys = { role: 'system', content: [{ type: 'text', text: '你是记忆整理助手。把「现有记忆」与「相关会话」合并成一份简洁、去重、按主题组织的 Markdown 记忆。保留仍然有效的结论，删掉过时内容，不要编造。' }] };
+  const a = { role: 'user', content: [{ type: 'text', text: '现有记忆：\n' + (prev || '（空）') }] };
+  const b = { role: 'user', content: [{ type: 'text', text: '相关会话（最近）：\n' + (recent || '（无）') }] };
+  let text = '';
+  for await (const chunk of llm.stream({ provider, model, messages: [sys, a, b] })) {
+    if (!chunk) continue;
+    if (chunk.kind === 'text-delta') text += (chunk.text ?? chunk.delta ?? '');
+    if (chunk.kind === 'finish') break;
+  }
+  return text.trim();
+}
+
+/** 整理一个工作区的记忆：现有 PROJECT.md + 最近会话 → 模型合并 → 备份后覆盖。 */
+async function tidyWorkspaceMemory(cfg, ws, llm, provider, model) {
+  const file = path.join(ws.path || '', MEMORY_DIR, 'PROJECT.md');
+  if (!ws.path) return { ok: false, error: '工作区没有路径' };
+  const prev = fs.existsSync(file) ? await fsp.readFile(file, 'utf8') : '';
+  const recent = await recentWorkspaceTranscript(DSH_HOME, ws, 5);
+  if (!prev && !recent.length) return { ok: false, skipped: 'no-content' };
+  const recentText = recent.map(r => '### ' + r.sessionId + '\n' + r.messages.map(m => (m.role === 'assistant' ? '助手：' : '用户：') + m.text).join('\n')).join('\n\n');
+  const merged = await tidyWithLlm(llm, provider, model, prev, recentText.slice(0, 20000));
+  if (!merged) return { ok: false, error: '整理结果为空' };
+  const w = await writeMemoryFile(file, merged);
+  return { ok: true, file, bytes: w.bytes, unchanged: w.unchanged };
+}
+
+/** 整理入口：手动与定时共用。范围 = 配置的工作区（空=全部）。 */
+async function tidyMemoryNow(reason) {
+  try {
+    const cfg = await readConfig();
+    const m = memoryConfigOf(cfg);
+    if (!m.enabled) return { ok: false, skipped: 'disabled' };
+    const t = tidyConfigOf(cfg);
+    if (!t.enabled && reason === 'auto') return { ok: false, skipped: 'auto-disabled' };
+    const llm = HOST_CTX && HOST_CTX.reflect && typeof HOST_CTX.reflect.get === 'function'
+      ? HOST_CTX.reflect.get('llm', false) : null;
+    if (!llm) return { ok: false, error: '该 profile 没有可用的 llm 服务，跳过整理' };
+    const route = await resolveLlmRoute(llm, cfg);
+    if (!route.provider || !route.model) return { ok: false, error: '无法确定 provider/model' };
+    const all = await realWorkspaces();
+    if (!all.ok) return { ok: false, error: all.error };
+    const list = Array.isArray(m.workspaces) ? m.workspaces : [];
+    const targets = list.length
+      ? all.workspaces.filter(w => list.some(x => String(x.name).toLowerCase() === String(w.title).toLowerCase()))
+      : all.workspaces;
+    const results = [];
+    for (const ws of targets) {
+      const r = await tidyWorkspaceMemory(cfg, ws, llm, route.provider, route.model);
+      results.push({ workspace: ws.title, ...r });
+    }
+    return { ok: true, reason, model: route.provider + '/' + route.model, results };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+}
+
+async function tidyTick(ctx) {
+  try {
+    const cfg = await readConfig();
+    const t = tidyConfigOf(cfg);
+    if (!t.enabled || !t.intervalHours) return;
+    const now = Date.now();
+    const last = runtime.tidyLastAt || 0;
+    if (last && now - last < t.intervalHours * 3600 * 1000) return;
+    runtime.tidyLastAt = now;
+    const r = await tidyMemoryNow('auto');
+    if (r && r.ok) log(ctx, 'info', `定时整理记忆完成：${(r.results || []).filter(x => x.ok).length} 个工作区`);
+    else if (r && r.error) log(ctx, 'warn', `定时整理记忆跳过：${r.error}`);
+  } catch { /* 定时任务失败不影响主功能 */ }
+}
+
 /* ------------------------------------------------ 阶段② 归档总结（ADR-040） */
 
 function memoryConfigOf(cfg) {
@@ -4060,6 +4151,7 @@ function apply(ctx) {
       autoPushTick(ctx).catch(() => {});
       codeRepoAutoTick(ctx).catch(() => {});
       pluginBackupAutoTick(ctx).catch(() => {});
+      tidyTick(ctx).catch(() => {});
     }, 60_000);
     if (runtime.timer.unref) runtime.timer.unref();
   } catch { /* 定时器失败不影响主功能 */ }
@@ -4124,4 +4216,4 @@ async function codeRepoAutoTick(ctx) {
 export { name, inject, apply };
 export const VERSION_INFO = VERSION;
 // 供离线 smoke 测试用（node --check 查不出逻辑错，必须真跑一遍）。
-export const __test = { memoryMap, archiveSessionById, codeRepoList, codeRepoState, codeReposPayload, syncCodeRepo, syncAllCodeRepos, divergeInfo, resolveKeepLocal, resolveKeepRemote, stampTrailer, purgePreview, purgeExecute, purgeVerify, sessionIdForms, walkSessionRefs, bareSessionId, sessionNoteTemplate, sessionNotePreview, sessionNoteWrite, resolveNotePath, sessionMigrateGroup, sessionMigratePreview, sessionMigrateExecute, sessionMigrateVerify, encodeWorkspaceGroup, decodeWorkspaceGroup, stateInfo, installInfo, idleStandard, mergeConfig, normalizeRemoteToHttps, repoFacts, normalizeWorkspaceMap, realWorkspaces, workspaceReport, selfCheck, channelState, readConfig, statusPayload, preflightReport: selfCheck, sessionDoctorScan, sessionDoctorApply, channelsOf, repoKeyOf, remoteOf, surfaceEnabled, diffLocalToPayload, stageChanges, commitChanges, pushChannels, pullChannels, applyPayload, ensureRepo, channelLabel, classifyPluginSpec, readInstalledPlugins, buildPluginManifest, readPluginManifest, writePluginManifest, backupPluginManifest, pluginRestorePreview, pluginRestoreExecute, pluginManifestPath, PLUGIN_BACKUP_RUNTIME };
+export const __test = { memoryMap, archiveSessionById, tidyMemoryNow, codeRepoList, codeRepoState, codeReposPayload, syncCodeRepo, syncAllCodeRepos, divergeInfo, resolveKeepLocal, resolveKeepRemote, stampTrailer, purgePreview, purgeExecute, purgeVerify, sessionIdForms, walkSessionRefs, bareSessionId, sessionNoteTemplate, sessionNotePreview, sessionNoteWrite, resolveNotePath, sessionMigrateGroup, sessionMigratePreview, sessionMigrateExecute, sessionMigrateVerify, encodeWorkspaceGroup, decodeWorkspaceGroup, stateInfo, installInfo, idleStandard, mergeConfig, normalizeRemoteToHttps, repoFacts, normalizeWorkspaceMap, realWorkspaces, workspaceReport, selfCheck, channelState, readConfig, statusPayload, preflightReport: selfCheck, sessionDoctorScan, sessionDoctorApply, channelsOf, repoKeyOf, remoteOf, surfaceEnabled, diffLocalToPayload, stageChanges, commitChanges, pushChannels, pullChannels, applyPayload, ensureRepo, channelLabel, classifyPluginSpec, readInstalledPlugins, buildPluginManifest, readPluginManifest, writePluginManifest, backupPluginManifest, pluginRestorePreview, pluginRestoreExecute, pluginManifestPath, PLUGIN_BACKUP_RUNTIME };
