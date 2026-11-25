@@ -436,6 +436,23 @@ DSH 的「记忆」不是一个文件，而是几层。侧边栏「⑦ 记忆地
 
 API：`GET /api/dsh-synchub/memory-map`。**只读，不写盘**；枚举失败按「不存在」处理，不让整张表崩。
 
+## 6.6 记忆管理（归档总结 / 整理 / 编辑）
+
+记忆落点统一为 **工作区级 `<工作区>/memory/PROJECT.md`** 与 **用户级 `~/.dsh/memory/USER.md`**（不是 `docs/`）。
+
+| 能力 | 触发 | 落点 | 语义 |
+|---|---|---|---|
+| 归档总结 | 会话归档（`workspace/session-archived`）或设置页「立即归档总结」 | `<工作区>/memory/PROJECT.md` | **追加**（写前备份） |
+| 整理记忆 | 设置页「立即整理」或定时 `tidy.intervalHours` | 同上 | **覆盖**（写前备份，模型合并去重） |
+| 侧栏编辑 | 侧栏「⑦ 记忆地图 → 编辑记忆文件」 | 同二 | 备份后写回（`confirm=WRITE`） |
+
+**开关**（设置 → Msynchub → ② 可选 → 记忆管理）：总开关 `enabled`、归档自动 `onArchive`、用户级 `userEnabled`、逐工作区开关（留空 = 全部工作区）、provider/model（留空 = 自动取第一个可用）。
+
+**同步**：用户级 `~/.dsh/memory/` 已作为同步面 `memory`（config 组）进 synchub 仓库；工作区级 `<工作区>/memory/` 在工作区里，随各工作区自己的 git（建议把工作区登记为「代码仓库」）。
+
+**模型**：归档/整理走 `ctx.llm.stream`，需要本 profile 有可用 provider。留空时自动遍历 provider 取第一个能列出模型的。
+
+**安全**：编辑只允许 `~/.dsh/memory/` 与各 `<工作区>/memory/` 下的 `.md`；越界、非 md、凭据文件一律拒绝；所有写回先备份 `.bak-<时间戳>`。
 ## 7. 两台机器的前置条件
 
 **工作区路径必须完全相同**（例如都在 `C:\dsh\workspace1`）。这不是洁癖，是三重依赖：
