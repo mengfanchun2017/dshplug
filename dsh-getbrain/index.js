@@ -111,14 +111,14 @@ export const inject = ['tools', 'settings']
  */
 
 const BUNDLE_DIR = path.dirname(fileURLToPath(import.meta.url))
-// 工作区根 = 插件目录的上一级。插件现在位于 C:\dsh\dshplug\dsh-getbrain，
-// 所以 WORKSPACE = C:\dsh\dshplug（不是 C:\dsh）。改目录位置时这里的推算跟着变。
+ * 工作区根 = 插件目录的上一级。插件现在位于 C:\dsh\dw-plugin\dsh-getbrain，
+ * 所以 WORKSPACE = C:\dsh\dw-plugin（不是 C:\dsh）。改目录位置时这里的推算跟着变。
 const WORKSPACE = path.dirname(BUNDLE_DIR)
 // 默认数据目录：**仓库的同级目录** data-getbrain —— 本机即 C:\dsh\data-getbrain。
 //
-// 为什么是「同级」而不是「工作区内」：插件位于 C:\dsh\dshplug\dsh-getbrain，
-// 它的「上一级」是工作区根 C:\dsh\dshplug（就是 Git 仓库本身）。旧版本默认写
-// 'getbraindata' 相对工作区根 → 落到仓库里的 C:\dsh\dshplug\getbraindata，于是当初
+// 为什么是「同级」而不是「工作区内」：插件位于 C:\dsh\dw-plugin\dsh-getbrain，
+// 它的「上一级」是工作区根 C:\dsh\dw-plugin（就是 Git 仓库本身）。旧版本默认写
+// 'getbraindata' 相对工作区根 → 落到仓库里的 C:\dsh\dw-plugin\getbraindata，于是当初
 // 只能靠 cordis.patch.yml 里写死绝对路径 C:\dsh\getbraindata 把数据拽出仓库。
 // 现在默认值**由代码推导**（仓库同级 data-<名字>），patch 里留空即可，换机器不用改配置。
 //
@@ -1699,7 +1699,7 @@ export function apply(ctx, config) {
   async function scanMirror(dataDir) {
     const fs = await import('node:fs/promises')
     const path = await import('node:path')
-    // 相对路径的基准是 WORKSPACE（= 插件目录的上一级，现在是 C:\dsh\dshplug），
+    // 相对路径的基准是 WORKSPACE（= 插件目录的上一级，现在是 C:\dsh\dw-plugin），
     // 不能用 process.cwd()：Host 进程的 cwd 是 profile 目录（C:\Users\franc\.dsh），
     // 不是工作区。这里与 gn.py 的 WORKSPACE = ROOT.parent 保持一致。
     const base = path.isAbsolute(dataDir) ? dataDir : path.resolve(WORKSPACE, dataDir)

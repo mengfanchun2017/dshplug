@@ -19,12 +19,12 @@
 
 ## 0. 当前位置（2026-11-11 迁移）
 
-本包已从 `default-workspace/getnote` 迁到 **`C:\dsh\dshplug\dsh-getbrain`**（2026-11-12 并入 dshplug 仓库），
+本包已从 `default-workspace/getnote` 迁到 **`C:\dsh\dw-plugin\dsh-getbrain`**（2026-11-12 并入 dw-plugin 仓库），
 数据在 **`C:\dsh\data-getbrain`**（2026-11-12 起：默认就在仓库外侧，与代码分离）。
 
 ```
-C:\dsh\dshplug\dsh-getbrain\  代码（在 dshplug 仓库内，随仓库同步）
-   index.js                 Host 侧插件 + 3 个 HTTP 路由
+C:\dsh\dw-plugin\dsh-getbrain\  代码（在 dw-plugin 仓库内，随仓库同步）
+   index.js                 Host 侧插件 + 22 条 HTTP 路由
    client.js                客户端 UI（设置页 + 侧边栏工作台）
    gn.py / gn.ps1           CLI 实现（Python 标准库，无第三方依赖）
    cordis.patch.yml         插件层补丁（dataDir 留空 → 用代码默认值）
@@ -37,13 +37,13 @@ C:\dsh\data-getbrain\       数据（仓库的同级目录，天然不进 Git，
 **路径怎么算的（2026-11-12 起改为代码推导，不再写死绝对路径）**：
 
 ```
-BUNDLE_DIR  = C:\dsh\dshplug\dsh-getbrain   （插件目录）
-WORKSPACE   = 上一级 = C:\dsh\dshplug        （= Git 仓库根本身）
+BUNDLE_DIR  = C:\dsh\dw-plugin\dsh-getbrain   （插件目录）
+WORKSPACE   = 上一级 = C:\dsh\dw-plugin        （= Git 仓库根本身）
 DEFAULT_DATA_DIR = WORKSPACE 的上一级 + data-getbrain = C:\dsh\data-getbrain
 ```
 
 旧版本默认写 `dataDir = 'getbraindata'`，它是**相对 WORKSPACE** 解析的，于是落到仓库里
-`C:\dsh\dshplug\getbraindata`，只能靠 `cordis.patch.yml` 写死绝对路径 `C:\dsh\getbraindata`
+`C:\dsh\dw-plugin\getbraindata`，只能靠 `cordis.patch.yml` 写死绝对路径 `C:\dsh\getbraindata`
 （当时还配了一个 Junction）把数据拽出仓库。现在默认值改到**仓库同级**，patch 里留空即可，
 换机器、换目录都不用再改配置。
 
@@ -365,11 +365,11 @@ note_save / note_update / note_delete`。所有 ID 用字符串。
 
 ```
 plugin_manager  action: install_bundle
-target: C:\dsh\dshplug\dsh-getbrain
+target: C:\dsh\dw-plugin\dsh-getbrain
 ```
 
 （把上面的绝对路径换成目标机 `dsh-getbrain/` 的实际路径。本机已在 profile 里以 `link:` 装好，不需要再装；
-重新装用 `& C:\dsh\dshplug\install.ps1 -Only dsh-getbrain`。）
+重新装用 `& C:\dsh\dw-plugin\install.ps1 -Only dsh-getbrain`。）
 
 ### 配置项（「设置 → Mgetbrain」侧边栏 = `cordis.patch.yml` 的 `config`）
 
@@ -634,7 +634,7 @@ target: C:\dsh\dshplug\dsh-getbrain
 }
 ```
 
-- 文件在 `C:\dsh\dshplug\dsh-getbrain\config.local.json`；仓库根 `.gitignore`（及导出包内动态生成的 `.gitignore`）已排除，不会入库。
+- 文件在 `C:\dsh\dw-plugin\dsh-getbrain\config.local.json`；仓库根 `.gitignore`（及导出包内动态生成的 `.gitignore`）已排除，不会入库。
 - 插件 `cordis.patch.yml` 里 `apiKeyFile: ''` 时，`index.js` 的默认值 `dsh-getbrain/config.local.json` 就指向它 ——
   插件读不到 Config 里的 Key 时会回退到这个文件。
 - **不用重启**：面板保存的 volatile 值会就地写回运行中的插件（已实测）。

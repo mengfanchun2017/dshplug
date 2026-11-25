@@ -175,7 +175,7 @@ getnote_backup                      # Phase 0 兜底快照
 getnote_apply(plan="<dataDir>/state/plan.json")   # 需用户确认
 ```
 CLI 等价：`.\dsh-getbrain\gn.ps1 doctor --live` / `download` / `backup` / `apply --plan ... --confirm CONFIRM`。
-完整命令、计划格式、迁移说明见 `C:\dsh\dshplug\dsh-getbrain\README.md`（插件目录内，不在数据目录）。
+完整命令、计划格式、迁移说明见 `C:\dsh\dw-plugin\dsh-getbrain\README.md`（插件目录内，不在数据目录）。
 
 > 说明书管「决策纪律」，`gn.py` 的代码闸门管「执行」——双保险，任一层被绕过另一层仍拦得住。
 

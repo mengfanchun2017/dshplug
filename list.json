@@ -22,7 +22,7 @@
       "installedOn": [],
       "status": "archived",
       "archivedTo": "archive/dsh-pixel",
-      "note": "2026-11-18 已归档到 archive/dsh-pixel（四件套齐全：README / DEVELOPMENT-LOG / source / packages）。原目录已删除，install.ps1 不应再处理它。恢复时把 source\\ 放回 dshplug\\dsh-pixel\\ 并把 status 改回 active。"
+      "note": "2026-11-18 已归档到 archive/dsh-pixel（四件套齐全：README / DEVELOPMENT-LOG / source / packages）。原目录已删除，install.ps1 不应再处理它。恢复时把 source\\ 放回 dw-plugin\\dsh-pixel\\ 并把 status 改回 active。"
     },
     {
       "name": "dsh-getbrain",

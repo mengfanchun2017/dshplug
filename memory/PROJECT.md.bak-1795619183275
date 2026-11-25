@@ -1,0 +1,84 @@
+## 2026-11-25 归档：session-8f9b0b80-a48e-4115-9547-f56ff9b06358
+
+- 工作区：dw-plugin
+- 模型：deepseek-account/deepseek-flash
+
+# 会话归档：B 机插件安装方式与 BOOTSTRAP 文档更新
+
+## 结论与决策
+
+1. **可以用 Git 地址安装**，不必先手动 clone 到固定路径。`dsh-plugin-manager` 的 `parseInstallSpec`（asar 内 `dsh-plugin-manager/lib/types/install-spec.js`）已实际验证可解析以下三种写法，均归为 `kind: 'git'`、host `github.com`：
+   - `github:owner/repo#path:/<subdir>`
+   - `.../dshplug#path:<subdir>`
+   - `https://github.com/.../<repo>.git#path:<subdir>`
+2. **两个插件同属一个 monorepo**：`C:\dsh\dw-plugin`，仓库 `dshplug`，分支 `master`，远端 `https://github.com/mengfanchun2017/dshplug.git`（公开仓库）。因是 monorepo，安装必须带 `#path:`。
+3. **可直接粘贴的两个地址**（来自各自 BOOTSTRAP.md）：
+   - gitok：`github:mengfanchun2017/dshplug#path:/dsh-gitok`
+   - synchub：`https://github.com/mengfanchun2017/dshplug#path:dsh-synchub`
+4. **安装命令形式**：`dsh plugin --profile desktop add '<地址>'`。前置条件：DSH 桌面版需先启动过一次、然后**完全退出**（`--profile web` 无此限制）。
+5. **顺序问题（重要）**：用户原计划"先在 B 机装 gitok + synchub，再跑 `sync-plugins.ps1`"，与手册不符。`两机同步-操作手册.md` §4 Q2 明确 **gitok 在最后，不是最前**；以手册 7 步顺序为准。
+6. **两条安装路线可共存**：GUI 路线 A 与 CLI 路线 B 均可，最后一次安装生效（`dsh-gitok/BOOTSTRAP.md` §1.3）。
+7. **已知能力边界**：`dsh-synchub` 无法同步插件清单——`lib/index.js` 的 `surfaceEnabled()` 硬编码拒绝 `tier === 'danger'`。
+
+## B 机权威顺序（手册 7 步）
+1. 安装 DSH → 2. clone 两个仓库到 `C:\dsh\dw-plugin`、`C:\dsh\dw-base` → 3. 登录 GitHub → 4. 跑 `sync-plugins.ps1` → 5. 配 synchub → 6. 登录 gitok → 7. 重启。
+
+注：`dw-base`（`dshwp-base`）为**私有仓库**，需认证；`dshplug` 公开。
+
+`sync-plugins.ps1` 行为：还原 `inside\profile-manifest.json` → 用 `link:` 依赖执行 `pnpm install`，安装前校验 link 目标，并追加 `pnpm-workspace.yaml`。
+
+## 待办
+- [ ] **更新两个 BOOTSTRAP.md**（用户 2026-11-25 新需求）：在 `dsh-gitok/BOOTSTRAP.md`、`dsh-synchub/BOOTSTRAP.md` 中写入
+  - 两插件的关系说明；
+  - 如何把地址复制给 DSH 安装（含上述两个完整地址与 `dsh plugin ... add` 命令）；
+  - 使该页可被搜索到、用户照 GitHub 上的 bootstrap 页即可装完；
+  - 明确的"完成判据/勾选清单"，让用户知道工作已完成。
+  - 状态：已提出，随后两次"继续"；**未见完成确认**。
+- [ ] 清理仓库中残留的探针文件（仍未跟踪）：`_probe-anon1.txt`、`_probe-anon2.txt`、`_probe-empty.gitconfig`、`_probe-gitspec.txt`、`_probe-installspec.js`、`_probe-pm.txt`、`_probe-spec-test.txt`、`_probe-pnpm-git.log`、目录 `_probe-gitinstall\`（含 `.pnpm-store`）。
+
+## 涉及文件路径
+- `C:\dsh\dw-plugin\dsh-gitok\BOOTSTRAP.md`（§1.1 路线 A GUI / 路线 B CLI，§1.2 install.ps1，§1.3 两路线共存）
+- `C:\dsh\dw-plugin\dsh-synchub\BOOTSTRAP.md`（§6.1 地址，§0.4 A/B 对比表，§0.5 家用机从零安装）
+- `C:\dsh\dw-base\inside\两机同步-操作手册.md`（§2 脚本，§4 Q2 顺序）
+- `C:\dsh\dw-base\inside\tools\sync-plugins.ps1`（参数 `-Export`、`-Check`、`-RepoRoot`、`-ManifestRel`）
+- `C:\dsh\dw-base\inside\tools\安装命令.txt`（路线 B clone + pnpm-workspace.yaml + 14 插件 `dsh plugin add` 清单）
+- `C:\dsh\dw-base\inside\profile-manifest.json`（14 deps / 15 bundles，2026-11-22；4 个 `link:` 指向 `C:/dsh/dw-plugin/dsh-*` 与 `C:/dsh/dw-base/demo-rag/dsh-rag`）
+- `C:\dsh\dw-plugin\list.json`、`C:\dsh\dw-plugin\install.ps1`
+- `~\.dsh\profiles\desktop\package.json`（A 机实际 profile，清单来源）
+
+## 环境
+DSH `0.2.2-rc.5`（ProductVersion 0.2.2.0），profile `desktop`，Windows。
+## 2026-11-25 归档：session-5d7f6acf-4443-4428-b7dc-346d1c5654dd
+
+- 工作区：dw-plugin
+- 模型：deepseek-account/deepseek-flash
+
+# synchub 整合归档
+
+## 结论与决策
+- 同步仓库不再保留“配置 / session”双仓库和开关，强制合并为**单一仓库**。
+- 唯一同步仓库定为 **`dsh-msynchub`**（由原 `dsh-session` 改名）。
+- GitHub 上的 **`dsh-config` 仓库删除**，并重新整理仓库结构。
+- `dsh-msynchub` 作为 dsh 同步的唯一仓库；其他 session / 插件的同步也统一使用它。
+- 仓库结构需专业设计，便于直接查看、理解备份内容。
+- `dshplug` 已在 GitHub 改名为 **`dswp-plugin`**，相关配置与引用需整体更新。
+- 用户后续更正：`dshwp-config` **不是**合并目标；相关仓库命名需与 synchub 配置对齐，属于检查更新，不是这些仓库本身有问题。
+- 用户确认执行清理。
+
+## 待办
+- [ ] 将配置与 session 同步整合进 `dsh-msynchub`，设计清晰目录结构。
+- [ ] 删除 GitHub 上的 `dsh-config` 仓库。
+- [ ] 更新 `dswp-plugin`（原 `dshplug`）相关配置、引用和命名。
+- [ ] 对齐 `dshwp-config` 与 `dswp-plugin` 在 synchub 中的设置位置，避免弄错。
+- [ ] 按用户确认执行清理（旧仓库 / 旧配置）。
+- [ ] 先查看 `session-85cb7c21-57a0-4ff5-8757-c1b61e8595ef` 对 synchub 的修改，再继续本 session 工作。
+- [ ] 其他 session 也在加功能，改动前先列清正在做的内容，避免轻易修改文件。
+
+## 待确认
+- 各工作区的 `agent.md` 及其他记忆文件是否需要纳入 `dsh-msynchub` 同步。
+- 若已开启其他 GitHub 同步，相关文件是否会在别处同步、从而不在 synchub 中重复处理。
+- “清理”的具体范围（旧仓库、旧配置、旧引用）。
+
+## 涉及对象
+- 仓库：`dsh-msynchub`、`dsh-config`（待删除）、`dswp-plugin`（原 `dshplug`）、`dshwp-config`
+- Session：`session-85cb7c21-57a0-4ff5-8757-c1b61e8595ef`

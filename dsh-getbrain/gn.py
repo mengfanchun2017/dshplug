@@ -44,7 +44,7 @@ WORKSPACE = ROOT.parent
 # 统一数据目录：所有下载、中间产物、快照、日志、审计、计划都归到它下面。
 # 优先级：--data-dir > 环境变量 GETNOTE_DATA_DIR > settings.json.dataDir > 下面这个默认值。
 # 默认值 = 「仓库同级」的 data-getbrain —— 本机即 C:\dsh\data-getbrain（插件在
-# C:\dsh\dshplug\dsh-getbrain，WORKSPACE = C:\dsh\dshplug）。
+# C:\dsh\dw-plugin\dsh-getbrain，WORKSPACE = C:\dsh\dw-plugin）。
 #
 # 为什么不在 WORKSPACE 里：WORKSPACE 就是 Git 仓库根，数据落进去会被 git status 弄脏、
 # 也会被打包带走。放在仓库的**同级**目录：
