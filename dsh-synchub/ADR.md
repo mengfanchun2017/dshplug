@@ -1731,3 +1731,24 @@ DSH 在目录改名后会为该新路径**新建**一个 `workspaceId`，旧记�
   - 恢复：执行前 `package.json` 有备份；npm 走宿主服务；link 恢复后目标目录存在且 profile 依赖含 `link:`。
   - 开关：`pluginSync.enabled=false` 时备份不写 payload、恢复按钮不可用。
   - 全部 smoke 与 `node --check` 全绿；改 `index.js` 需重启 DSH 验收。
+
+## ADR-039 · 0.13.0：记忆地图（阶段①，只读）
+
+- **日期**：2026-11-25
+- **状态**：已采纳（已实现，待真机重启验收）
+- **背景（用户原话）**：
+  > 「在 synchub 中可以看到所有的记忆包括用户级别和项目级别」
+  > 「~/.agents/AGENTS.md（预留）是什么」「local 的是什么」「skill 一个项目的读不到另一个项目的，用户级别的都可以读到对吧」
+- **调研结论（源码级，不是猜）**：
+  1. 用户全局链 = `~/.dsh/AGENTS.md` → `~/.agents/AGENTS.md`，两者**同一候选组**、内容去重；后者是预留位（`resolveAgentsHome`，本机通常无文件）。证据：`dsh-agent-instructions/src/config.ts`、`files.ts`。
+  2. 项目链 = 项目根（最近 `.git`）→ cwd **每一层**；`AGENTS.md`/`CLAUDE.md` **都加载**（内容相同才去重），`AGENTS.local.md`/`CLAUDE.local.md` 在其后加载、通常不进 git。证据：同上。
+  3. 技能根优先级：`<项目根>/.dsh/skills`(100) / `<项目根>/.agents/skills`(200) → 自定义(300) → `~/.dsh/skills`(400) / `~/.agents/skills`(500) → 内置(600)；项目根外读不到。证据：`dsh-skill-filesystem/src/index.ts`。
+- **结论**：新增 `lib/memory.js` 只读枚举，`GET /api/dsh-synchub/memory-map`；侧边栏「⑦ 记忆地图」卡（默认折叠）+ 设置页「记忆文件」卡。记忆落点约定 `<工作区>/memory/` 与 `~/.dsh/memory/USER.md`。
+- **理由**：先把「有哪些记忆」讲清楚，再谈写入；只读零风险，且是后续归档总结与同步面的基础。
+- **反面代价**：枚举不含会话内容（只数目录），要看内容仍需解压 zstd 多帧；项目规则只列文件、不合并内容。
+- **已否决的替代方案**：
+  | 方案 | 否决理由 |
+  |---|---|
+  | 首版就自动总结 | ADR-006/015 明确不自动导出，且需 LLM 依赖；留到阶段②并新 ADR 修订 |
+  | 把项目规则纳入 synchub 同步 | 与「工作区 AGENTS.md 归各自 git」冲突 |
+  | 按目录而非按工作区 | 「目录」在 DSH 里没有独立实体；项目链/技能根都以项目根（工作区）为单位 |

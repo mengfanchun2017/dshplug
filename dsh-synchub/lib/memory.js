@@ -51,6 +51,7 @@ async function readWorkspaces(dshHome) {
       title: w.title || '',
       path: w.path || '',
       sessionCount: Array.isArray(w.sessionIds) ? w.sessionIds.length : 0,
+      sessionIds: Array.isArray(w.sessionIds) ? w.sessionIds.slice() : [],
     }))
     .filter(w => w.path);
 }
@@ -241,4 +242,135 @@ export async function memoryMap(opts = {}) {
   };
 }
 
-export const __test = { memoryMap, resolveAgentsHome, findProjectRoot, chainFromRoot };
+/* ======================== 阶段②：归档读会话 / 写记忆 ========================
+
+  会话正文是 zstd 多帧压缩 JSONL（ADR-004 §4.1）。单次 zstdDecompressSync 只解第一帧
+  （实测 162 帧只出 196 字节），必须逐帧扫边界再逐帧解。 */
+
+import { zstdDecompressSync } from 'node:zlib';
+
+const ZSTD_MAGIC = 0xfd2fb528;
+
+export function encodeWorkspaceGroup(wsPath) {
+  if (!wsPath || typeof wsPath !== 'string') return null;
+  const body = wsPath.replace(/^[A-Za-z]:/, m => m[0])
+    .replace(/[:\\/]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return `--${body}--`;
+}
+
+/** 逐帧解压；扫不出完整帧时返回已解出的部分（损坏会话不至于全丢）。 */
+function decodeZstdFrames(buf) {
+  const parts = [];
+  let offset = 0;
+  while (offset < buf.length) {
+    const start = offset;
+    if (buf.length - offset < 4) break;
+    if (buf.readUInt32LE(offset) !== ZSTD_MAGIC) break;
+    offset += 4;
+    if (offset === buf.length) break;
+    const descriptor = buf.readUInt8(offset); offset += 1;
+    if ((descriptor & 0x18) !== 0) break;
+    const contentSizeFlag = descriptor >>> 6;
+    const singleSegment = (descriptor & 0x20) !== 0;
+    const checksum = (descriptor & 0x04) !== 0;
+    const dictionaryFlag = descriptor & 0x03;
+    const dictionaryBytes = dictionaryFlag === 3 ? 4 : dictionaryFlag;
+    const contentSizeBytes = contentSizeFlag === 0 ? (singleSegment ? 1 : 0) : 1 << contentSizeFlag;
+    const remainingHeaderBytes = (singleSegment ? 0 : 1) + dictionaryBytes + contentSizeBytes;
+    if (buf.length - offset < remainingHeaderBytes) break;
+    offset += remainingHeaderBytes;
+    for (;;) {
+      if (buf.length - offset < 3) {
+        return parts.length ? Buffer.concat(parts) : null;
+      }
+      const blockHeader = buf.readUIntLE(offset, 3); offset += 3;
+      const lastBlock = (blockHeader & 1) !== 0;
+      const blockType = (blockHeader >>> 1) & 0x03;
+      const blockSize = blockHeader >>> 3;
+      if (blockType === 0x03) return parts.length ? Buffer.concat(parts) : null;
+      const payloadBytes = blockType === 0x01 ? 1 : blockSize;
+      if (buf.length - offset < payloadBytes) return parts.length ? Buffer.concat(parts) : null;
+      offset += payloadBytes;
+      if (lastBlock) break;
+    }
+    if (checksum) {
+      if (buf.length - offset < 4) break;
+      offset += 4;
+    }
+    parts.push(zstdDecompressSync(buf.subarray(start, offset)));
+  }
+  return parts.length ? Buffer.concat(parts) : null;
+}
+
+async function findSessionFile(dshHome, sessionId) {
+  const root = path.join(dshHome, 'sessions');
+  let groups;
+  try { groups = await fsp.readdir(root, { withFileTypes: true }); } catch { return null; }
+  const bare = String(sessionId).replace(/^session-/, '');
+  for (const g of groups) {
+    if (!g.isDirectory()) continue;
+    for (const name of [sessionId, `session-${bare}`]) {
+      const f = path.join(root, g.name, name, 'session.v4.jsonl.zstd');
+      if (fs.existsSync(f)) return f;
+    }
+  }
+  return null;
+}
+
+/** 读会话的 user/assistant 文本（滤掉 system-reminder 注入）。
+ *  失败一律返回 {ok:false,error}，不抛 —— 归档路径上不能让总结失败影响归档。 */
+export async function readSessionTranscript(dshHome, sessionId) {
+  const file = await findSessionFile(dshHome, sessionId);
+  if (!file) return { ok: false, error: '找不到会话正文（未同步到本机或已删除）' };
+  let buf;
+  try { buf = await fsp.readFile(file); } catch (e) { return { ok: false, error: `读取失败：${e.message}` }; }
+  const plain = decodeZstdFrames(buf);
+  if (!plain) return { ok: false, error: '会话正文无法解压（可能已损坏）' };
+  const messages = [];
+  for (const line of plain.toString('utf8').split('\n')) {
+    if (!line) continue;
+    let o; try { o = JSON.parse(line); } catch { continue; }
+    if (o.type !== 'user/message' && o.type !== 'assistant/message') continue;
+    const text = ((o.data && o.data.content) || []).map(c => c.text || '').join('').trim();
+    if (!text || text.startsWith('<system-reminder>')) continue;
+    messages.push({ role: o.type === 'user/message' ? 'user' : 'assistant', seq: o.seq, text: text.slice(0, 4000) });
+  }
+  if (!messages.length) return { ok: false, error: '会话里没有可用的对话文本' };
+  return { ok: true, file, messages, chars: messages.reduce((n, m) => n + m.text.length, 0) };
+}
+
+/** 归档计划：定位会话所属工作区与记忆落点（权威来源 = workspace.json）。 */
+export async function archivePlan(dshHome, sessionId) {
+  const wss = await readWorkspaces(dshHome);
+  const bare = String(sessionId).replace(/^session-/, '');
+  const forms = new Set([String(sessionId), `session-${bare}`]);
+  const hit = wss.find(w => (w.sessionIds || []).some(s => forms.has(String(s))));
+  if (!hit) return { ok: false, error: '该会话未登记到任何工作区（未分组），无法确定记忆落点' };
+  const memoryDir = path.join(hit.path, MEMORY_DIR);
+  return {
+    ok: true,
+    workspaceId: hit.id,
+    title: hit.title || hit.path,
+    workspacePath: hit.path,
+    memoryDir,
+    file: path.join(memoryDir, 'PROJECT.md'),
+    userFile: path.join(dshHome, USER_MEMORY_FILE),
+  };
+}
+
+/** 追加记忆：目标已存在则先备份，再追加（不覆盖已有内容）。 */
+export async function appendMemory(absPath, block) {
+  if (!absPath) return { ok: false, error: '缺少落点' };
+  const prev = fs.existsSync(absPath) ? await fsp.readFile(absPath, 'utf8') : '';
+  if (prev) {
+    await fsp.mkdir(path.dirname(absPath), { recursive: true });
+    await fsp.copyFile(absPath, `${absPath}.bak-${Date.now()}`);
+  }
+  await fsp.mkdir(path.dirname(absPath), { recursive: true });
+  const sep = prev ? (prev.endsWith('\n') ? '' : '\n\n') : '';
+  await fsp.writeFile(absPath, prev + sep + block.trim() + '\n', 'utf8');
+  return { ok: true, bytes: Buffer.byteLength(block, 'utf8'), existed: Boolean(prev) };
+}
+
+export const __test = { memoryMap, resolveAgentsHome, findProjectRoot, chainFromRoot, readSessionTranscript, archivePlan, appendMemory, encodeWorkspaceGroup };

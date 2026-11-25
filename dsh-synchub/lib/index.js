@@ -34,7 +34,7 @@ const execFileAsync = promisify(execFile);
 
 const name = 'dsh-synchub';
 const inject = ['webServer'];
-const VERSION = '0.12.0';
+const VERSION = '0.13.0';
 /* 分支不能写死。远端仓库可能是 master（GitHub 旧默认）也可能是 main，
    写死一个就会在已有仓库上推出一个**平行的空历史分支**。
    优先级：config.channels[ch].branch → 远端 HEAD 指向的分支 → DEFAULT_BRANCH。 */
@@ -87,7 +87,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 /* ADR-034：会话体检与修复。为了不让 index.js 继续膨胀（已 3500+ 行）且好单测，
    引擎放在兄弟模块里；它只拿 dshHome 做纯文件操作，不注册路由、不读配置。 */
 import { doctorScan as sessionDoctorScan, doctorApply as sessionDoctorApply } from './sessiondoctor.js';
-import { memoryMap } from './memory.js';
+import { memoryMap, archivePlan, readSessionTranscript, appendMemory } from './memory.js';
 
 /** 宿主 profile 目录：从本文件往上找 node_modules 的父目录。 */
 function resolveProfileDir() {
@@ -191,6 +191,16 @@ const SURFACES = [
     files: [`profiles/${PROFILE}/package.json`, `profiles/${PROFILE}/pnpm-workspace.yaml`],
     exclude: [],
     note: '含 link:C:/dsh/... 绝对路径；另一台没有同一路径会导致 DSH 启动失败，默认不同步',
+  },
+  {
+    id: 'memory',
+    channel: 'config',
+    label: '记忆文件',
+    tier: 'safe',
+    on: true,
+    roots: ['memory'],
+    exclude: [/\.bak-/],
+    note: '用户级记忆 ~/.dsh/memory/（归档时自动写入）。工作区级 <工作区>/memory/ 随各工作区自己的 git',
   },
 ];
 
@@ -347,6 +357,18 @@ const DEFAULTS = {
      enabled 默认关：与 dsh-market 的备份导出二选一，避免两处同时判定插件清单；
      autoMinutes=0 表示不自动，只在面板手动触发。 */
   pluginSync: { enabled: false, autoMinutes: 0, includeLink: true },
+  /* 记忆管理（阶段②，ADR-040）：
+     - onArchive：会话归档时是否自动总结并写入该工作区的 memory/PROJECT.md
+     - workspaces：逐工作区开关（name = workspace.json 的 title）
+     - userEnabled：是否同时写用户级 ~/.dsh/memory/USER.md
+     - tidy：整理记忆（阶段③），intervalHours=0 表示不定时 */
+  memory: {
+    enabled: true,
+    onArchive: true,
+    userEnabled: false,
+    workspaces: [],
+    tidy: { enabled: false, intervalHours: 0 },
+  },
 };
 
 /* dshplug 仓库：布局与可复制安装信息（新主机用）。
@@ -550,6 +572,27 @@ function mergeConfig(base, patch) {
       out.pluginSync.autoMinutes = Math.min(1440, Math.max(0, Math.trunc(Number(ps.autoMinutes))));
     }
     if (typeof ps.includeLink === 'boolean') out.pluginSync.includeLink = ps.includeLink;
+  }
+  /* 记忆管理（ADR-040）。workspaces 是白名单：name 对应 workspace.json 的 title，
+     只收 {name, enabled}，去重；脏数据不能让配置读不出来。 */
+  if (patch.memory && typeof patch.memory === 'object') {
+    const m = patch.memory;
+    if (typeof m.enabled === 'boolean') out.memory.enabled = m.enabled;
+    if (typeof m.onArchive === 'boolean') out.memory.onArchive = m.onArchive;
+    if (typeof m.userEnabled === 'boolean') out.memory.userEnabled = m.userEnabled;
+    if (Array.isArray(m.workspaces)) {
+      const seen = new Set();
+      out.memory.workspaces = m.workspaces
+        .filter(w => w && typeof w.name === 'string' && w.name.trim())
+        .map(w => ({ name: w.name.trim(), enabled: w.enabled !== false }))
+        .filter(w => !seen.has(w.name.toLowerCase()) && seen.add(w.name.toLowerCase()));
+    }
+    if (m.tidy && typeof m.tidy === 'object') {
+      if (typeof m.tidy.enabled === 'boolean') out.memory.tidy.enabled = m.tidy.enabled;
+      if (Number.isFinite(Number(m.tidy.intervalHours))) {
+        out.memory.tidy.intervalHours = Math.min(720, Math.max(0, Math.trunc(Number(m.tidy.intervalHours))));
+      }
+    }
   }
   return out;
 }
@@ -3090,6 +3133,27 @@ function routesFor() {
     },
     {
       kind: 'exact',
+      path: '/api/dsh-synchub/memory',
+      handler: async (_req, res) => {
+        try {
+          const cfg = await readConfig();
+          return json(res, 200, { ok: true, config: cfg.memory || {}, map: await memoryMap() });
+        } catch (e) { return json(res, 500, { ok: false, error: String(e.message || e) }); }
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/api/dsh-synchub/memory/archive',
+      handler: async (req, res) => {
+        try {
+          const body = req.method === 'POST' ? await readBody(req) : {};
+          const r = await archiveSessionById(body.id || '');
+          return json(res, r && r.ok ? 200 : 400, r);
+        } catch (e) { return json(res, 500, { ok: false, error: String(e.message || e) }); }
+      },
+    },
+    {
+      kind: 'exact',
       path: '/api/dsh-synchub/preflight',
       handler: async (_req, res) => {
         try {
@@ -3865,6 +3929,78 @@ async function pluginBackupAutoTick(ctx) {
 
 /* ------------------------------------------------------------------ 入口 */
 
+/* ------------------------------------------------ 阶段② 归档总结（ADR-040） */
+
+function memoryConfigOf(cfg) {
+  return (cfg && cfg.memory) || {};
+}
+
+/** 解析 provider/model：配置优先，否则取第一个可用 provider 与其第一个模型。 */
+async function resolveLlmRoute(llm, cfg) {
+  const m = memoryConfigOf(cfg);
+  let provider = String(m.provider || '').trim();
+  let model = String(m.model || '').trim();
+  try {
+    if (!provider && typeof llm.listProviders === 'function') {
+      const ps = llm.listProviders() || [];
+      const first = ps[0];
+      provider = typeof first === 'string' ? first : (first && (first.name || first.id)) || '';
+    }
+  } catch { /* 拿不到不抛 */ }
+  try {
+    if (!model && typeof llm.listModels === 'function') {
+      const ms = await llm.listModels({ provider });
+      const arr = Array.isArray(ms) ? ms : ((ms && ms.models) || []);
+      const f = arr[0];
+      model = typeof f === 'string' ? f : (f && (f.id || f.name)) || '';
+    }
+  } catch { /* 拿不到不抛 */ }
+  return { provider, model };
+}
+
+async function summarizeWithLlm(llm, provider, model, messages) {
+  const sys = { role: 'system', content: [{ type: 'text', text: '你是会话归档助手。把下面的对话整理成简洁 Markdown：只写确定的结论、决策与理由、待办、涉及的文件路径。不要编造。' }] };
+  const body = messages.slice(-40).map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: [{ type: 'text', text: m.text }] }));
+  let text = '';
+  for await (const chunk of llm.stream({ provider, model, messages: [sys, ...body] })) {
+    if (!chunk) continue;
+    if (chunk.kind === 'text-delta') text += (chunk.text ?? chunk.delta ?? '');
+    if (chunk.kind === 'finish') break;
+  }
+  return text.trim();
+}
+
+/** 归档入口：事件回调与手动复用。任何失败都不抛（归档本身不能被总结拖垮）。 */
+async function archiveSessionById(sessionId) {
+  try {
+    const cfg = await readConfig();
+    const m = memoryConfigOf(cfg);
+    if (!m.enabled || !m.onArchive) return { ok: false, skipped: 'disabled' };
+    const plan = await archivePlan(DSH_HOME, sessionId);
+    if (!plan.ok) return { ok: false, ...plan };
+    const list = Array.isArray(m.workspaces) ? m.workspaces : [];
+    if (list.length) {
+      const hit = list.find(w => String(w.name).toLowerCase() === plan.title.toLowerCase());
+      if (!hit || hit.enabled === false) return { ok: false, skipped: 'workspace-disabled', plan };
+    }
+    const t = await readSessionTranscript(DSH_HOME, sessionId);
+    if (!t.ok) return { ok: false, ...t };
+    const llm = HOST_CTX && HOST_CTX.reflect && typeof HOST_CTX.reflect.get === 'function'
+      ? HOST_CTX.reflect.get('llm', false) : null;
+    if (!llm) return { ok: false, error: '该 profile 没有可用的 llm 服务，跳过总结', plan };
+    const route = await resolveLlmRoute(llm, cfg);
+    if (!route.provider || !route.model) return { ok: false, error: '无法确定 provider/model（请在设置的记忆区填写）', plan };
+    const summary = await summarizeWithLlm(llm, route.provider, route.model, t.messages);
+    if (!summary) return { ok: false, error: '总结为空', plan };
+    const block = `## ${new Date().toISOString().slice(0, 10)} 归档：${sessionId}\n\n- 工作区：${plan.title}\n- 模型：${route.provider}/${route.model}\n\n${summary}`;
+    const w = await appendMemory(plan.file, block);
+    if (m.userEnabled) await appendMemory(plan.userFile, block).catch(() => {});
+    return { ok: true, plan, bytes: w.bytes, model: `${route.provider}/${route.model}` };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+}
+
 function apply(ctx) {
   HOST_CTX = ctx;
   diag({
@@ -3902,6 +4038,20 @@ function apply(ctx) {
     diag({ phase: 'no-webserver', hasCtx: Boolean(ctx) });
     log(ctx, 'warn', 'webServer 不可用：状态接口未注册');
   }
+
+  /* 归档事件（阶段②，ADR-040）：归档已持久化后触发，监听者自管后台工作。
+     失败只记录，绝不影响归档本身。 */
+  try {
+    if (typeof ctx.on === 'function') {
+      ctx.on('workspace/session-archived', async (req) => {
+        const id = req && req.sessionId;
+        if (!id) return;
+        const r = await archiveSessionById(id);
+        if (r && r.ok) log(ctx, 'info', `归档总结已写入：${r.plan.file}`);
+        else if (r && r.error) log(ctx, 'warn', `归档总结跳过：${r.error}`);
+      });
+    }
+  } catch { /* 老版本没有该事件 */ }
 
   // 空闲自动推送 + 代码仓库定时提交：单一定时器，60s 一跳。
   // 两条路径各自读配置判自杀条件，未开启时零副作用。
@@ -3974,4 +4124,4 @@ async function codeRepoAutoTick(ctx) {
 export { name, inject, apply };
 export const VERSION_INFO = VERSION;
 // 供离线 smoke 测试用（node --check 查不出逻辑错，必须真跑一遍）。
-export const __test = { memoryMap, codeRepoList, codeRepoState, codeReposPayload, syncCodeRepo, syncAllCodeRepos, divergeInfo, resolveKeepLocal, resolveKeepRemote, stampTrailer, purgePreview, purgeExecute, purgeVerify, sessionIdForms, walkSessionRefs, bareSessionId, sessionNoteTemplate, sessionNotePreview, sessionNoteWrite, resolveNotePath, sessionMigrateGroup, sessionMigratePreview, sessionMigrateExecute, sessionMigrateVerify, encodeWorkspaceGroup, decodeWorkspaceGroup, stateInfo, installInfo, idleStandard, mergeConfig, normalizeRemoteToHttps, repoFacts, normalizeWorkspaceMap, realWorkspaces, workspaceReport, selfCheck, channelState, readConfig, statusPayload, preflightReport: selfCheck, sessionDoctorScan, sessionDoctorApply, channelsOf, repoKeyOf, remoteOf, surfaceEnabled, diffLocalToPayload, stageChanges, commitChanges, pushChannels, pullChannels, applyPayload, ensureRepo, channelLabel, classifyPluginSpec, readInstalledPlugins, buildPluginManifest, readPluginManifest, writePluginManifest, backupPluginManifest, pluginRestorePreview, pluginRestoreExecute, pluginManifestPath, PLUGIN_BACKUP_RUNTIME };
+export const __test = { memoryMap, archiveSessionById, codeRepoList, codeRepoState, codeReposPayload, syncCodeRepo, syncAllCodeRepos, divergeInfo, resolveKeepLocal, resolveKeepRemote, stampTrailer, purgePreview, purgeExecute, purgeVerify, sessionIdForms, walkSessionRefs, bareSessionId, sessionNoteTemplate, sessionNotePreview, sessionNoteWrite, resolveNotePath, sessionMigrateGroup, sessionMigratePreview, sessionMigrateExecute, sessionMigrateVerify, encodeWorkspaceGroup, decodeWorkspaceGroup, stateInfo, installInfo, idleStandard, mergeConfig, normalizeRemoteToHttps, repoFacts, normalizeWorkspaceMap, realWorkspaces, workspaceReport, selfCheck, channelState, readConfig, statusPayload, preflightReport: selfCheck, sessionDoctorScan, sessionDoctorApply, channelsOf, repoKeyOf, remoteOf, surfaceEnabled, diffLocalToPayload, stageChanges, commitChanges, pushChannels, pullChannels, applyPayload, ensureRepo, channelLabel, classifyPluginSpec, readInstalledPlugins, buildPluginManifest, readPluginManifest, writePluginManifest, backupPluginManifest, pluginRestorePreview, pluginRestoreExecute, pluginManifestPath, PLUGIN_BACKUP_RUNTIME };

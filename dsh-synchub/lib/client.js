@@ -1419,6 +1419,10 @@ function checkedAtText(atMs) {
       const [deep, setDeep] = useState(false);
       /* 记忆地图（阶段①只读）：追加到 Settings 末尾，不插中间（render-smoke 按位置注入）。 */
       const [memoryMap, setMemoryMap] = useState(null);
+      /* 记忆管理（阶段②）：手动归档 + 结果回显。 */
+      const [memId, setMemId] = useState('');
+      const [memResult, setMemResult] = useState(null);
+      const [memBusy, setMemBusy] = useState('');
 
       const load = useCallback(async () => {
         try {
@@ -1866,6 +1870,76 @@ function checkedAtText(atMs) {
           '插件清单含 link:C:/... 绝对路径，两台路径不同会让另一台 DSH 起不来；',
           '技能本身的安装走 dsh-market，这里只同步技能文件。'));
 
+      /* 手动归档总结（阶段②）：复用与事件同一条 archiveSessionById 路径。 */
+      const doMemArchive = useCallback(async () => {
+        if (!memId.trim()) { setMsg({ text: '先填要归档总结的 sessionId', kind: 'err' }); return; }
+        setMemBusy('归档总结'); setMsg({ text: '', kind: '' });
+        try {
+          const r = await post(`${API}/memory/archive`, { id: memId.trim() });
+          setMemResult(r);
+          setMsg({ text: r && r.ok ? `已写入：${r.plan && r.plan.file}` : `未写入：${(r && (r.error || r.skipped)) || '未知原因'}`, kind: r && r.ok ? 'ok' : 'err' });
+        } catch (ex) { setMsg({ text: '归档总结失败：' + String((ex && ex.message) || ex), kind: 'err' }); }
+        finally { setMemBusy(''); }
+      }, [memId]);
+
+      const mem = (form && form.memory) || {};
+      const memWs = Array.isArray(mem.workspaces) ? mem.workspaces : [];
+      const knownWs = (status && status.workspaceReport && status.workspaceReport.suggestions) || [];
+      const wsNames = Array.from(new Set([
+        ...knownWs.map(w => w.name),
+        ...memWs.map(w => w.name),
+      ].filter(Boolean)));
+      const setMem = patch => setForm(f => ({ ...(f || {}), memory: { ...((f && f.memory) || {}), ...patch } }));
+      const setMemWs = (name, enabled) => {
+        const lower = name.toLowerCase();
+        const has = memWs.some(w => w.name.toLowerCase() === lower);
+        const next = has ? memWs.map(w => (w.name.toLowerCase() === lower ? { ...w, enabled } : w)) : [...memWs, { name, enabled }];
+        setMem({ workspaces: next });
+      };
+
+      const memorySettingsCard = memoryMap ? e('div', { className: 'card' },
+        e('h3', null, '记忆管理（阶段②）',
+          e('span', { className: mem.enabled ? 'good' : 'muted' }, mem.enabled ? ' ● 已开启' : ' ● 未开启')),
+        e('div', { className: 'muted', style: { marginBottom: 8 } },
+          '会话归档时自动总结并写入该工作区的 memory/PROJECT.md；用户级落点 ~/.dsh/memory/USER.md。写前自动备份，只追加不覆盖。'),
+        e('div', { className: 'chk' },
+          e('input', { type: 'checkbox', checked: Boolean(mem.enabled), onChange: ev => setMem({ enabled: ev.target.checked }) }),
+          e('span', null, '启用记忆管理')),
+        e('div', { className: 'chk' },
+          e('input', { type: 'checkbox', checked: Boolean(mem.onArchive), onChange: ev => setMem({ onArchive: ev.target.checked }) }),
+          e('span', null, '归档时自动总结'),
+          e('span', { className: 'why' }, '关掉则只手动触发')),
+        e('div', { className: 'chk' },
+          e('input', { type: 'checkbox', checked: Boolean(mem.userEnabled), onChange: ev => setMem({ userEnabled: ev.target.checked }) }),
+          e('span', null, '同时写用户级'),
+          e('span', { className: 'why' }, '~/.dsh/memory/USER.md')),
+        e('div', { className: 'field' },
+          e('label', null, 'provider / model'),
+          e('span', null,
+            e('input', { type: 'text', value: mem.provider || '', placeholder: '留空=自动取第一个 provider', onChange: ev => setMem({ provider: ev.target.value }), style: { width: '48%', marginRight: 6 } }),
+            e('input', { type: 'text', value: mem.model || '', placeholder: '留空=自动取第一个模型', onChange: ev => setMem({ model: ev.target.value }), style: { width: '48%' } })),
+          e('div', { className: 'hint' }, '归档总结走模型 stream；留空则自动取本 profile 第一个可用 provider 与模型')),
+        e('div', { className: 'muted', style: { margin: '8px 0 4px' } }, '工作区开关（留空列表 = 全部工作区都写；配了就按配的用）'),
+        wsNames.length ? wsNames.map(name => {
+          const hit = memWs.find(w => w.name.toLowerCase() === name.toLowerCase());
+          const on = hit ? hit.enabled !== false : false;
+          return e('div', { className: 'chk', key: name },
+            e('input', { type: 'checkbox', checked: on, onChange: ev => setMemWs(name, ev.target.checked) }),
+            e('span', null, name),
+            e('span', { className: 'why' }, (hit || memWs.length === 0) ? '' : '（未配）'));
+        }) : e('div', { className: 'muted' }, 'DSH 里还没有登记工作区，或尚未读取到。'),
+        e('div', { className: 'field', style: { marginTop: 10 } },
+          e('label', null, '手动归档总结'),
+          e('input', { type: 'text', value: memId, placeholder: 'session-xxxxxxxx-…', onChange: ev => setMemId(ev.target.value) })),
+        e('div', { className: 'btns' },
+          e('button', { disabled: Boolean(busy) || Boolean(memBusy) || !memId.trim(), onClick: doMemArchive }, memBusy ? '归档中…' : '立即归档总结')),
+        memResult ? e('div', { className: 'note' },
+          '结果：',
+          memResult.ok ? e('span', { className: 'good' }, '已写入') : e('span', { className: 'red' }, (memResult.error || memResult.skipped || '未写入')),
+          memResult.plan ? e('div', { className: 'muted' }, memResult.plan.file) : null,
+        ) : null,
+      ) : null;
+
       const mapCard = map ? e('div', { className: 'card' },
         e('h3', null, '目录清单（本机实际位置）'),
         e(DirTable, { rows: map.rows, deep: deep }),
@@ -1985,6 +2059,7 @@ function checkedAtText(atMs) {
 
         e('div', { className: 'groupTitle' }, '② 可选：本机与同步面'),
         formCard,
+        memorySettingsCard,
         surfCard,
         pluginCard,
         repoCard,
