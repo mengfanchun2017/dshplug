@@ -109,13 +109,13 @@ test -f C:\dsh\dw-plugin\list.json; "list.json 存在: $?"
 - 显示「✗ 还不能同步（N 项待处理）」→ 点开下面的「怎么做（N 步）」，
   每条都写了「缺什么 / 去哪里 / 怎么验」，按顺序做即可。
 
-### 第 5 步：配置两个仓库
+### 第 5 步：配置仓库地址
 
-1. 在 GitHub 建**两个空私有仓库**（Private；**不要**勾 README / .gitignore / License，否则首次推送会被拒）。
-2. 到「设置 → Msynchub → 通道地址」填两条地址；或在侧边栏面板下方的输入框直接填（只改通道地址）。
+1. 在 GitHub 建**一个空私有仓库**（Private；**不要**勾 README / .gitignore / License，否则首次推送会被拒），建议叫 `dsh-msynchub`。
+2. 到「设置 → Msynchub → ① 必做：仓库地址」填地址；HTTPS 或 SSH 都行，取决于本机已配通哪种。
 3. 点「保存」，再点「重新检查」。
 
-**验证**：通道行不再显示「未配置远端」，而是 `N 落后 / N 领先 / N 脏`。
+**验证**：仓库行不再显示「未配置远端」，而是 `N 落后 / N 领先 / N 脏`。
 
 ### 第 6 步：把 Git 认证配通
 
@@ -138,7 +138,7 @@ dsh plugin --profile desktop add 'github:mengfanchun2017/dswp-plugin#path:/dsh-g
 **验证**（不装 gitok 也能自己验）：
 
 ```powershell
-git ls-remote https://github.com/<你>/dsh-config
+git ls-remote https://github.com/<你>/dsh-msynchub
 ```
 
 能列出 ref 就说明认证已通；报错则先解决凭据/代理。
@@ -171,14 +171,12 @@ git ls-remote https://github.com/<你>/dsh-config
 
 ---
 
-## 2. 首次配置（仓库模式 + Git 认证）
+## 2. 首次配置（唯一仓库 + Git 认证）
 
 在设置页「Msynchub → 新用户从这里开始」按第 0→4 步走，等价命令行/要点：
 
-1. **选仓库模式**：设置页「仓库模式」——`single`（一个地址，推荐数据量不大时）或 `split`（两个地址，默认）。
-   - 单仓库：GitHub 建**一个空私有仓库**（不勾 README/.gitignore/License），填到一个地址即可。
-   - 双仓库：建两个（`dsh-config`、`dsh-sessions`）。
-2. 设置页「仓库地址」填地址（单仓库一个 / 双仓库两个；HTTPS 或 SSH 都行，取决于本机已配通哪种）。
+1. **建一个空私有仓库**：GitHub → New repository（Private，不勾 README/.gitignore/License），建议叫 `dsh-msynchub`。
+2. 设置页「仓库地址」填这一条地址（HTTPS 或 SSH 都行，取决于本机已配通哪种）。
 3. **Git 认证自己搞定**（本插件不接收/不保存凭据）：推荐装 `dsh-gitok`，「设置 → Mgitok」一键初始化——
    它会检查 Windows 凭据管理器、credential helper、明文凭据、代理、SSH 私钥口令并给修复命令。
    不装也行；HTTPS / GCM OAuth / SSH 均可，只要本机 git 能读写你的私有仓库。
@@ -224,7 +222,7 @@ Get-ChildItem "$P\test" -Filter *.cjs | Sort-Object Name | ForEach-Object {
 | `memoryedit-smoke.cjs` | 编辑白名单：允许用户级/工作区 memory 下 .md，拒绝相对路径、越界、非 md、凭据、目录穿越；含登记表损坏态 |
 | `memoryarchive-smoke.cjs` | 归档引擎：读会话（zstd 多帧）/ 定位落点 / 备份后追加 + 初始态 / 损坏会话 / 未分组 |
 | `memorymap-smoke.cjs` | 记忆地图枚举：完整场 / 初始态（空 DSH_HOME）/ 失败态（workspace.json 损坏）/ 边界（无 .git、路径不存在） |
-| `single-smoke.cjs` | 单仓库模式（ADR-036）：模式抽象 / 分组开关 / payload 落点 / 单通道状态 / 失败态 |
+| `single-smoke.cjs` | 唯一仓库（ADR-037）：单仓库抽象 / dsh-home 落点 / payload→dsh-home 迁移 + README / 单通道状态 / 失败态 |
 | `pluginbackup-smoke.cjs` | 插件清单备份/恢复（ADR-038）：分类 npm/link/git、不记版本、无变化不写盘、预览只读、确认闸门、开关关闭拒绝 |
 | `sessionlog-guard-smoke.cjs` | apply 守卫（ADR-043）：本机更新跳过 / payload 更新应用 / 坏 payload 跳过 / force 放行 / 初始态 / 非会话文件 |
 十六份 smoke 用临时夹具，**不碰真实 DSH 会话数据、不发网络请求**
@@ -245,8 +243,8 @@ Get-ChildItem "$P\test" -Filter *.cjs | Sort-Object Name | ForEach-Object {
 ### 3.2 真机验证（改完 `index.js` 必须做）
 
 1. **完全退出 DSH 再打开**（托盘退出，确认进程结束）。
-2. 侧边栏 `Msynchub` 面板能打开、能滚动到下面的卡片；未配远端时「先连上两个私有仓库」必须在「下一步」之前（顺序错会让拉取/推送按钮变成空转）。
-3. 设置 → Msynchub →「当前状态」里看「状态目录=已初始化/未初始化」「两通道仓库=已建/未建」「回滚点个数」是否与本机实际相符。
+2. 侧边栏 `Msynchub` 面板能打开、能滚动到下面的卡片；未配远端时「还缺仓库地址」卡必须排在「下一步」之前（顺序错会让拉取/推送按钮变成空转）。
+3. 设置 → Msynchub →「当前状态」里看「状态目录=已初始化/未初始化」「仓库状态=已建/未建」「回滚点个数」是否与本机实际相符。
 4. 配好远端后，面板「下一步」头卡给出正确的那一件事（该拉还是该推）。
 
 ---
@@ -381,28 +379,26 @@ Copy-Item "$($b.FullName)\storages\workspace.json" "$env:USERPROFILE\.dsh\storag
 | 不检查会话内容是否损坏 | 只解首帧拿 header；`broken` 仅表示找不到正文文件或首帧读不出 |
 | 不重启 DSH | 改完 `workspace.json` 要你自己重启，侧边栏才按新归属显示 |
 
-### 4.5 单仓库模式（ADR-036，0.10.0）
+### 4.5 唯一仓库（ADR-037，0.11.0）
 
-用户原话：「配置两个仓库太麻烦，量也不大」。设置页「仓库模式」选 **单仓库** 即可：
+用户原话：「配置两个仓库太麻烦，量也不大」「不用保留开关 直接强制到一个仓库」。
 
-- 一个私有仓库地址（填到「私有仓库地址」）；
-- 两个分组开关：**同步配置组**（技能库 + 配置层 + 全局 `AGENTS.md`）/ **同步会话组**（会话 + 工作区登记 + 附件）；
-- 物理上只有一个仓库 `repos/all`、一个 `payload/`，两组的文件顶层不冲突所以共存。
+- 一个 `cfg.remote`、一个本地工作副本 `repos/all`；
+- 镜像目录 `dsh-home/`（= `$DSH_HOME`），仓库根有自动生成的 `README.md`；
+- 没有模式切换、没有分组开关（`channels` / `mode` 配置已废弃）。
 
 **从旧的双仓库迁移**（不会自动合仓，数据不丢）：
 
 1. 在 GitHub 新建一个空私有仓库（或指定一个已有的）。
-2. 设置页选「单仓库」，把地址填进去；两个分组开关按需要打开。
+2. 设置页把地址填进去，点「保存」。
 3. 点「保存」→ 回侧边栏点「立即同步」。插件会把**本机当前文件**重新 stage 进新仓库并推基线。
-4. 旧的两个仓库（`dsh-config` / `dsh-sessions`）**留在磁盘与 GitHub 作历史**，不再使用；
-   确认新仓库没问题后可以自行归档/删除。
+4. 旧仓库（`dsh-config` / `dsh-session`）留作历史；`dsh-config` 已从 GitHub 删除，`dsh-session` 已改名为 `dsh-msynchub`。
 
-> 单仓库会失去「一个通道坏了另一个能救」的隔离，且提交历史混合（改设置也连带会话提交）。
-> 数据量不大时这个交易划算；如果以后后悔，把模式切回「双仓库」即可（两套仓库都还在）。
+> 代价：失去「一个坏了另一个能救」的隔离，提交历史混合（改设置也连带会话提交）。
 
 ### 4.6 全局 AGENTS.md 同步（ADR-036）
 
-新增同步面 `agentInstructions`（配置组、safe、默认开），把 `~/.dsh/AGENTS.md` 纳入同步。
+新增同步面 `agentInstructions`（safe、默认开），把 `~/.dsh/AGENTS.md` 纳入同步。
 
 - **工作区里的 AGENTS.md 不走这里**：它归各工作区自己的 git（「代码仓库同步」会把 `dw-base/AGENTS.md` 推到 `dshwp-base`）。
 - `~/.agents/AGENTS.md`（`DSH_AGENTS_HOME`）本机不存在，暂未纳入。
@@ -526,7 +522,7 @@ dsh plugin --profile desktop add 'github:mengfanchun2017/dswp-plugin#path:/dsh-g
 
 ### 6.3 迁移步骤
 1. 两台机器路径必须完全一致（`C:\dsh\dw-plugin`、工作区 `C:\dsh\workspace1` 等，ADR-002）。
-2. 新机器：clone 仓库 → `install.ps1 -Only dsh-synchub` → 完全重启 → 配两远端 → 「拉取并应用」。
+2. 新机器：clone 仓库 → `install.ps1 -Only dsh-synchub` → 完全重启 → 填仓库地址 → 「拉取并应用」。
 3. 首次接入时插件发现本地仓库已 `git init` 但无 `HEAD`，会自动 bootstrap（把脚手架移到 `backups/pre-bootstrap-*` 再对齐远端）。
 4. 0.2 旧插件（`chatsync` / `dsh-config-manager`）可卸载；`chatsync` 已废弃。
 5. `workspace.json` 的导入是**并集合并**（ADR-003），`prune` 默认关闭——「远端没有」不等于「删了」。
