@@ -3195,6 +3195,15 @@ function routesFor() {
     },
     {
       kind: 'exact',
+      path: '/api/dsh-synchub/llm-options',
+      handler: async (_req, res) => {
+        try {
+          return json(res, 200, await llmOptions(await readConfig()));
+        } catch (e) { return json(res, 500, { ok: false, error: String(e.message || e) }); }
+      },
+    },
+    {
+      kind: 'exact',
       path: '/api/dsh-synchub/memory/archive',
       handler: async (req, res) => {
         try {
@@ -4168,6 +4177,32 @@ async function resolveLlmRoute(llm, cfg) {
   return { provider, model, providers };
 };
 
+/** 给设置页下拉用：列出所有 provider 及其模型（复用与对话框同一套 llm 服务）。
+ *  读不到 llm 服务时返回 ok:false，前端回退到手填。 */
+async function llmOptions(cfg) {
+  const m = memoryConfigOf(cfg);
+  const current = { provider: String(m.provider || '').trim(), model: String(m.model || '').trim() };
+  const llm = HOST_CTX && HOST_CTX.reflect && typeof HOST_CTX.reflect.get === 'function'
+    ? HOST_CTX.reflect.get('llm', false) : null;
+  if (!llm) return { ok: false, error: '该 profile 没有可用的 llm 服务', current, providers: [] };
+  let pids = [];
+  try {
+    const raw = (typeof llm.listProviders === 'function') ? (llm.listProviders() || []) : [];
+    pids = raw.map(x => (typeof x === 'string' ? x : (x && (x.id || x.name)) || '')).filter(Boolean);
+  } catch { /* 拿不到就空 */ }
+  const providers = [];
+  for (const pid of pids) {
+    let models = [];
+    try {
+      const ms = typeof llm.listModels === 'function' ? await llm.listModels(pid) : [];
+      const arr = Array.isArray(ms) ? ms : ((ms && (ms.models || ms.data)) || []);
+      models = arr.map(x => (typeof x === 'string' ? x : (x && (x.id || x.name)) || '')).filter(Boolean);
+    } catch { /* 该 provider 拿不到模型 */ }
+    providers.push({ id: pid, models });
+  }
+  return { ok: true, current, providers };
+}
+
 async function summarizeWithLlm(llm, provider, model, messages) {
   const sys = { role: 'system', content: [{ type: 'text', text: '你是会话归档助手。把下面的对话整理成简洁 Markdown：只写确定的结论、决策与理由、待办、涉及的文件路径。不要编造。' }] };
   const body = messages.slice(-40).map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: [{ type: 'text', text: m.text }] }));
@@ -4343,4 +4378,4 @@ async function codeRepoAutoTick(ctx) {
 export { name, inject, apply };
 export const VERSION_INFO = VERSION;
 // 供离线 smoke 测试用（node --check 查不出逻辑错，必须真跑一遍）。
-export const __test = { memoryMap, archiveSessionById, tidyMemoryNow, editMemoryFile, resolveMemoryEditPath, codeRepoList, codeRepoState, codeReposPayload, syncCodeRepo, syncAllCodeRepos, divergeInfo, resolveKeepLocal, resolveKeepRemote, stampTrailer, purgePreview, purgeExecute, purgeVerify, sessionIdForms, walkSessionRefs, bareSessionId, sessionNoteTemplate, sessionNotePreview, sessionNoteWrite, resolveNotePath, sessionMigrateGroup, sessionMigratePreview, sessionMigrateExecute, sessionMigrateVerify, encodeWorkspaceGroup, decodeWorkspaceGroup, stateInfo, installInfo, idleStandard, mergeConfig, normalizeRemoteToHttps, repoFacts, normalizeWorkspaceMap, realWorkspaces, workspaceReport, selfCheck, channelState, readConfig, statusPayload, preflightReport: selfCheck, sessionDoctorScan, sessionDoctorApply, channelsOf, repoKeyOf, remoteOf, surfaceEnabled, diffLocalToPayload, stageChanges, commitChanges, pushChannels, pullChannels, applyPayload, ensureRepo, channelLabel, classifyPluginSpec, readInstalledPlugins, buildPluginManifest, readPluginManifest, writePluginManifest, backupPluginManifest, pluginRestorePreview, pluginRestoreExecute, pluginManifestPath, PLUGIN_BACKUP_RUNTIME };
+export const __test = { memoryMap, archiveSessionById, tidyMemoryNow, editMemoryFile, resolveMemoryEditPath, llmOptions, codeRepoList, codeRepoState, codeReposPayload, syncCodeRepo, syncAllCodeRepos, divergeInfo, resolveKeepLocal, resolveKeepRemote, stampTrailer, purgePreview, purgeExecute, purgeVerify, sessionIdForms, walkSessionRefs, bareSessionId, sessionNoteTemplate, sessionNotePreview, sessionNoteWrite, resolveNotePath, sessionMigrateGroup, sessionMigratePreview, sessionMigrateExecute, sessionMigrateVerify, encodeWorkspaceGroup, decodeWorkspaceGroup, stateInfo, installInfo, idleStandard, mergeConfig, normalizeRemoteToHttps, repoFacts, normalizeWorkspaceMap, realWorkspaces, workspaceReport, selfCheck, channelState, readConfig, statusPayload, preflightReport: selfCheck, sessionDoctorScan, sessionDoctorApply, channelsOf, repoKeyOf, remoteOf, surfaceEnabled, diffLocalToPayload, stageChanges, commitChanges, pushChannels, pullChannels, applyPayload, ensureRepo, channelLabel, classifyPluginSpec, readInstalledPlugins, buildPluginManifest, readPluginManifest, writePluginManifest, backupPluginManifest, pluginRestorePreview, pluginRestoreExecute, pluginManifestPath, PLUGIN_BACKUP_RUNTIME };

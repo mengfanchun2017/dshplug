@@ -1454,6 +1454,8 @@ function checkedAtText(atMs) {
       const [deep, setDeep] = useState(false);
       /* 记忆地图（阶段①只读）：追加到 Settings 末尾，不插中间（render-smoke 按位置注入）。 */
       const [memoryMap, setMemoryMap] = useState(null);
+      /* provider/model 下拉：复用与对话框同一套 llm 服务（拿不到则回退手填）。 */
+      const [llmOpts, setLlmOpts] = useState(null);
       /* 记忆管理（阶段②）：手动归档 + 结果回显。 */
       const [memId, setMemId] = useState('');
       const [memResult, setMemResult] = useState(null);
@@ -1467,6 +1469,7 @@ function checkedAtText(atMs) {
         try { const s = await getJSON(`${API}/status`); if (s.ok) setStatus(s); } catch { /* 可选 */ }
         try { const m = await getJSON(`${API}/map`); if (m.ok) setMap(m); } catch { /* 可选 */ }
         try { const mm = await getJSON(`${API}/memory-map`); if (mm.ok) setMemoryMap(mm); } catch { /* 可选 */ }
+        try { const lo = await getJSON(`${API}/llm-options`); if (lo && lo.ok) setLlmOpts(lo); } catch { /* 可选，回退手填 */ }
       }, []);
 
       useEffect(() => { load(); }, [load]);
@@ -1965,9 +1968,35 @@ function checkedAtText(atMs) {
         e('div', { className: 'field' },
           e('label', null, 'provider / model'),
           e('span', null,
-            e('input', { type: 'text', value: mem.provider || '', placeholder: '留空=自动取第一个 provider', onChange: ev => setMem({ provider: ev.target.value }), style: { width: '48%', marginRight: 6 } }),
-            e('input', { type: 'text', value: mem.model || '', placeholder: '留空=自动取第一个模型', onChange: ev => setMem({ model: ev.target.value }), style: { width: '48%' } })),
-          e('div', { className: 'hint' }, '归档总结走模型 stream；留空则自动取本 profile 第一个可用 provider 与模型')),
+            llmOpts && llmOpts.providers && llmOpts.providers.length
+              ? e(react.Fragment, null,
+                  e('select', {
+                    value: mem.provider || '',
+                    onChange: ev => {
+                      const pid = ev.target.value;
+                      const hit = llmOpts.providers.find(p => p.id === pid);
+                      const m = (hit && hit.models && hit.models[0]) || '';
+                      setMem({ provider: pid, model: m });
+                    },
+                    style: { width: '48%', marginRight: 6, font: 'inherit', padding: 3, borderRadius: 5, border: '1px solid rgba(128,128,128,.4)', background: 'transparent', color: 'inherit' },
+                  },
+                    e('option', { value: '' }, '（自动：第一个可用 provider）'),
+                    llmOpts.providers.map(p => e('option', { key: p.id, value: p.id }, p.id))),
+                  e('select', {
+                    value: mem.model || '',
+                    onChange: ev => setMem({ model: ev.target.value }),
+                    style: { width: '48%', font: 'inherit', padding: 3, borderRadius: 5, border: '1px solid rgba(128,128,128,.4)', background: 'transparent', color: 'inherit' },
+                  },
+                    e('option', { value: '' }, '（自动：该 provider 第一个模型）'),
+                    (() => {
+                      const hit = llmOpts.providers.find(p => p.id === mem.provider);
+                      const models = hit ? hit.models : llmOpts.providers.flatMap(p => p.models);
+                      return models.map(m => e('option', { key: m, value: m }, m));
+                    })()))
+              : e(react.Fragment, null,
+                  e('input', { type: 'text', value: mem.provider || '', placeholder: '留空=自动取第一个 provider', onChange: ev => setMem({ provider: ev.target.value }), style: { width: '48%', marginRight: 6 } }),
+                  e('input', { type: 'text', value: mem.model || '', placeholder: '留空=自动取第一个模型', onChange: ev => setMem({ model: ev.target.value }), style: { width: '48%' } }))),
+          e('div', { className: 'hint' }, '归档总结走模型 stream；默认自动取本 profile 第一个可用 provider 与模型（也可在这里选）。拿不到列表时仍可手填。')),
         e('div', { className: 'muted', style: { margin: '8px 0 4px' } }, '工作区开关（留空列表 = 全部工作区都写；配了就按配的用）'),
         wsNames.length ? wsNames.map(name => {
           const hit = memWs.find(w => w.name.toLowerCase() === name.toLowerCase());
