@@ -4166,12 +4166,17 @@ async function summarizeWithLlm(llm, provider, model, messages) {
   const sys = { role: 'system', content: [{ type: 'text', text: '你是会话归档助手。把下面的对话整理成简洁 Markdown：只写确定的结论、决策与理由、待办、涉及的文件路径。不要编造。' }] };
   const body = messages.slice(-40).map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: [{ type: 'text', text: m.text }] }));
   let text = '';
+  const kinds = [];
   for await (const chunk of llm.stream({ provider, model, messages: [sys, ...body] })) {
     if (!chunk) continue;
-    if (chunk.kind === 'text-delta') text += (chunk.text ?? chunk.delta ?? '');
-    if (chunk.kind === 'finish') break;
+    const k = chunk.kind || chunk.type || '?';
+    if (kinds.length < 8) kinds.push(k);
+    if (k === 'text-delta' || k === 'text') {
+      text += (chunk.text ?? chunk.delta ?? chunk.content ?? '');
+    }
+    if (k === 'finish' || chunk.finish) break;
   }
-  return text.trim();
+  return JSON.stringify({ text: text.trim(), kinds });
 }
 
 /** 归档入口：事件回调与手动复用。任何失败都不抛（归档本身不能被总结拖垮）。 */
@@ -4194,8 +4199,11 @@ async function archiveSessionById(sessionId) {
     if (!llm) return { ok: false, error: '该 profile 没有可用的 llm 服务，跳过总结', plan };
     const route = await resolveLlmRoute(llm, cfg);
     if (!route.provider || !route.model) return { ok: false, error: '无法确定 provider/model（providers=' + (route.providers || []).join(',') + '，可在设置的记忆区手填）', plan };
-    const summary = await summarizeWithLlm(llm, route.provider, route.model, t.messages);
-    if (!summary) return { ok: false, error: '总结为空', plan };
+    const raw = await summarizeWithLlm(llm, route.provider, route.model, t.messages);
+    let summary = '';
+    let chunkKinds = null;
+    try { const parsed = JSON.parse(raw); summary = parsed.text || ''; chunkKinds = parsed.kinds; } catch { summary = String(raw || ''); }
+    if (!summary) return { ok: false, error: '总结为空（chunk kinds: ' + JSON.stringify(chunkKinds) + '）', plan };
     const block = `## ${new Date().toISOString().slice(0, 10)} 归档：${sessionId}\n\n- 工作区：${plan.title}\n- 模型：${route.provider}/${route.model}\n\n${summary}`;
     const w = await appendMemory(plan.file, block);
     if (m.userEnabled) await appendMemory(plan.userFile, block).catch(() => {});
