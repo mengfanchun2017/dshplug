@@ -34,7 +34,7 @@ const execFileAsync = promisify(execFile);
 
 const name = 'dsh-synchub';
 const inject = ['webServer'];
-const VERSION = '0.16.0';
+const VERSION = '0.17.0';
 /* 分支不能写死。远端仓库可能是 master（GitHub 旧默认）也可能是 main，
    写死一个就会在已有仓库上推出一个**平行的空历史分支**。
    优先级：config.channels[ch].branch → 远端 HEAD 指向的分支 → DEFAULT_BRANCH。 */
@@ -87,6 +87,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 /* ADR-034：会话体检与修复。为了不让 index.js 继续膨胀（已 3500+ 行）且好单测，
    引擎放在兄弟模块里；它只拿 dshHome 做纯文件操作，不注册路由、不读配置。 */
 import { doctorScan as sessionDoctorScan, doctorApply as sessionDoctorApply } from './sessiondoctor.js';
+import { decodeSessionLog, sessionLogSeqGaps } from './sessionlog.js';
 import { memoryMap, archivePlan, readSessionTranscript, appendMemory, writeMemoryFile, recentWorkspaceTranscript, MEMORY_DIR, USER_MEMORY_FILE } from './memory.js';
 
 /** 宿主 profile 目录：从本文件往上找 node_modules 的父目录。 */
@@ -1768,7 +1769,7 @@ async function resolveKeepRemote(cfg, opts = {}) {
     out.channels[ch] = r.ok ? { ok: true, reset: true } : { ok: false, reason: r.err || r.out };
   }
   out.ok = Object.values(out.channels).every(v => v.ok);
-  if (out.ok) out.applied = await applyPayload(cfg, { prune: opts.prune === true });
+  if (out.ok) out.applied = await applyPayload(cfg, { prune: opts.prune === true, force: true });
   return out;
 }
 
@@ -1777,14 +1778,56 @@ async function resolveKeepRemote(cfg, opts = {}) {
 /**
  * 把 payload 写回 $DSH_HOME。
  * - 覆盖/删除前一律备份到 backups/<ts>/
- * - 跳过当前正在写入的会话（DSH_SESSION_ID），避免把活着的日志覆盖坏
+ * - 跳过当前正在写入的会话：DSH_SESSION_ID 有值时按路径跳过；但插件宿主进程里
+ *   这个变量通常是空的（实测桌面版 activeSession 一直是 null），所以真正的保护
+ *   是下面的内容守卫——payload 是本机日志的前缀（本机更新）时绝不覆盖。
  */
+/** 会话日志（session.v4.jsonl.zstd）的 rel 判定。 */
+function isSessionLogRel(rel) {
+  return rel.startsWith('sessions/') && rel.endsWith('session.v4.jsonl.zstd');
+}
+
+/**
+ * apply 前的会话日志守卫（ADR-043）。
+ *
+ * 背景：一次真实故障里，`/sync` 的 apply 把停滞的 payload（seq 0..1171）盖到正在
+ * 写入的本机日志（seq 0..1368）上；DSH 内存里还记着 lastSeq=1368，继续往下写
+ * 1369..，磁盘上就成了 0..1171 + 1369.. 的断口日志，历史直接打不开。
+ * `DSH_SESSION_ID` 在宿主进程里是空的，skipActive 形同虚设，必须做内容判断。
+ *
+ * 判据（只读，不解不成不猜）：
+ *   ① payload 解不开 → 跳过（不把坏 payload 盖到本机）；
+ *   ② payload 有 seq 断口 → 跳过（坏数据不外传）；
+ *   ③ payload 明文是本机的严格前缀 → 本机更新，跳过（随后 stage 会把本机推上去）；
+ *   ④ 本机解不开、payload 正常 → 放行（让 payload 修本机）；
+ *   ⑤ 其余（payload 更新 / 分叉）→ 放行，沿用既有「接力覆盖」语义。
+ *
+ * @param {string} localAbs 本机文件绝对路径
+ * @param {string} payloadAbs payload 文件绝对路径
+ * @returns {{skip:boolean, reason:string}}
+ */
+function sessionLogApplyGuard(localAbs, payloadAbs) {
+  const payload = decodeSessionLog(payloadAbs);
+  if (!payload.ok) return { skip: true, reason: `payload 无法解码：${payload.error}` };
+  const gaps = sessionLogSeqGaps(payload.plaintext);
+  if (gaps.gaps.length) return { skip: true, reason: `payload 有 seq 断口（${gaps.gaps.length} 处）` };
+  const local = decodeSessionLog(localAbs);
+  if (!local.ok) return { skip: false, reason: '' };
+  const lp = local.plaintext;
+  const pp = payload.plaintext;
+  if (lp.length > pp.length && lp.subarray(0, pp.length).equals(pp)) {
+    return { skip: true, reason: '本机日志更新（payload 是本机的前缀），跳过以免覆盖活日志' };
+  }
+  return { skip: false, reason: '' };
+}
+
 async function applyPayload(cfg, opts = {}) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const backupDir = path.join(BACKUP_ROOT, stamp);
   const written = [];
   const deleted = [];
   const skipped = [];
+  const guarded = [];
   let backedUp = 0;
 
   const skipActive = rel => Boolean(ACTIVE_SESSION) && rel.includes(ACTIVE_SESSION);
@@ -1809,6 +1852,14 @@ async function applyPayload(cfg, opts = {}) {
         if (st.size === item.size) same = (await sha256File(dest)) === (await sha256File(item.abs));
       } catch { /* 不存在 */ }
       if (!same) {
+        if (!opts.force && isSessionLogRel(rel)) {
+          const guard = sessionLogApplyGuard(dest, item.abs);
+          if (guard.skip) {
+            skipped.push(rel);
+            guarded.push({ rel, reason: guard.reason });
+            continue;
+          }
+        }
         if (fs.existsSync(dest)) {
           const b = path.join(backupDir, rel);
           await fsp.mkdir(path.dirname(b), { recursive: true });
@@ -1877,6 +1928,7 @@ async function pruneEmptyParents(dir, surface) {
     written: written.length,
     deleted: deleted.length,
     skipped: skipped.length,
+    guarded: guarded.slice(0, 50),
     backedUp,
     backupDir: written.length || deleted.length ? backupDir : null,
     sample: written.slice(0, 20),

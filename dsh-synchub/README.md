@@ -14,6 +14,8 @@
 > npm 走宿主 `pluginManager` 服务、link 写回依赖后 pnpm install；带开关（默认关，与 dsh-market
 > 的备份导出二选一）。
 
+0.17.0 是**会话日志守卫版**（ADR-043）：修一个真实故障——`/sync` 的 apply 把停滞 payload 盖到正在写的本机日志上，DSH 继续追加后磁盘出现 seq 断口，历史打不开。新增 `lib/sessionlog.js`（只读解压 zstd 多帧 + seq 连续性检查），`applyPayload` 在写本机前做内容守卫：payload 解不开、有 seq 断口、或 payload 是本机日志的严格前缀（本机更新）时跳过。根因是 `DSH_SESSION_ID` 在插件宿主进程里一直是空的，旧的 `skipActive` 形同虚设。
+
 0.16.0 是**侧栏编辑记忆版**（阶段④，ADR-042）：侧栏「⑦ 记忆地图」新增「编辑记忆文件」——选文件、读取、修改、备份后写回。写入走路径白名单（仅 `~/.dsh/memory/` 与 `<工作区>/memory/` 下的 `.md`）+ `confirm=WRITE` 闸门 + 写前备份。
 
 0.15.0 是**整理记忆版**（阶段③，ADR-041）：把「现有记忆 + 范围内最近会话」交给模型合并去重，备份后覆盖回 `<工作区>/memory/PROJECT.md`，让记忆保持常新。支持手动（设置页「立即整理」）与定时（`tidy.intervalHours`）。
@@ -319,8 +321,10 @@ surfaceEnabled(surface, cfg) => Boolean(cfg.surfaces[surface.id]) && surface.tie
 
 ### 规则三：绝不覆盖正在写的会话
 
-`DSH_SESSION_ID` 指向的那个会话文件会被跳过（`skipActive`），
-否则会把当前正在对话的日志覆盖坏。
+`DSH_SESSION_ID` 指向的那个会话文件会被跳过（`skipActive`）；但插件宿主进程里这个变量
+通常是空的（实测桌面版一直是 null），所以真正的保护是**内容守卫**（ADR-043）：
+payload 是本机日志的严格前缀（本机更新）时绝不覆盖；payload 解不开或有 seq 断口时也跳过。
+否则会把当前正在对话的日志覆盖坏，DSH 继续追加后就成了 seq 断口日志，历史直接打不开。
 
 ---
 

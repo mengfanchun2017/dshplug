@@ -1834,3 +1834,40 @@ DSH 在目录改名后会为该新路径**新建**一个 `workspaceId`，旧记�
   | 不确认直接覆盖 | 记忆是长期资产，误写不可逆；沿用 confirm 闸门 |
   | 用 `AGENTS.md` 做编辑入口 | 与「自动记忆落 <workspace>/memory」分离的设计冲突 |
 - **验证**：`synchub-smoke` 路由 33→34；`render-smoke` 全绿；路径白名单由 `resolveMemoryEditPath` 单点收口；改 `index.js` 需完全重启 DSH。
+
+---
+
+## ADR-043 · 0.17.0：apply 前给会话日志加内容守卫（修 seq 断口）
+
+- **日期**：2026-11-25
+- **状态**：已采纳（已实现，待真机重启验收）
+- **背景（真实故障）**：
+  用户报 `session-e617aefb-…` 历史打不开：`corrupt session log: invalid committed event at line 1173: released v2 row 1172 has seq gap (expected 1172, got 1369)`。
+  实测该文件是 `0..1171 + 1369..1610`：中间 197 条（1172..1368）没了。
+  时间线：16:34:51 本机日志还是连续的 `0..1368`（synchub 备份为证）；16:34:58 `/sync` 的 apply
+  把停滞的 payload（`0..1171`）盖到本机；DSH 内存里 lastSeq 仍是 1368，继续追加 `1369..`；
+  16:34:59 stage 把这份断口日志抄回 payload 并提交，坏数据被固化。
+- **根因**：`applyPayload` 的 `skipActive` 依赖 `process.env.DSH_SESSION_ID`，但插件宿主进程里
+  它一直是空的（boot 日志 `activeSession` 全程 null），所以「绝不覆盖正在写的会话」这条硬规则
+  形同虚设；`/sync` 又是「先 apply 后 stage」，停滞 payload 直接盖活日志。
+- **结论**：新增 `lib/sessionlog.js`（只读解压 zstd 多帧 + seq 连续性检查，帧扫描照抄平台
+  `dsh-session-persistence-jsonl` 的 `scanZstdFrames`）。`applyPayload` 在写本机前对
+  `sessions/**/session.v4.jsonl.zstd` 做内容守卫：
+  ① payload 解不开 → 跳过；② payload 有 seq 断口 → 跳过；
+  ③ payload 明文是本机日志的严格前缀（本机更新）→ 跳过（随后 stage 把本机推上去）；
+  ④ 本机解不开、payload 正常 → 放行（让 payload 修本机）；⑤ 其余照常应用。
+  `resolveKeepRemote` 传 `force:true`，保留用户显式「以远端为准」的覆盖语义。
+- **理由**：会话日志是 append-only、由 DSH 进程独占写；同步引擎无权在运行时按旧快照覆盖它。
+  内容前缀关系是「谁更新」的唯一可靠判据（mtime 会被 git checkout / 复制改写，不可信）。
+- **反面代价**：① 每次 apply 多解压涉及的会话日志（只处理有差异的文件，实测毫秒级）；
+  ② 分叉（两边都追加）仍沿用「接力覆盖」语义，不自动合并——这是 ADR-030 的既定取舍，
+  守卫只拦「本机更新被旧快照盖」这一种确定有害的情形。
+- **已否决的替代方案**：
+  | 方案 | 否决理由 |
+  |---|---|
+  | 修 `DSH_SESSION_ID` 让 skipActive 生效 | 宿主进程本就不该知道 UI 的当前会话；且只保护一个会话，别的活跃子会话仍会坏 |
+  | 用 mtime 判断谁新 | git checkout / stage 都会改写 mtime，会把「刚拉下来的旧 payload」误判成新 |
+  | apply 前对只做哈希/前缀比对 | 只有会话日志是 append-only 活文件；配置/技能是整体覆盖，加守卫反而挡正常同步 |
+- **验证**：新增 `test/sessionlog-guard-smoke.cjs`（6 例：本机更新跳过 / payload 更新应用 /
+  坏 payload 跳过 / force 放行 / 初始态应用 / 非会话文件不受影响）；全部 16 份 smoke 全绿；
+  改 `index.js` 需完全重启 DSH。

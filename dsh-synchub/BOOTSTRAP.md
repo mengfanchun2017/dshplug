@@ -200,14 +200,14 @@ $P = 'C:\dsh\dw-plugin\dsh-synchub'
 & $node --check "$P\lib\client.js"
 & $node --check "$P\lib\sessiondoctor.js"
 
-# 全部 15 份；任何一份非 0 就停
+# 全部 16 份；任何一份非 0 就停
 Get-ChildItem "$P\test" -Filter *.cjs | Sort-Object Name | ForEach-Object {
   & $node $_.FullName
   if ($LASTEXITCODE -ne 0) { throw "FAIL $($_.Name)" }
 }
 ```
 各套件自己的通过标志（`ALL PASS` / `SYNCHUB_SMOKE_OK` / … / `会话体检 smoke：23 通过 / 0 失败`）。
-全绿 = 15/15 套件 exit 0。
+全绿 = 16/16 套件 exit 0。
 
 | 套件 | 盯什么 |
 |---|---|
@@ -226,8 +226,8 @@ Get-ChildItem "$P\test" -Filter *.cjs | Sort-Object Name | ForEach-Object {
 | `memorymap-smoke.cjs` | 记忆地图枚举：完整场 / 初始态（空 DSH_HOME）/ 失败态（workspace.json 损坏）/ 边界（无 .git、路径不存在） |
 | `single-smoke.cjs` | 单仓库模式（ADR-036）：模式抽象 / 分组开关 / payload 落点 / 单通道状态 / 失败态 |
 | `pluginbackup-smoke.cjs` | 插件清单备份/恢复（ADR-038）：分类 npm/link/git、不记版本、无变化不写盘、预览只读、确认闸门、开关关闭拒绝 |
-
-十二份 smoke 用临时夹具，**不碰真实 DSH 会话数据、不发网络请求**
+| `sessionlog-guard-smoke.cjs` | apply 守卫（ADR-043）：本机更新跳过 / payload 更新应用 / 坏 payload 跳过 / force 放行 / 初始态 / 非会话文件 |
+十六份 smoke 用临时夹具，**不碰真实 DSH 会话数据、不发网络请求**
 （`unsynced-smoke` / `repo-sync-smoke` 会读真实仓库目录，但**只读**：不 stage、不 commit、不 push）。
 
 > **为什么必须有 `render-smoke`（2026-11-18 踩过）**：`node --check` 只查语法。
