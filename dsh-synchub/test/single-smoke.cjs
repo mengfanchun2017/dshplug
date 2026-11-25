@@ -1,14 +1,11 @@
-/* dsh-synchub · 单仓库模式回归测试（ADR-036）
+/* dsh-synchub · 单仓库回归测试（ADR-037）
  *
- * 背景：用户提出「配置两个仓库太麻烦，量也不大」，要求一个仓库 + 两个分组开关。
- * 单仓库模式（cfg.mode==='single'）：
- *   - 一个物理仓库 repos/all，一个 remote；
- *   - config / sessions 退化为「逻辑分组」，channels.<group>.enabled 决定哪些面参与同步；
- *   - 逻辑通道只剩 'all' 一个。
+ * 唯一仓库（cfg.remote）：一个物理仓库 repos/all，镜像 $DSH_HOME 的目录叫 dsh-home/。
+ * 没有模式切换、没有分组开关；channels 配置被忽略。
  *
  * ⚠ 本测试**不依赖 git 子进程**：DSH 的沙箱会拦掉 node 起的 git（spawn EPERM），
- * 而插件的 git() 会把失败吞成 {ok:false}。所以这里直接手工搭出 repos/all/.git/HEAD，
- * 只验证「文件往哪落、开关怎么过滤、状态怎么报」，把真实推送留给真机重启验收。
+ * 而插件的 git() 会把失败吞成 {ok:false}。所以直接手工搭出 repos/all/.git/HEAD，
+ * 只验证「文件往哪落、状态怎么报、旧 payload/ 怎么迁移」，真实推送留给真机重启验收。
  */
 'use strict';
 const fs = require('fs');
@@ -26,12 +23,13 @@ function ok(name, cond, extra) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'synchub-single-'));
   const dsh = path.join(root, 'dsh');
   const state = path.join(dsh, 'dsh-synchub');
+  const all = path.join(state, 'repos', 'all');
   fs.mkdirSync(path.join(dsh, 'skills'), { recursive: true });
   fs.mkdirSync(path.join(dsh, 'sessions', '--C-dsh-x--', 's1'), { recursive: true });
   fs.mkdirSync(path.join(dsh, 'storages'), { recursive: true });
   fs.mkdirSync(path.join(dsh, 'profiles', 'desktop'), { recursive: true });
-  fs.mkdirSync(path.join(state, 'repos', 'all', '.git'), { recursive: true });
-  fs.writeFileSync(path.join(state, 'repos', 'all', '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  fs.mkdirSync(path.join(all, '.git'), { recursive: true });
+  fs.writeFileSync(path.join(all, '.git', 'HEAD'), 'ref: refs/heads/main\n');
   fs.writeFileSync(path.join(dsh, 'skills', 'a.md'), '# skill A\n');
   fs.writeFileSync(path.join(dsh, 'sessions', '--C-dsh-x--', 's1', 'session.v4.jsonl.zstd'), 'BINARY');
   fs.writeFileSync(path.join(dsh, 'storages', 'workspace.json'), '{"tables":{"workspaces":{}}}');
@@ -43,84 +41,79 @@ function ok(name, cond, extra) {
   const mod = await import(pathToFileURL(path.join(__dirname, '..', 'lib', 'index.js')).href);
   const t = mod.__test;
 
-  console.log('A. 纯函数：模式抽象');
-  ok('split 模式有两个逻辑通道', JSON.stringify(t.channelsOf({ mode: 'split' })) === JSON.stringify(['config', 'sessions']));
-  ok('single 模式只有一个逻辑通道 all', JSON.stringify(t.channelsOf({ mode: 'single' })) === JSON.stringify(['all']));
-  ok('single 模式下 repoKey 都落到 all', t.repoKeyOf('config', { mode: 'single' }) === 'all' && t.repoKeyOf('sessions', { mode: 'single' }) === 'all');
-  ok('split 模式下 repoKey 各自独立', t.repoKeyOf('config', { mode: 'split' }) === 'config' && t.repoKeyOf('sessions', { mode: 'split' }) === 'sessions');
-  ok('single 模式 remote 取 cfg.remote', t.remoteOf('all', { mode: 'single', remote: 'https://x/y.git' }) === 'https://x/y.git');
-  ok('split 模式 remote 取 channels[ch].remote', t.remoteOf('config', { mode: 'split', channels: { config: { remote: 'https://x/c.git' } } }) === 'https://x/c.git');
-  ok('single 模式 label', t.channelLabel('all') === '同步仓库');
-
-  console.log('B. mergeConfig：mode / remote 落盘');
-  const base = { mode: 'split', remote: '', channels: { config: { remote: '', enabled: true }, sessions: { remote: '', enabled: true } }, surfaces: {} };
-  const merged = t.mergeConfig(base, { mode: 'single', remote: 'https://x/y.git' });
-  ok('mode=single 被接受', merged.mode === 'single');
-  ok('remote 被接受', merged.remote === 'https://x/y.git');
-  ok('非法 mode 被忽略', t.mergeConfig(base, { mode: 'weird' }).mode === 'split');
-
-  console.log('C. 分组开关决定同步哪些面');
-  const cfgSingle = {
-    machine: 'T', mode: 'single', remote: '',
-    channels: { config: { remote: '', enabled: true }, sessions: { remote: '', enabled: true } },
+  const cfg = {
+    machine: 'T', remote: '',
     surfaces: { sessions: true, storages: true, attachments: true, skills: true, profileConfig: true, agentInstructions: true, profileManifest: false },
   };
-  ok('配置组面默认可用', t.surfaceEnabled({ id: 'skills', channel: 'config', tier: 'safe' }, cfgSingle));
-  const cfgNoConfig = { ...cfgSingle, channels: { config: { enabled: false }, sessions: { enabled: true } } };
-  ok('关掉配置组后配置面不可用', !t.surfaceEnabled({ id: 'skills', channel: 'config', tier: 'safe' }, cfgNoConfig));
-  ok('关掉配置组后会话面仍可用', t.surfaceEnabled({ id: 'sessions', channel: 'sessions', tier: 'safe' }, cfgNoConfig));
-  ok('danger 面永远不可用', !t.surfaceEnabled({ id: 'profileManifest', channel: 'config', tier: 'danger' }, cfgSingle));
 
-  console.log('D. 端到端（文件层）：stage 把内容写进 repos/all/payload');
-  fs.writeFileSync(path.join(state, 'config.json'), JSON.stringify(cfgSingle));
-  const cfg = await t.readConfig();
-  ok('readConfig 读回 single 模式', cfg.mode === 'single');
+  console.log('A. 纯函数：只剩一个仓库');
+  ok('channelsOf 恒为 [all]', JSON.stringify(t.channelsOf()) === JSON.stringify(['all']));
+  ok('repoKeyOf 恒为 all', t.repoKeyOf() === 'all');
+  ok('remoteOf 取 cfg.remote', t.remoteOf('all', { remote: 'https://x/y.git' }) === 'https://x/y.git');
+  ok('remote 缺省为空串', t.remoteOf('all', {}) === '');
+  ok('channelLabel = 同步仓库', t.channelLabel() === '同步仓库');
 
-  const diff0 = await t.diffLocalToPayload(cfg);
+  console.log('B. mergeConfig：只认 remote，旧 channels/mode 被忽略');
+  const merged = t.mergeConfig({ remote: '', surfaces: {} }, { remote: 'https://x/y.git', mode: 'split', channels: { config: { remote: 'https://old/c.git' } } });
+  ok('remote 被接受', merged.remote === 'https://x/y.git');
+  ok('mode 不再存在', merged.mode === undefined);
+  ok('channels 不再存在', merged.channels === undefined);
+
+  console.log('C. 同步面开关（没有分组概念）');
+  ok('safe 面默认可用', t.surfaceEnabled({ id: 'skills', channel: 'config', tier: 'safe' }, cfg));
+  ok('被关掉的面不可用', !t.surfaceEnabled({ id: 'skills', channel: 'config', tier: 'safe' }, { ...cfg, surfaces: { ...cfg.surfaces, skills: false } }));
+  ok('danger 面永远不可用', !t.surfaceEnabled({ id: 'profileManifest', channel: 'config', tier: 'danger' }, cfg));
+
+  console.log('D. 脚手架：旧 payload/ → dsh-home/ + 生成 README');
+  fs.mkdirSync(path.join(all, 'payload'), { recursive: true });
+  fs.writeFileSync(path.join(all, 'payload', 'old-session.txt'), 'OLD');
+  await t.ensureRepo('all', '', cfg);
+  ok('payload/ 已改名为 dsh-home/', fs.existsSync(path.join(all, 'dsh-home', 'old-session.txt')));
+  ok('旧 payload/ 不存在了', !fs.existsSync(path.join(all, 'payload')));
+  ok('生成了仓库 README.md', fs.existsSync(path.join(all, 'README.md')));
+  ok('README 说清 dsh-home 是什么', fs.readFileSync(path.join(all, 'README.md'), 'utf8').includes('dsh-home'));
+
+  console.log('E. 端到端（文件层）：stage 把内容写进 repos/all/dsh-home');
+  fs.writeFileSync(path.join(state, 'config.json'), JSON.stringify(cfg));
+  const cfg2 = await t.readConfig();
+  ok('readConfig 读回 remote', cfg2.remote === '');
+
+  const diff0 = await t.diffLocalToPayload(cfg2);
   ok('diff 认得全局 AGENTS.md', diff0.added.some(a => a.rel === 'AGENTS.md'), JSON.stringify(diff0.added.map(a => a.rel)));
   ok('diff 认得技能文件', diff0.added.some(a => a.rel === 'skills/a.md'));
 
-  const staged = await t.stageChanges(cfg);
+  const staged = await t.stageChanges(cfg2);
   ok('stage 写入了文件', staged.written >= 5, `written=${staged.written}`);
-  const payload = path.join(state, 'repos', 'all', 'payload');
-  ok('payload 落在 repos/all/payload', fs.existsSync(path.join(payload, 'AGENTS.md')));
+  const payload = path.join(all, 'dsh-home');
+  ok('payload 落在 repos/all/dsh-home', fs.existsSync(path.join(payload, 'AGENTS.md')));
   ok('repos/config 不该被创建', !fs.existsSync(path.join(state, 'repos', 'config')));
   ok('repos/sessions 不该被创建', !fs.existsSync(path.join(state, 'repos', 'sessions')));
-  ok('会话正文也进了同一个 payload', fs.existsSync(path.join(payload, 'sessions', '--C-dsh-x--', 's1', 'session.v4.jsonl.zstd')));
+  ok('会话正文也进了同一个 dsh-home', fs.existsSync(path.join(payload, 'sessions', '--C-dsh-x--', 's1', 'session.v4.jsonl.zstd')));
 
-  const diff1 = await t.diffLocalToPayload(cfg);
+  const diff1 = await t.diffLocalToPayload(cfg2);
   ok('stage 后 diff 归零', diff1.added.length === 0 && diff1.removed.length === 0, JSON.stringify(diff1));
 
-  console.log('E. channelState / status 在单仓库下只报一个通道');
-  const st = await t.channelState('all', cfg, {});
-  ok('channelState 标 label=同步仓库', st.label === '同步仓库');
+  console.log('F. channelState / status 只报一个仓库');
+  const st = await t.channelState('all', cfg2, {});
+  ok('label=同步仓库', st.label === '同步仓库');
   ok('channel 是 all', st.channel === 'all');
   ok('仓库已初始化', st.initialized === true);
   ok('分支读自 .git/HEAD', st.branch === 'main', `branch=${st.branch}`);
   ok('payloadMissing=false', st.payloadMissing === false);
-  const sp = await t.statusPayload(cfg, { fast: true });
+  const sp = await t.statusPayload(cfg2, { fast: true });
   ok('status.channels 只有 all', Object.keys(sp.channels).join(',') === 'all');
   ok('summary 不重复计数', sp.summary.unsynced === (st.unsynced || 0), JSON.stringify(sp.summary));
-  ok('summary.payloadMissing 不含 all', !(sp.summary.payloadMissing || []).includes('all') || st.payloadMissing === true);
 
-  console.log('F. 关掉配置组后，AGENTS.md 不再进 payload');
-  const cfg2 = { ...cfg, channels: { config: { enabled: false }, sessions: { enabled: true } } };
-  fs.writeFileSync(path.join(dsh, 'AGENTS.md'), '# 全局规则 v2\n');
-  const diff2 = await t.diffLocalToPayload(cfg2);
-  ok('配置组关掉后 diff 不含 AGENTS.md', !diff2.added.some(a => a.rel === 'AGENTS.md'), JSON.stringify(diff2.added.map(a => a.rel)));
-  await t.stageChanges(cfg2);
-  ok('payload 里 AGENTS.md 仍是旧内容', fs.readFileSync(path.join(payload, 'AGENTS.md'), 'utf8') === '# 全局规则\n');
-
-  console.log('G. apply 把 payload 写回本机');
+  console.log('G. apply 把 dsh-home 写回本机');
   fs.rmSync(path.join(dsh, 'skills', 'a.md'));
-  const applied = await t.applyPayload(cfg, {});
+  const applied = await t.applyPayload(cfg2, {});
   ok('apply 成功', applied.ok === true);
-  ok('被删的技能文件从 payload 恢复', fs.existsSync(path.join(dsh, 'skills', 'a.md')));
+  ok('被删的技能文件恢复', fs.existsSync(path.join(dsh, 'skills', 'a.md')));
 
-  console.log('H. 失败态：空配置 / 无仓库');
-  const empty = { machine: 'T', mode: 'single', remote: '', channels: { config: { remote: '', enabled: true }, sessions: { remote: '', enabled: true } }, surfaces: {} };
+  console.log('H. 失败态：无 remote');
+  const empty = { machine: 'T', remote: '', surfaces: {} };
   const sc = await t.selfCheck(empty);
-  ok('无 remote 时自检 ready=false', sc.ready === false);
+  ok('无 remote 时 ready=false', sc.ready === false);
   ok('引导说「填一个私有仓库地址」', (sc.guide || []).some(x => /一个私有仓库/.test(x.step || '')));
   ok('channels 列表只有一项且未配置', sc.channels.length === 1 && sc.channels[0].configured === false);
 

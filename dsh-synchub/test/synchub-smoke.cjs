@@ -107,7 +107,7 @@ const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
   assert.equal(nm([{ name: 'x' }], 'C:\\dsh').length, 1, '单行应保留');
   /* selfCheck：未配远端时必须给“缺什么/去哪/怎么验”三段可执行引导；
      已配好时（这里用空 step 模拟 ready）应直接报 OK。 */
-  const scEmpty = await idx.__test.selfCheck({ machine: 'T', workspaceRoot: 'C:\\dsh', workspaceMap: [], channels: { config: { remote: '' }, sessions: { remote: '' } }, surfaces: {} });
+  const scEmpty = await idx.__test.selfCheck({ machine: 'T', workspaceRoot: 'C:\\dsh', workspaceMap: [], remote: '', surfaces: {} });
   assert.equal(scEmpty.ok, true);
   assert.equal(scEmpty.ready, false, '没配远端不能报 ready');
   assert.ok(scEmpty.headline.includes('还不能同步'), '结论要说“还不能同步”');
@@ -115,7 +115,7 @@ const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
   assert.ok(g0, '应给出缺地址的引导');
   assert.ok(g0.where.includes('设置'), '引导要说去哪里填');
   assert.ok(g0.verify && g0.verify.length > 8, '引导要说怎么验证');
-  assert.equal(scEmpty.channels.filter(c => !c.configured).length, 2, '两个通道都应标为未配置');
+  assert.equal(scEmpty.channels.filter(c => !c.configured).length, 1, '唯一仓库应标为未配置');
   // 目标 C：就绪时要能报“上一次同步时间”，所以字段必须始终存在（无同步时为 null，不编造）。
   assert.ok('lastCommitAt' in scEmpty, 'self-check 必须带 lastCommitAt 字段');
   assert.equal(scEmpty.lastCommitAt, null, '没同步过时应为 null，而不是假时间');
@@ -248,9 +248,9 @@ const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
   assert.ok(!/setDraftField\('config'/.test(clientSrc), 'bug1 回归：侧边栏不应再直接绑定通道输入');
   assert.ok(!/onBlur:\s*ev\s*=>\s*setDraft/.test(clientSrc), 'bug1 回归：不应在 onBlur 里写回 draft');
   assert.ok(!/defaultValue:\s*conf\.remote/.test(clientSrc), 'bug1 回归：不应再用 defaultValue=conf.remote');
-  // 设置页那边：通道地址必须仍是受控输入（value 绑定 form.channels）。
-  assert.ok(/value:\s*\(form\?\.channels\?\.\[ch\]\?\.remote\)/.test(clientSrc),
-    '设置页通道输入应是受控 value=form.channels[ch].remote');
+  // 设置页那边：仓库地址必须是受控输入（value 绑定 form.remote）。
+  assert.ok(/value:\s*form\?\.remote\s*\?\?\s*''/.test(clientSrc),
+    '设置页仓库输入应是受控 value=form.remote');
 
   /* bug2：设置保存后侧边栏信息丢失。
      现在的根治比之前更强：侧边栏**完全不写配置**（ADR-022 分工），

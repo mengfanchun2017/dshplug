@@ -206,21 +206,20 @@ const s3 = renderTree(slots['settings.section'], [conf, conf, null, missStatus, 
 ok('missingInMap 非空分支不抛错', !s3.threw, s3.threw && s3.threw.message);
 ok('missingInMap 非空时出现「全部加入」', !s3.threw && s3.text.indexOf('全部加入') >= 0);
 
-/* 单仓库模式（ADR-036）：设置页要渲染「一地址 + 两分组开关」，不能还写死两个地址行。 */
+/* 单仓库（ADR-037，唯一模式）：设置页只有一个地址输入，没有模式切换也没有分组开关。 */
 const singleConf = JSON.parse(JSON.stringify(conf));
-singleConf.mode = 'single';
-singleConf.remote = 'https://github.com/u/dsh-sync.git';
+singleConf.remote = 'https://github.com/u/dsh-msynchub.git';
 const singleStatus = JSON.parse(JSON.stringify(STATUS));
 singleStatus.channels = { all: { label: '同步仓库', remote: singleConf.remote, behind: 0, ahead: 0, unsynced: 0, lastCommitAt: null } };
 const sSingle = renderTree(slots['settings.section'], [singleConf, singleConf, null, singleStatus, MAP, '', { text: '', kind: '' }, false]);
-ok('单仓库模式设置页不抛错', !sSingle.threw, sSingle.threw && sSingle.threw.message);
-ok('单仓库模式出现「仓库模式」选择', sSingle.text.indexOf('仓库模式') >= 0);
-ok('单仓库模式出现「私有仓库地址」', sSingle.text.indexOf('私有仓库地址') >= 0);
-ok('单仓库模式出现两个分组开关', sSingle.text.indexOf('同步配置组') >= 0 && sSingle.text.indexOf('同步会话组') >= 0);
-ok('单仓库模式不再出现「配置通道」地址行', sSingle.text.indexOf('配置通道') === -1);
+ok('单仓库设置页不抛错', !sSingle.threw, sSingle.threw && sSingle.threw.message);
+ok('单仓库设置页出现「私有仓库地址」', sSingle.text.indexOf('私有仓库地址') >= 0);
+ok('单仓库设置页不再出现「仓库模式」', sSingle.text.indexOf('仓库模式') === -1);
+ok('单仓库设置页不再出现分组开关', sSingle.text.indexOf('同步配置组') === -1 && sSingle.text.indexOf('同步会话组') === -1);
+ok('单仓库设置页不再出现「配置通道」地址行', sSingle.text.indexOf('配置通道') === -1);
 const panelSingle = [singleStatus, { ok: true, checks: [] }, MAP, '', '', '', [], null, { ok: true, ready: true, headline: '可以同步' }, '', '', null, '', '', null, null];
 const mSingle = renderTree(slots.main, panelSingle);
-ok('单仓库模式侧边栏不抛错', !mSingle.threw, mSingle.threw && mSingle.threw.message);
+ok('单仓库侧边栏不抛错', !mSingle.threw, mSingle.threw && mSingle.threw.message);
 
 // Panel 有数据
 const panelFilled = [STATUS, { ok: true, checks: [] }, MAP, '', '', '', [], null, { ok: true, ready: true, headline: '可以同步' }, '', '', null, '', '', null, null];

@@ -615,7 +615,7 @@ function checkedAtText(atMs) {
         return r;
       }), [act, refresh]);
       /* 分叉预览：只在怀疑分叉（summary.diverged）时才拉，平时不请求。 */
-      /* 代码仓库：与上面两个通道的数据分开存，因为它们的语义完全不同 ——
+      /* 代码仓库：与上面的同步仓库分开存，因为语义完全不同 ——
          通道是「整目录快照」，代码仓库是「已有历史的 git 库」。混在一起会让
          仪表盘的数字既算状态又算代码，用户看不出哪个该管。 */
       const [repos, setRepos] = useState(null);
@@ -943,14 +943,14 @@ function checkedAtText(atMs) {
          根因是接口超时导致 own=null，conf/sess 退化为 {}，noRemote 于是为 true。
          这条误导信息比「没数据」更糟：它让用户去重填已经正确的配置。 */
       const connectCard = (own && noRemote) ? e('div', { className: 'card' },
-        e('h3', null, chList.length > 1 ? '还缺两个仓库地址' : '还缺仓库地址', e('span', { className: 'red' }, '● 必需一步')),
+        e('h3', null, '还缺仓库地址', e('span', { className: 'red' }, '● 必需一步')),
         e('div', { className: 'muted' },
           '没有仓库地址，下面所有按钮都不起作用。只需要做两件事：'),
         e('div', { className: 'step need', style: { marginTop: 8 } },
           e('span', { className: 'red' }, '1.'),
           e('div', null,
             e('strong', null, '到设置里填地址'),
-            e('div', { className: 'act' }, '路径：设置 → Msynchub → ① 必做：' + (chList.length > 1 ? '两个仓库地址' : '仓库地址')),
+            e('div', { className: 'act' }, '路径：设置 → Msynchub → ① 必做：仓库地址'),
             e('div', { className: 'act' }, '填完点「保存」')),
         ),
         e('div', { className: 'step need' },
@@ -965,7 +965,7 @@ function checkedAtText(atMs) {
         e(CredentialNote, { compact: true })) : null;
 
       /* ---------------------------------------------------------- 代码仓库
-         与上面两个通道不是一回事：那些是 DSH 运行时状态，这些是用户自己的 git 仓库
+         与上面的同步仓库不是一回事：那是 DSH 运行时状态，这些是用户自己的 git 仓库
          （插件源码、工作区笔记）。所以单独一张卡，不混入主仪表盘的数字。
          只在真的有仓库时出现，没配就不占位置。 */
       const repoList = (repos && repos.repos) || [];
@@ -1445,12 +1445,6 @@ function checkedAtText(atMs) {
         setWsRows(merged);
         return sugg.length;
       };
-      const setCh = (ch, k, v) => setForm(f => {
-        const next = { ...(f || {}) };
-        next.channels = { ...(next.channels || {}) };
-        next.channels[ch] = { ...(next.channels[ch] || {}), [k]: v };
-        return next;
-      });
       const setSurf = (id, v) => setForm(f => {
         const next = { ...(f || {}) };
         next.surfaces = { ...(next.surfaces || {}), [id]: v };
@@ -1501,24 +1495,6 @@ function checkedAtText(atMs) {
             }),
           hint ? e('div', { className: 'hint' }, hint) : null));
 
-      const CH = (ch, label, hint) => e(react.Fragment, { key: ch },
-        e('div', { className: 'field' },
-          e('label', null, label),
-          e('input', {
-            type: 'text',
-            placeholder: 'https://github.com/<你>/<私有仓库>.git',
-            value: (form?.channels?.[ch]?.remote) ?? '',
-            onChange: ev => setCh(ch, 'remote', ev.target.value),
-          }),
-          e('div', { className: 'hint' }, hint)),
-        e('div', { className: 'chk' },
-          e('input', {
-            type: 'checkbox',
-            checked: form?.channels?.[ch]?.enabled !== false,
-            onChange: ev => setCh(ch, 'enabled', ev.target.checked),
-          }),
-          e('span', null, `启用${label}`)));
-
       const row = (k, v) => e('div', { className: 'row' }, e('span', { className: 'k' }, k), e('span', { className: 'v' }, v));
 
       const statusCard = e('div', { className: 'card' },
@@ -1557,40 +1533,17 @@ function checkedAtText(atMs) {
               row('回滚点', `${status.state.backupCount || 0} 个`),
               e('div', { className: 'muted', style: { fontSize: 11.5 } }, status.state.hint)) : null));
 
-      const isSingle = form?.mode === 'single';
-      const modeRow = e('div', { className: 'field' },
-        e('label', null, '仓库模式'),
-        e('select', {
-          value: isSingle ? 'single' : 'split',
-          onChange: ev => set('mode', ev.target.value),
-          style: { font: 'inherit', padding: '5px 8px', borderRadius: 6, border: '1px solid rgba(128,128,128,.4)', background: 'transparent', color: 'inherit' },
-        },
-          e('option', { value: 'single' }, '单仓库（一个地址 + 两个分组开关）'),
-          e('option', { value: 'split' }, '双仓库（每组各一个地址，老配置）')),
-        e('div', { className: 'hint' }, '单仓库：只填一个地址，配置组与会话组共用；两个开关决定同步哪几组。'));
-      const groupChk = (ch, label, hint) => e('div', { className: 'chk' },
-        e('input', { type: 'checkbox', checked: form?.channels?.[ch]?.enabled !== false, onChange: ev => setCh(ch, 'enabled', ev.target.checked) }),
-        e('span', null, label),
-        e('span', { className: 'why' }, hint));
       const channelCard = e('div', { className: 'card' },
         e('h3', null, '仓库地址（私有仓库）'),
-        modeRow,
-        isSingle
-          ? e(react.Fragment, null,
-              e('div', { className: 'field' },
-                e('label', null, '私有仓库地址'),
-                e('input', {
-                  type: 'text',
-                  placeholder: 'https://github.com/<你>/<私有仓库>.git',
-                  value: form?.remote ?? '',
-                  onChange: ev => set('remote', ev.target.value),
-                }),
-                e('div', { className: 'hint' }, '配置组与会话组共用这一个仓库（ADR-036）')),
-              groupChk('config', '同步配置组（技能库 + 配置层 + 全局 AGENTS.md）', '关掉后这一组不再进仓库'),
-              groupChk('sessions', '同步会话组（会话记录 + 工作区登记 + 附件）', '关掉后这一组不再进仓库'))
-          : e(react.Fragment, null,
-              CH('config', '配置通道', '技能库 + DSH 配置层 + 全局记忆文件。建议单独一个私有仓库，如 dsh-config'),
-              CH('sessions', '会话通道', '会话日志 + 工作区登记表 + 附件。建议单独一个私有仓库，如 dsh-sessions')),
+        e('div', { className: 'field' },
+          e('label', null, '私有仓库地址'),
+          e('input', {
+            type: 'text',
+            placeholder: 'https://github.com/<你>/dsh-msynchub.git',
+            value: form?.remote ?? '',
+            onChange: ev => set('remote', ev.target.value),
+          }),
+          e('div', { className: 'hint' }, '所有 DSH 状态（会话 / 工作区 / 附件 / 技能 / 配置层 / 全局 AGENTS.md）都进这一个仓库（ADR-037）')),
         e(CredentialNote, null));
       const formCard = e('div', { className: 'card' },
         e('h3', null, '本机设置'),
@@ -1797,15 +1750,14 @@ function checkedAtText(atMs) {
                 '它 ' , e('strong', null, '不装插件'), '（那是 dsh-market 的事），也 ', e('strong', null, '不碰'), ' 你的代码仓库。',
                 '代码走 git 自己管，这里只负责「换台机器能接着干活」。'))),
           e('div', { className: 'step' },
-            e('strong', null, form?.mode === 'single' ? '第 1 步 · 在 GitHub 建一个空私有仓库' : '第 1 步 · 在 GitHub 建两个空私有仓库'),
+            e('strong', null, '第 1 步 · 在 GitHub 建一个空私有仓库'),
             e('div', null,
-              '两个都要 ', e('strong', null, 'Private'), '，而且 ', e('strong', null, '不要勾 README / .gitignore / License'),
+              '要 ', e('strong', null, 'Private'), '，而且 ', e('strong', null, '不要勾 README / .gitignore / License'),
               '（勾了就成了非空仓库，首次推送会被拒）。',
               e('div', { className: 'muted' },
-                '建议叫 ', e('code', null, 'dsh-config'), '（配置层）与 ', e('code', null, 'dsh-sessions'), '（会话）。',
-                form?.mode === 'single' ? '单仓库模式下只建一个即可（两个分组共用）。' : '两者必须分开：会话体积大、变动频繁，混在一起会让配置通道天天冲突。'))),
+                '建议叫 ', e('code', null, 'dsh-msynchub'), ' —— 所有 DSH 状态都进这一个仓库。'))),
           e('div', { className: 'step' },
-            e('strong', null, '第 2 步 · 复制仓库地址，填到下面「通道地址」'),
+            e('strong', null, '第 2 步 · 复制仓库地址，填到下面「仓库地址」'),
             e('div', null,
               '必须是 ', e('code', null, 'https://github.com/<你>/<仓库>.git'), ' 这种 HTTPS 地址。',
               e('div', { className: 'muted' },
@@ -1855,7 +1807,7 @@ function checkedAtText(atMs) {
 
         /* 配置页分三组，避免 9 张卡平铺：
            ① 必做（不配好就用不了）② 可选设置（不配也能用）③ 诊断与维护（平时不看）。 */
-        e('div', { className: 'groupTitle' }, '① 必做：两个仓库地址'),
+        e('div', { className: 'groupTitle' }, '① 必做：仓库地址'),
         channelCard,
 
         e('div', { className: 'groupTitle' }, '② 可选：本机与同步面'),

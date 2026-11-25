@@ -41,26 +41,13 @@ const VERSION = '0.10.0';
 const DEFAULT_BRANCH = 'main';
 const BRANCH_CACHE = new Map();
 
-/* ---- 单仓库模式（ADR-036）------------------------------------------
- * mode==='single'：config / sessions 两个「逻辑分组」共用一个物理仓库 repos/all，
- * 两个开关（channels.<group>.enabled）退化为分组过滤器（决定哪些面参与同步）。
- * mode==='split'（默认，兼容老用户）：每个分组各自一个仓库，互不干扰。 */
-function isSingle(cfg) { return Boolean(cfg && cfg.mode === 'single'); }
-function channelsOf(cfg) { return isSingle(cfg) ? ['all'] : ['config', 'sessions']; }
-function repoKeyOf(channel, cfg) { return isSingle(cfg) ? 'all' : channel; }
-function remoteOf(channel, cfg) {
-  if (isSingle(cfg)) return String(cfg.remote || '').trim();
-  const c = (cfg.channels || {})[channel] || {};
-  return String(c.remote || '').trim();
-}
-function groupEnabled(cfg, channel) {
-  const c = (cfg.channels || {})[channel] || {};
-  return c.enabled !== false;
-}
-function channelLabel(ch) {
-  if (ch === 'all') return '同步仓库';
-  return ch === 'config' ? '配置通道' : '会话通道';
-}
+/* ---- 单仓库（ADR-037）------------------------------------------
+ * 只有 repos/all 一个物理仓库、一个 cfg.remote。
+ * config / sessions 不再是通道，SURFACES[].channel 只用于分组展示。 */
+function channelsOf() { return ['all']; }
+function repoKeyOf() { return 'all'; }
+function remoteOf(channel, cfg) { return String((cfg && cfg.remote) || '').trim(); }
+function channelLabel() { return '同步仓库'; }
 
 /* 缓存优先；没探测过时读本地仓库的实际分支（比 DEFAULT_BRANCH 可靠得多）：
    config 仓库当初就是从 master 建的，写死 main 会让阳性值算错——
@@ -334,9 +321,7 @@ async function workspaceReport(cfg) {
 
 const DEFAULTS = {
   machine: os.hostname(),
-  /* 单仓库模式（ADR-036）：一个仓库地址 + 两个分组开关。
-     默认 'split'，老配置不改就能继续用。 */
-  mode: 'split',
+  /* 唯一同步仓库（ADR-037）：dsh-msynchub。 */
   remote: '',
   workspace: 'C:\\dsh\\workspace1',
   workspaceRoot: 'C:\\dsh',
@@ -347,10 +332,6 @@ const DEFAULTS = {
      它回答「要同步哪些工作区、它们在本机哪里」，比纯路径列表好管。 */
   workspaceMap: [],
   showInSidebar: true,
-  channels: {
-    config: { remote: '', enabled: true },
-    sessions: { remote: '', enabled: true },
-  },
   surfaces: Object.fromEntries(SURFACES.map(s => [s.id, s.on])),
   idlePushMinutes: 20,
   autoPush: false,
@@ -521,16 +502,7 @@ function mergeConfig(base, patch) {
   if (Number.isFinite(Number(patch.staleHours))) {
     out.staleHours = Math.min(720, Math.max(1, Math.trunc(Number(patch.staleHours))));
   }
-  if (patch.channels && typeof patch.channels === 'object') {
-    for (const ch of ['config', 'sessions']) {
-      const src = patch.channels[ch];
-      if (!src || typeof src !== 'object') continue;
-      if (typeof src.remote === 'string') out.channels[ch].remote = src.remote.trim();
-      if (typeof src.enabled === 'boolean') out.channels[ch].enabled = src.enabled;
-    }
-  }
-  // 单仓库模式（ADR-036）：一个地址 + 两个分组开关。
-  if (patch.mode === 'single' || patch.mode === 'split') out.mode = patch.mode;
+  // 唯一同步仓库地址（ADR-037）。
   if (typeof patch.remote === 'string') out.remote = patch.remote.trim();
   if (patch.surfaces && typeof patch.surfaces === 'object') {
     for (const s of SURFACES) {
@@ -608,8 +580,11 @@ function repoDir(channel, cfg) {
   return path.join(REPO_ROOT, repoKeyOf(channel, cfg));
 }
 
+/* 仓库里镜像 $DSH_HOME 的目录名（ADR-037：从 payload/ 改为更直观的 dsh-home/）。 */
+const PAYLOAD_DIR_NAME = 'dsh-home';
+
 function payloadDir(channel, cfg) {
-  return path.join(repoDir(channel, cfg), 'payload');
+  return path.join(repoDir(channel, cfg), PAYLOAD_DIR_NAME);
 }
 
 /**
@@ -682,6 +657,45 @@ async function fetchRemote(channel, remote, cfg) {
   return { ok: true, empty: !up.ok, branch: br, output: f.out };
 }
 
+/* 仓库根 README（ADR-037）：让人打开仓库就知道每个目录是什么。
+   只在缺失时写入，不覆盖用户自己的修改。 */
+const REPO_README = [
+  '# dsh-msynchub · DSH 同步仓库',
+  '',
+  '这是 `dsh-synchub` 插件的**唯一**同步仓库：多台机器共用，一台推、其它拉。',
+  '`dsh-home/` 是 `$DSH_HOME`（默认 `C:\\Users\\<你>\\.dsh`）的镜像，路径一一对应。',
+  '',
+  '| 目录 / 文件 | 是什么 |',
+  '|---|---|',
+  '| `dsh-home/sessions/` | 会话日志（zstd 压缩；子目录名 = 工作区绝对路径编码） |',
+  '| `dsh-home/storages/` | 工作区登记表 `workspace.json` + 投影缓存 |',
+  '| `dsh-home/attachments/` | 附件池（sha256 内容寻址） |',
+  '| `dsh-home/skills/` | 技能文件本体 |',
+  '| `dsh-home/profiles/<profile>/` | DSH 配置层（cordis*.yml，不含密钥） |',
+  '| `dsh-home/AGENTS.md` | 用户全局规则 |',
+  '',
+  '- **谁推的**：看提交消息尾注 `Synchub-Machine` / `Synchub-At`。',
+  '- **怎么恢复**：另一台装好 DSH 与本插件，填这个仓库地址，点「拉取并应用」。',
+  '- **别手改**：会话正文与 `workspace.json` 必须一起动，手改会留下悬空引用。',
+  '',
+  '不在这个仓库里的：插件清单（含 `link:` 绝对路径）、凭据、登录态、运行时、缓存 —— 刻意的，',
+  '见插件设置页的「目录清单」。',
+  '',
+].join('\n');
+
+/** 仓库脚手架：旧 payload/ → dsh-home/ 的一次性迁移 + 补 README。*/
+function ensureRepoScaffold(dir) {
+  try {
+    const oldP = path.join(dir, 'payload');
+    const newP = path.join(dir, PAYLOAD_DIR_NAME);
+    if (fs.existsSync(oldP) && !fs.existsSync(newP)) fs.renameSync(oldP, newP);
+  } catch { /* 迁移失败不阻断；最坏是两套目录并存，用户能看到 */ }
+  try {
+    const rm = path.join(dir, 'README.md');
+    if (!fs.existsSync(rm)) fs.writeFileSync(rm, REPO_README, 'utf8');
+  } catch { /* README 写不了不影响同步 */ }
+}
+
 async function ensureRepo(channel, remote, cfg) {
   const dir = repoDir(channel, cfg);
   const fresh = !fs.existsSync(path.join(dir, '.git'));
@@ -707,7 +721,7 @@ async function ensureRepo(channel, remote, cfg) {
     );
     await fsp.writeFile(
       path.join(dir, '.gitignore'),
-      '# 只提交 payload/ 与 synchub/，其余是运行时产物\n/backups/\n/hash-cache.json\n',
+      '# 只提交 dsh-home/ 与 synchub/，其余是运行时产物\n/backups/\n/hash-cache.json\n',
       'utf8',
     );
   }
@@ -719,6 +733,7 @@ async function ensureRepo(channel, remote, cfg) {
   } else {
     await git(dir, ['remote', 'remove', 'origin']).catch(() => {});
   }
+  ensureRepoScaffold(dir);
 
   return { dir, fresh };
 }
@@ -741,7 +756,7 @@ async function bootstrapFromRemote(channel, remote, cfg) {
     // 不直接 -f 检查：payload 里可能有本机还没推上去的会话，不能用远端版本简单盖掉。
     const stash = path.join(BACKUP_ROOT, 'pre-bootstrap-' + new Date().toISOString().replace(/[:.]/g, '-'));
     let moved = 0;
-    for (const sub of ['payload', 'synchub', '.gitattributes', '.gitignore']) {
+    for (const sub of [PAYLOAD_DIR_NAME, 'synchub', '.gitattributes', '.gitignore', 'README.md']) {
       const from = path.join(dir, sub);
       if (!fs.existsSync(from)) continue;
       const acc = [];
@@ -774,7 +789,7 @@ async function channelState(channel, cfg, opts = {}) {
     channel,
     label: channelLabel(channel),
     remote: remoteOf(channel, cfg),
-    enabled: isSingle(cfg) ? true : groupEnabled(cfg, channel),
+    enabled: true,
     initialized: fs.existsSync(path.join(dir, '.git')),
     branch: branchOf(channel, cfg),
     ahead: 0,
@@ -939,8 +954,7 @@ function surfaceEnabled(surface, cfg) {
   if (surface.tier === 'danger') return false;
   if (!cfg.surfaces[surface.id]) return false;
   // 分组开关：单仓库模式下它是「同步哪一组」的唯一手段；双仓库模式下也生效，
-  // 让 channels.<group>.enabled 名副其实（否则只影响 push/pull，stage/apply 仍会搬）。
-  return groupEnabled(cfg, surface.channel);
+  return true;
 }
 
 /** 枚举某个同步面在本机的实际文件。 */
@@ -1205,11 +1219,7 @@ async function pushChannels(cfg, opts = {}) {
   const out = {};
   const message = opts.message || `synchub: ${cfg.machine} @ ${new Date().toISOString()}`;
   for (const ch of channelsOf(cfg)) {
-    const conf = { remote: remoteOf(ch, cfg), enabled: isSingle(cfg) ? true : groupEnabled(cfg, ch) };
-    if (conf.enabled === false) {
-      out[ch] = { ok: true, skipped: 'disabled' };
-      continue;
-    }
+    const conf = { remote: remoteOf(ch, cfg) };
     const dir = repoDir(ch, cfg);
     if (!fs.existsSync(path.join(dir, '.git'))) {
       out[ch] = { ok: false, reason: 'not-initialized' };
@@ -1269,11 +1279,7 @@ async function pushChannels(cfg, opts = {}) {
 async function pullChannels(cfg) {
   const out = {};
   for (const ch of channelsOf(cfg)) {
-    const conf = { remote: remoteOf(ch, cfg), enabled: isSingle(cfg) ? true : groupEnabled(cfg, ch) };
-    if (conf.enabled === false) {
-      out[ch] = { ok: true, skipped: 'disabled' };
-      continue;
-    }
+    const conf = { remote: remoteOf(ch, cfg) };
     const dir = repoDir(ch, cfg);
     if (!fs.existsSync(path.join(dir, '.git'))) {
       if (!conf.remote) {
@@ -1335,7 +1341,7 @@ async function pullChannels(cfg) {
 async function divergeInfo(cfg) {
   const channels = {};
   for (const ch of channelsOf(cfg)) {
-    const conf = { remote: remoteOf(ch, cfg), enabled: isSingle(cfg) ? true : groupEnabled(cfg, ch) };
+    const conf = { remote: remoteOf(ch, cfg) };
     const dir = repoDir(ch, cfg);
     const st = { label: channelLabel(ch), initialized: fs.existsSync(path.join(dir, '.git')), remote: conf.remote || '', diverged: false, ahead: 0, behind: 0 };
     if (!st.initialized || !st.remote) { channels[ch] = st; continue; }
@@ -1660,9 +1666,9 @@ async function resolveKeepLocal(cfg) {
   await stageChanges(cfg);
   const backupDir = path.join(BACKUP_ROOT, 'diverge-' + new Date().toISOString().replace(/[:.]/g, '-'));
   for (const ch of channelsOf(cfg)) {
-    const conf = { remote: remoteOf(ch, cfg), enabled: isSingle(cfg) ? true : groupEnabled(cfg, ch) };
+    const conf = { remote: remoteOf(ch, cfg) };
     const dir = repoDir(ch, cfg);
-    if (conf.enabled === false || !conf.remote || !fs.existsSync(path.join(dir, '.git'))) { out.channels[ch] = { ok: true, skipped: true }; continue; }
+    if (!conf.remote || !fs.existsSync(path.join(dir, '.git'))) { out.channels[ch] = { ok: true, skipped: true }; continue; }
     const f = await fetchRemote(ch, conf.remote, cfg);
     const br = (f.ok && f.branch) || branchOf(ch, cfg);
     // 备份远端侧被覆盖前的提交，便于事后找回（不做 git 层面的分支保留，简单直接）
@@ -1687,9 +1693,9 @@ async function resolveKeepLocal(cfg) {
 async function resolveKeepRemote(cfg, opts = {}) {
   const out = { ok: true, mode: 'keep-remote', channels: {}, applied: null };
   for (const ch of channelsOf(cfg)) {
-    const conf = { remote: remoteOf(ch, cfg), enabled: isSingle(cfg) ? true : groupEnabled(cfg, ch) };
+    const conf = { remote: remoteOf(ch, cfg) };
     const dir = repoDir(ch, cfg);
-    if (conf.enabled === false || !conf.remote || !fs.existsSync(path.join(dir, '.git'))) { out.channels[ch] = { ok: true, skipped: true }; continue; }
+    if (!conf.remote || !fs.existsSync(path.join(dir, '.git'))) { out.channels[ch] = { ok: true, skipped: true }; continue; }
     const f = await fetchRemote(ch, conf.remote, cfg);
     if (!f.ok || f.empty) { out.channels[ch] = { ok: false, reason: f.ok ? 'remote-empty' : `fetch-failed: ${f.error}` }; continue; }
     const br = f.branch || branchOf(ch, cfg);
@@ -2473,7 +2479,7 @@ async function checkAll(cfg) {
   push('git', 'git 可用', g.ok, g.ok ? g.out : '未找到 git，同步全部不可用');
 
   for (const ch of channelsOf(cfg)) {
-    const conf = { remote: remoteOf(ch, cfg), enabled: isSingle(cfg) ? true : groupEnabled(cfg, ch) };
+    const conf = { remote: remoteOf(ch, cfg) };
     const st = await channelState(ch, cfg, { fetch: true });
     const label = channelLabel(ch);
     push(`${ch}Remote`, `${label}远端仓库`, Boolean(conf.remote), conf.remote || `${label}未配置远端仓库`, conf.remote ? null : `到设置面板「通道地址」里填${label}地址`);
@@ -2711,7 +2717,7 @@ async function selfCheck(cfg) {
   const guide = [];
   if (noRemote.length) {
     guide.push({
-      step: isSingle(cfg) ? '填一个私有仓库地址' : '填两个私有仓库地址',
+      step: '填一个私有仓库地址',
       missing: noRemote.map(ch => channelLabel(ch)).join('、') + ' 没有地址',
       where: '设置 → Msynchub → 通道地址',
       verify: '填完点「保存」，再点「重新检查」；通道行应变成 N 落后 / N 领先 / N 脏，而不是「未配置远端」',
@@ -2720,7 +2726,7 @@ async function selfCheck(cfg) {
   }
   if (pre.steps.some(s => s.id === 'pull' && /远端仓库不存在/.test(s.title || ''))) {
     guide.push({
-      step: isSingle(cfg) ? '在 GitHub 上建这个空仓库' : '在 GitHub 上建这两个空仓库',
+      step: '在 GitHub 上建这个空仓库',
       missing: '远端根本不存在（拉取不会自己把仓库变出来）',
       where: 'GitHub → New repository（Private，不要勾 README / .gitignore / License）',
       verify: '建好后回面板点「重新检查」，这项应变成与远端一致',
@@ -2881,7 +2887,7 @@ async function stateInfo(cfg = {}) {
       hasGit = fs.existsSync(path.join(dir, '.git'));
       hasHead = hasGit && fs.existsSync(path.join(dir, '.git', 'HEAD'));
       // 不读 payload 内容，只数顶层是否存在（与 mapInfo 的深扫描区分）。
-      payloadFiles = fs.existsSync(path.join(dir, 'payload')) ? 1 : 0;
+      payloadFiles = fs.existsSync(path.join(dir, PAYLOAD_DIR_NAME)) ? 1 : 0;
     } catch (e) { error = e.code || String(e.message || e); }
     repos[ch] = { dir, hasGit, hasHead, hasPayload: Boolean(payloadFiles), error };
   }
@@ -3574,4 +3580,4 @@ async function codeRepoAutoTick(ctx) {
 export { name, inject, apply };
 export const VERSION_INFO = VERSION;
 // 供离线 smoke 测试用（node --check 查不出逻辑错，必须真跑一遍）。
-export const __test = { codeRepoList, codeRepoState, codeReposPayload, syncCodeRepo, syncAllCodeRepos, divergeInfo, resolveKeepLocal, resolveKeepRemote, stampTrailer, purgePreview, purgeExecute, purgeVerify, sessionIdForms, walkSessionRefs, bareSessionId, sessionNoteTemplate, sessionNotePreview, sessionNoteWrite, resolveNotePath, sessionMigrateGroup, sessionMigratePreview, sessionMigrateExecute, sessionMigrateVerify, encodeWorkspaceGroup, decodeWorkspaceGroup, stateInfo, installInfo, idleStandard, mergeConfig, normalizeRemoteToHttps, repoFacts, normalizeWorkspaceMap, realWorkspaces, workspaceReport, selfCheck, channelState, readConfig, statusPayload, preflightReport: selfCheck, sessionDoctorScan, sessionDoctorApply, channelsOf, repoKeyOf, remoteOf, groupEnabled, surfaceEnabled, diffLocalToPayload, stageChanges, commitChanges, pushChannels, pullChannels, applyPayload, isSingle, channelLabel };
+export const __test = { codeRepoList, codeRepoState, codeReposPayload, syncCodeRepo, syncAllCodeRepos, divergeInfo, resolveKeepLocal, resolveKeepRemote, stampTrailer, purgePreview, purgeExecute, purgeVerify, sessionIdForms, walkSessionRefs, bareSessionId, sessionNoteTemplate, sessionNotePreview, sessionNoteWrite, resolveNotePath, sessionMigrateGroup, sessionMigratePreview, sessionMigrateExecute, sessionMigrateVerify, encodeWorkspaceGroup, decodeWorkspaceGroup, stateInfo, installInfo, idleStandard, mergeConfig, normalizeRemoteToHttps, repoFacts, normalizeWorkspaceMap, realWorkspaces, workspaceReport, selfCheck, channelState, readConfig, statusPayload, preflightReport: selfCheck, sessionDoctorScan, sessionDoctorApply, channelsOf, repoKeyOf, remoteOf, surfaceEnabled, diffLocalToPayload, stageChanges, commitChanges, pushChannels, pullChannels, applyPayload, ensureRepo, channelLabel };

@@ -41,15 +41,14 @@ async function load(dsh) {
   assert.equal(s2.initialized, true);
   assert.equal(s2.config.exists, true);
   assert.ok(s2.config.modifiedAt);
-  assert.equal(s2.repos.config.hasGit, false);
-  assert.equal(s2.repos.sessions.hasGit, false);
+  assert.equal(s2.repos.all.hasGit, false);
 
   // 完整：两通道仓库 + backups
   const full = path.join(tmp, 'full');
-  for (const ch of ['config', 'sessions']) {
+  for (const ch of ['all']) {
     await fsp.mkdir(path.join(full, 'dsh-synchub', 'repos', ch, '.git'), { recursive: true });
     await fsp.writeFile(path.join(full, 'dsh-synchub', 'repos', ch, '.git', 'HEAD'), 'ref: refs/heads/main\n');
-    await fsp.mkdir(path.join(full, 'dsh-synchub', 'repos', ch, 'payload'), { recursive: true });
+    await fsp.mkdir(path.join(full, 'dsh-synchub', 'repos', ch, 'dsh-home'), { recursive: true });
   }
   await fsp.writeFile(path.join(full, 'dsh-synchub', 'config.json'), '{"machine":"T"}');
   await fsp.mkdir(path.join(full, 'dsh-synchub', 'backups', '2026-01-01'), { recursive: true });
@@ -57,10 +56,9 @@ async function load(dsh) {
   const f3 = await load(full);
   const s3 = await f3();
   assert.equal(s3.initialized, true);
-  assert.equal(s3.repos.config.hasGit, true);
-  assert.equal(s3.repos.config.hasHead, true);
-  assert.equal(s3.repos.config.hasPayload, true);
-  assert.equal(s3.repos.sessions.hasGit, true);
+  assert.equal(s3.repos.all.hasGit, true);
+  assert.equal(s3.repos.all.hasHead, true);
+  assert.equal(s3.repos.all.hasPayload, true);
   assert.equal(s3.backupCount, 2);
   assert.match(s3.hint, /已就绪|修改于/);
 

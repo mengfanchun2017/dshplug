@@ -63,21 +63,21 @@ const ROOT = path.join(__dirname, '..');
   // 全新环境：两个通道都没仓库。两个方向的 resolve 都必须整体 ok 且逐通道 skipped。
   const kl = await idx.__test.resolveKeepLocal(cfg);
   assert.equal(kl.ok, true, '无仓库时 keep-local 必须安全跳过，实际：' + JSON.stringify(kl.channels));
-  assert.ok(kl.channels.config.skipped && kl.channels.sessions.skipped, '两通道都应 skipped');
+  assert.ok(kl.channels.all && kl.channels.all.skipped, '唯一仓库应 skipped');
 
   const kr = await idx.__test.resolveKeepRemote(cfg);
   assert.equal(kr.ok, true, '无仓库时 keep-remote 必须安全跳过');
-  assert.ok(kr.channels.config.skipped && kr.channels.sessions.skipped);
+  assert.ok(kr.channels.all && kr.channels.all.skipped);
 
   // divergeInfo 在无仓库初始态：diverged=false，且不抛
   const dv = await idx.__test.divergeInfo(cfg);
   assert.equal(dv.ok, true);
   assert.equal(dv.diverged, false, '无仓库初始态不应报分叉');
-  assert.ok(!dv.channels.config.diverged && !dv.channels.sessions.diverged);
+  assert.ok(dv.channels.all && !dv.channels.all.diverged);
 
   /* ---------------- D. 空配置缺 remote：不算分叉也不算错 ---------------- */
   const cfg2 = JSON.parse(JSON.stringify(cfg));
-  cfg2.channels = { config: { remote: '' }, sessions: { remote: '' } };
+  cfg2.remote = '';
   const dv2 = await idx.__test.divergeInfo(cfg2);
   assert.equal(dv2.ok, true);
   assert.equal(dv2.diverged, false, '无 remote 时 diverged 必须为 false');

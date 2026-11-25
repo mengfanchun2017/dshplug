@@ -44,24 +44,24 @@ function ok(name, cond, extra) {
 
   const cfg = await t.readConfig();
   console.log('B. payloadMissing 反映真实磁盘（不因 .git 存在就算「已建」）');
-  for (const ch of ['config', 'sessions']) {
+  for (const ch of ['all']) {
     const st = await t.channelState(ch, cfg, {});
     // channelState 不返回 dir（它不向外暴露路径），自己算同一个路径。
     const dir = path.join(os.homedir(), '.dsh', 'dsh-synchub', 'repos', ch);
     const realMissing = !fs.existsSync(path.join(dir, 'payload'));
-    ok(`${ch}: payloadMissing=${st.payloadMissing} 与磁盘一致（实际缺失=${realMissing}）`,
+    const realMissing = !fs.existsSync(path.join(dir, 'dsh-home'));
       st.payloadMissing === realMissing);
   }
 
   console.log('C. 不扫描时 pending 必须是 null（「没查」≠「没问题」）');
-  for (const ch of ['config', 'sessions']) {
+  for (const ch of ['all']) {
     const st = await t.channelState(ch, cfg, {});
     ok(`${ch}: 未 scan 时 pending === null`, st.pending === null, `实际 ${st.pending}`);
     ok(`${ch}: scanned 标记为 false`, st.scanned === false);
   }
 
   console.log('D. 显式 scan 时 pending 是数字且非负');
-  for (const ch of ['config', 'sessions']) {
+  for (const ch of ['all']) {
     const st = await t.channelState(ch, cfg, { scan: true });
     ok(`${ch}: scan 后 pending 是数字`, typeof st.pending === 'number', `实际 ${typeof st.pending}`);
     ok(`${ch}: scan 后 pending >= 0`, (st.pending || 0) >= 0);
@@ -72,8 +72,8 @@ function ok(name, cond, extra) {
   }
 
   console.log('E. 语义护栏：unsynced 不能等于「只看 git dirty」');
-  const c0 = await t.channelState('config', cfg, {});
-  const c1 = await t.channelState('config', cfg, { scan: true });
+  const c0 = await t.channelState('all', cfg, {});
+  const c1 = await t.channelState('all', cfg, { scan: true });
   ok('scan 能改变结论（否则等于没查）', c0.scanned === false && c1.scanned === true);
   ok('unsynced 包含 pending 而非仅 dirty', c1.unsynced >= (c1.pending || 0));
 
