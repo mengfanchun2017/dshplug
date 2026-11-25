@@ -27,13 +27,13 @@
     {
       "name": "dsh-getbrain",
       "dir": "dsh-getbrain",
-      "version": "2.10.0",
-      "description": "得到大脑（原 Get 笔记）整理插件：官方 OpenAPI 全量下载到统一数据目录（默认 = 仓库同级 data-getbrain，自动创建、不进 Git），默认只读、写操作需确认、删除四道闸门+本地 trash 兜底；侧边栏 Mgetbrain 工作台有真实可展开的「知识库→目录→书→讲」层级树（本地重建，不依赖服务器）、分类调整（勾选→计划→干跑→双点真写）与真实审计日志；附 SKILL.md 整理纪律",
+      "version": "2.11.0",
+      "description": "得到大脑（原 Get 笔记）整理插件：官方 OpenAPI 全量下载到统一数据目录（默认 = 仓库同级 data-getbrain，自动创建、不进 Git），默认只读、写操作需确认、删除四道闸门+本地 trash 兜底；侧边栏 Mgetbrain 工作台有真实可展开的「知识库→目录→书→讲」层级树（本地重建，不依赖服务器）、分类调整（勾选→计划→干跑→双点真写）、合并、删除与真实审计日志；本地全文检索（FTS5）+ 稀疏向量检索（TF-IDF）+ 按库静态发布；归属（persona）把「一个账号三个人」的内容按人分开，让 AI Agent 分清「谁的事」；附结构体检脚本与 SKILL.md 整理纪律",
       "installedOn": [
         "FRANCIS-HOME-I7"
       ],
       "status": "active",
-      "note": "合并笔记（默认不删旧、三道闸门、新 ID 会断旧引用）；ids 唯一 ID 表——实测抓到标签「AI」两个 ID，任何按名字操作的地方都会漏一半；agent-brief 给 AI 的工作内容提纯包（431 条待办、自己的 269 篇只落在 8 个标签/8 个知识库上、13 篇没归）；ids 扫描 33.9s→2.0s；补上 P.rowLine/P.boolRow 两个从未定义的样式键。新增 3 条路由（merge/ids/brief），共 18 条。24 项断言全绿。"
+      "note": "2026-11-26 v2.11.0：修侧边栏空白（误插未闭合 useEffect 把 17 个 hooks 吞进回调）+ 类组件错误边界 + 注册两次采样探针；新增 tools/structure-check.mjs 结构体检（13 项断言，拦 hooks 层级/effect 配平/inject 覆盖/样式键/配色/文案键/exports/路由数）；新增 mirror-check（镜像 vs 线上对账）、vec-index/vec-search（本地 TF-IDF 稀疏向量）、summarize（渐进摘要 L3 自动 + L4 模板，只写本地）；标签双 ID 消歧（tag-remove 支持 --tag，重名报错不猜；计划 tag_add/tag_delete 同理；kb_ensure 同名不同 ID 报错）；apply 结果日志新增 resolved_actions（ID 键）；补齐 36 个只写内联默认值的文案键；仓库改名 dshplug→dw-plugin 全局同步。路由 18→25 条。上一版 v2.10.0：归属 persona 轴（一个账号三个人）、agent-brief、合并、ID 表。"
     },
     {
       "name": "dsh-gitok",

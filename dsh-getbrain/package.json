@@ -1,6 +1,6 @@
 {
   "name": "dsh-getbrain",
-  "version": "2.10.0",
+  "version": "2.11.0",
   "private": true,
   "description": "正式 Cordis 插件（Bundle）：通过官方 OpenAPI 整理得到大脑（原 Get笔记）。本插件服务于「一个共享账号里混着三个人的内容」这一现实——同一个 Get笔记 账号同时装着我的工作与 AI 思考、孩子的学习与升学、老婆的部门会议，由我一个人维护分类；插件把内容按「我 / 孩子 / 老婆 / 共用 / 未知」分开，让 AI Agent 分清「谁的事」，而不是做多用户协作或多租户权限。全文字下载到统一数据目录（默认 = 仓库同级 data-getbrain，自动创建、不进 Git），默认只读、写操作需确认、删除双重闸门；附 SKILL.md 整理纪律。在「设置 → Mgetbrain」侧边栏配置 API Key/Client ID/dataDir 等，保存即时生效、无需重启；侧边栏 Mgetbrain 工作台提供真实的「知识库→目录→书→讲」层级树（本地重建）、分类调整（勾选层级→生成计划→干跑→双点真写）与真实审计日志。",
   "type": "module",
@@ -16,7 +16,9 @@
     "README.md",
     "SKILL.md",
     "locale/*.json",
-    "icon.svg"
+    "icon.svg",
+    "tools/*.mjs",
+    "docs/*.md"
   ],
   "exports": {
     ".": "./index.js",

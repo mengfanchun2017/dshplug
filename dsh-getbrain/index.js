@@ -111,8 +111,8 @@ export const inject = ['tools', 'settings']
  */
 
 const BUNDLE_DIR = path.dirname(fileURLToPath(import.meta.url))
- * 工作区根 = 插件目录的上一级。插件现在位于 C:\dsh\dw-plugin\dsh-getbrain，
- * 所以 WORKSPACE = C:\dsh\dw-plugin（不是 C:\dsh）。改目录位置时这里的推算跟着变。
+// 工作区根 = 插件目录的上一级。插件现在位于 C:\dsh\dw-plugin\dsh-getbrain，
+// 所以 WORKSPACE = C:\dsh\dw-plugin（不是 C:\dsh）。改目录位置时这里的推算跟着变。
 const WORKSPACE = path.dirname(BUNDLE_DIR)
 // 默认数据目录：**仓库的同级目录** data-getbrain —— 本机即 C:\dsh\data-getbrain。
 //
@@ -1507,6 +1507,39 @@ export function apply(ctx, config) {
       },
     }), 'getnote: personas route')
 
+    // 15.6) 镜像对账：GET /plugins/getnote/mirror-check?into=current
+    //
+    // 本地镜像 vs 线上 list 逐条对账（只读，耗读配额）。发现「本地有线上没有」
+    // 与「线上有本地没有」两类偏差。写操作前跑一次，避免拿一份不完整的镜像做批量决策。
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/getnote/mirror-check',
+      handler: async (req, res) => {
+        const send = (code, obj) => {
+          res.writeHead(code, { 'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store' })
+          res.end(JSON.stringify(obj))
+        }
+        if (req.method !== 'GET') return send(405, { ok: false, error: '只支持 GET' })
+        try {
+          const url = new URL(req.url || '/', 'http://127.0.0.1')
+          const into = (url.searchParams.get('into') || 'current').trim() || 'current'
+          // 要翻完 4321 条（每页几十条），给足超时
+          const out = await runGn(config, resolveCreds(),
+            ['mirror-check', '--into', into, '--json'], undefined, 300000)
+          let data = null
+          try { data = JSON.parse(String(out.output || '')) } catch { data = null }
+          if (!out.ok && !data) {
+            return send(400, { ok: false,
+              error: (String(out.output || '') + String(out.error || '')).slice(0, 400) })
+          }
+          send(200, { ok: !!out.ok, data })
+        } catch (error) {
+          send(400, { ok: false, error: String((error && error.message) || error) })
+        }
+      },
+    }), 'getnote: mirror-check route')
+
     // 16) 本地检索：GET /plugins/getnote/find?q=&kb=&type=&limit=
     //
     // 纯本地 sqlite 索引，不联网、不耗配额。检索是最频繁的动作，
@@ -1554,6 +1587,66 @@ export function apply(ctx, config) {
         }
       },
     }), 'getnote: find route')
+
+    // 16.5) 向量检索：GET /plugins/getnote/vec-search?q=&limit=
+    //
+    // 本地稀疏向量（TF-IDF）余弦检索，不联网、不耗配额。与 /find 的字面检索互补：
+    // 字面命中准确但要求词形一致；向量检索能拉开排序，但同义不同词仍会漏。
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/getnote/vec-search',
+      handler: async (req, res) => {
+        const send = (code, obj) => {
+          res.writeHead(code, { 'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store' })
+          res.end(JSON.stringify(obj))
+        }
+        if (req.method !== 'GET') return send(405, { ok: false, error: '只支持 GET' })
+        try {
+          const url = new URL(req.url || '/', 'http://127.0.0.1')
+          const q = (url.searchParams.get('q') || '').trim()
+          if (!q) return send(400, { ok: false, error: '要给查询词 q' })
+          const limit = parseInt(url.searchParams.get('limit') || '10', 10)
+          const argv = ['vec-search', '--q', q, '--limit', String(Math.min(Math.max(limit, 1), 100)), '--json']
+          const out = await runGn(config, resolveCreds(), argv, undefined, 60000)
+          let data = null
+          try { data = JSON.parse(String(out.output || '')) } catch { data = null }
+          if (!out.ok && !data) {
+            const txt = String(out.output || '') + String(out.error || '')
+            if (txt.includes('还没有向量索引')) {
+              return send(409, { ok: false, error: '还没有向量索引', needIndex: true,
+                hint: '先点「建向量索引」，或跑 gn.py vec-index' })
+            }
+            return send(400, { ok: false, error: txt.slice(0, 400) })
+          }
+          send(200, { ok: !!out.ok, data })
+        } catch (error) {
+          send(400, { ok: false, error: String((error && error.message) || error) })
+        }
+      },
+    }), 'getnote: vec-search route')
+
+    // 16.6) 建向量索引：POST /plugins/getnote/vec-index
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/getnote/vec-index',
+      handler: async (req, res) => {
+        const send = (code, obj) => {
+          res.writeHead(code, { 'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store' })
+          res.end(JSON.stringify(obj))
+        }
+        if (req.method !== 'POST') return send(405, { ok: false, error: '只支持 POST' })
+        try {
+          const url = new URL(req.url || '/', 'http://127.0.0.1')
+          const into = (url.searchParams.get('into') || 'current').trim() || 'current'
+          const out = await runGn(config, resolveCreds(), ['vec-index', '--into', into], undefined, 600000)
+          send(200, { ok: !!out.ok, output: String(out.output || '').slice(0, 4000) })
+        } catch (error) {
+          send(400, { ok: false, error: String((error && error.message) || error) })
+        }
+      },
+    }), 'getnote: vec-index route')
 
     // 17) 建索引：POST /plugins/getnote/index
     //

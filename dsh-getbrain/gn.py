@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import math
 import json
 import os
 import re
@@ -1773,6 +1774,319 @@ def _extract_todos(txt):
     return items
 
 
+def _vec_tokens(text):
+    """分词：英文按词，中文按 bigram（与 FTS 口径一致，纯本地、可解释）。
+
+    刻意不做语义嵌入：真正的语义向量要 embedding 模型（几 GB）与 GPU/服务端，
+    而本插件的硬约束是零第三方依赖、离线、可解释。TF-IDF 是稀疏向量，
+    能改善排序，但同义不同词仍会漏——这点在界面与文档里都要说清。
+    """
+    t = (text or "").lower()
+    toks = re.findall(r"[a-z0-9]+", t)
+    han = re.findall(r"[\u4e00-\u9fff]", t)
+    toks.extend(han[i] + han[i + 1] for i in range(len(han) - 1))
+    return toks
+
+
+def _vec_chunks(text, size=500, overlap=100):
+    t = (text or "").strip()
+    if not t:
+        return []
+    out, i = [], 0
+    while i < len(t):
+        out.append(t[i:i + size])
+        if i + size >= len(t):
+            break
+        i += size - overlap
+    return out
+
+
+def _vec_db_path():
+    return STATE / "vec.db"
+
+
+def cmd_vec_index(args):
+    """建本地稀疏向量索引（TF-IDF，纯本地，不调网络、无第三方依赖）。"""
+    base = Path(args.into) if Path(args.into).is_absolute() else (DATA_DIR / args.into)
+    files = sorted(base.glob("*.md"))
+    if not files:
+        print(f"❌ 镜像目录没有 md：{base}", file=sys.stderr)
+        return 2
+    vocab = {}
+    idf_df = {}
+    chunks = []          # [(note_id, file, start, text, {term: count})]
+    for f in files:
+        h = _parse_md_head(f)
+        nid = h.get("note_id")
+        if not nid:
+            continue
+        try:
+            txt = f.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        for start, ch in enumerate(_vec_chunks(txt)):
+            toks = _vec_tokens(ch)
+            if not toks:
+                continue
+            counts = {}
+            for tk in toks:
+                j = vocab.setdefault(tk, len(vocab))
+                counts[j] = counts.get(j, 0) + 1
+            for j in counts:
+                idf_df[j] = idf_df.get(j, 0) + 1
+            chunks.append((str(nid), f.name, start, ch, counts))
+    if not chunks:
+        print("❌ 没有可索引的内容", file=sys.stderr)
+        return 2
+    N, V = len(chunks), len(vocab)
+    idf = [math.log((1 + N) / (1 + idf_df.get(j, 0))) + 1 for j in range(V)]
+    db = _vec_db_path()
+    if db.exists():
+        db.unlink()
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute("CREATE TABLE vocab(id INTEGER PRIMARY KEY, term TEXT, idf REAL)")
+        conn.execute("CREATE TABLE vec(chunk INTEGER, term INTEGER, w REAL)")
+        conn.execute("CREATE INDEX vec_term ON vec(term)")
+        conn.execute("CREATE TABLE meta(chunk INTEGER PRIMARY KEY, note_id TEXT, "
+                     "file TEXT, start INTEGER, text TEXT, norm REAL)")
+        conn.executemany("INSERT INTO vocab VALUES(?,?,?)",
+                        [(j, t, idf[j]) for t, j in vocab.items()])
+        meta_rows, vec_rows = [], []
+        for ci, (nid, fn, start, text, counts) in enumerate(chunks):
+            weights = {}
+            for j, c in counts.items():
+                weights[j] = (1 + math.log(c)) * idf[j]
+            norm = math.sqrt(sum(w * w for w in weights.values())) or 1.0
+            for j, w in weights.items():
+                vec_rows.append((ci, j, w / norm))
+            meta_rows.append((ci, nid, fn, start, text[:120], norm))
+        conn.executemany("INSERT INTO vec VALUES(?,?,?)", vec_rows)
+        conn.executemany("INSERT INTO meta VALUES(?,?,?,?,?,?)", meta_rows)
+        conn.commit()
+    finally:
+        conn.close()
+    print(f"✅ 向量索引：{N} 个片段 / 词表 {V} / 来源 {len(files)} 个文件 -> {db}")
+    return 0
+
+
+def cmd_vec_search(args):
+    """在本地向量索引上做余弦检索（只读，不联网）。"""
+    db = _vec_db_path()
+    if not db.is_file():
+        print("❌ 还没有向量索引。先跑 `gn.py vec-index`", file=sys.stderr)
+        return 2
+    conn = sqlite3.connect(str(db))
+    try:
+        vrow = {t: (j, i) for j, t, i in conn.execute("SELECT id, term, idf FROM vocab")}
+        qcounts = {}
+        for tk in _vec_tokens(args.q):
+            if tk in vrow:
+                qcounts[tk] = qcounts.get(tk, 0) + 1
+        if not qcounts:
+            print("（查询词都不在词表里，换几个词）")
+            return 0
+        qweights = {}
+        for tk, c in qcounts.items():
+            j, i = vrow[tk]
+            qweights[j] = (1 + math.log(c)) * i
+        qnorm = math.sqrt(sum(w * w for w in qweights.values())) or 1.0
+        qidx = list(qweights)
+        ph = ",".join("?" * len(qidx))
+        scores = {}
+        for chunk, term, w in conn.execute(
+                f"SELECT chunk, term, w FROM vec WHERE term IN ({ph})", qidx):
+            scores[chunk] = scores.get(chunk, 0.0) + w * (qweights[term] / qnorm)
+        rows = list(conn.execute("SELECT chunk, note_id, file, start, text FROM meta"))
+        norm = {c: n for c, n in conn.execute("SELECT chunk, norm FROM meta")}
+    finally:
+        conn.close()
+    ranked = sorted(((s / (norm.get(c) or 1.0), c) for c, s in scores.items()),
+                    reverse=True)[:args.limit]
+    meta = {r[0]: r for r in rows}
+    if getattr(args, "json", False):
+        print(jdump({"ok": True, "query": args.q, "hits": [
+            {"score": round(s, 4), "note_id": meta[c][1], "file": meta[c][2],
+             "start": meta[c][3], "text": meta[c][4]} for s, c in ranked]}))
+        return 0
+    if not ranked:
+        print("没有命中")
+        return 0
+    for rank, (s, c) in enumerate(ranked, 1):
+        m = meta[c]
+        print(f"{rank}. {s:.4f}  {m[1]}  {m[2]}")
+        print(f"   {m[4]}")
+    return 0
+
+
+def _split_sentences(text):
+    """粗切句子：去头部元数据行，按中文句读与换行切。"""
+    t = re.sub(r"^-- .*:.*$", "", text, flags=re.M)
+    t = re.sub(r"^- .*:.*$", "", t, flags=re.M)
+    t = re.sub(r"^# .+$", "", t, flags=re.M)
+    parts = re.split(r"(?<=[。！？；])", t)
+    out = []
+    for p in parts:
+        for line in p.splitlines():
+            s = line.strip()
+            if len(s) >= 8:
+                out.append(s)
+    return out
+
+
+def _key_sentences(text, k=4):
+    """按词频权重挑关键句（纯本地、可解释）。保持原文顺序输出。"""
+    sents = _split_sentences(text)
+    if not sents:
+        return []
+    freq = {}
+    for s in sents:
+        for tk in _vec_tokens(s):
+            freq[tk] = freq.get(tk, 0) + 1
+    scored = []
+    for s in sents:
+        toks = _vec_tokens(s)
+        score = sum(freq.get(tk, 0) for tk in toks) / (len(toks) ** 0.5 + 1)
+        scored.append((score, s))
+    top = sorted(s for _, s in sorted(scored, reverse=True)[:max(1, k)])
+    return top
+
+
+def cmd_summarize(args):
+    """渐进摘要 Layer 3（关键句自动提取）+ Layer 4（模板，待人工/AI 填）。
+
+    只写本地 `<dataDir>/summaries/`，**不写回平台**——写正文是 note-update 的覆盖语义，
+    风险极高（见 docs/UNDO-DESIGN.md §7 与 PKM-ROADMAP §5.2）。
+    """
+    base = Path(args.into) if Path(args.into).is_absolute() else (DATA_DIR / args.into)
+    files = sorted(base.glob("*.md"))
+    if getattr(args, "note_id", ""):
+        files = [f for f in files if args.note_id in f.read_text(encoding="utf-8", errors="replace")[:512]]
+    if getattr(args, "limit", 0):
+        files = files[:args.limit]
+    if not files:
+        print(f"❌ 没找到笔记：{base}", file=sys.stderr)
+        return 2
+    outdir = DATA_DIR / "summaries"
+    outdir.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for f in files:
+        h = _parse_md_head(f)
+        nid = h.get("note_id")
+        if not nid:
+            continue
+        try:
+            txt = f.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        keys = _key_sentences(txt, k=args.top)
+        body = [
+            f"# 渐进摘要：{h.get('title') or ''}",
+            "",
+            f"- 笔记 ID：`{nid}`",
+            f"- 原文：`{f}`",
+            f"- 生成时间：{now_iso()}",
+            "",
+            "## Layer 1 原文",
+            "",
+            f"见 `{f}`（不复制，避免两份不一致）。",
+            "",
+            "## Layer 2 粗提取",
+            "",
+            (h.get("title") or ""),
+            "",
+            "## Layer 3 关键句（自动提取，加粗）",
+            "",
+        ]
+        for s in keys:
+            body.append(f"- **{s}**")
+        body += [
+            "",
+            "## Layer 4 用自己的话（模板，待填）",
+            "",
+            "> 这一层必须你自己写。AI 可以基于 Layer 3 给草稿，但「用你自己的话」",
+            "> 才是费曼技巧的核心——写得出来才算真懂。",
+            "",
+            "1. ",
+            "2. ",
+            "",
+        ]
+        (outdir / f"{nid}.md").write_text("\n".join(body), encoding="utf-8")
+        n += 1
+    print(f"✅ 已写 {n} 份渐进摘要 -> {outdir}")
+    return 0
+
+
+def cmd_mirror_check(args):
+    """本地镜像 vs 线上列表 对账（只读，耗读配额）。
+
+    为什么需要：inventory 的 count、镜像实际文件数、线上 list 总数三者偶尔不一致，
+    而「本地算错 = 批量打错线上」。这个命令把三者摆在一起，让偏差可见。
+    """
+    c = make_client(args, dry_run=False)
+    base = Path(args.into) if Path(args.into).is_absolute() else (DATA_DIR / args.into)
+    if not base.is_dir():
+        print(f"❌ 镜像目录不存在：{base}", file=sys.stderr)
+        return 2
+    local = {}
+    for f in sorted(base.glob("*.md")):
+        h = _parse_md_head(f)
+        nid = h.get("note_id")
+        if nid:
+            local[str(nid)] = {"file": f.name, "title": h.get("title") or "",
+                               "size": f.stat().st_size}
+    remote = {}
+    cursor, pages = None, 0
+    while True:
+        d = c.list_page(cursor) or {}
+        for n in (d.get("notes") or []):
+            nid = n.get("note_id")
+            if nid:
+                remote[str(nid)] = {"title": n.get("title") or "",
+                                   "type": n.get("note_type") or ""}
+        pages += 1
+        if not d.get("has_more") or not d.get("cursor"):
+            break
+        cursor = d["cursor"]
+        if pages >= 500:
+            break
+    only_local = sorted(set(local) - set(remote))
+    only_remote = sorted(set(remote) - set(local))
+    report = {
+        "generated_at": now_iso(),
+        "mirror_dir": str(base),
+        "local_files": len(list(base.glob("*.md"))),
+        "local_ids": len(local),
+        "remote_ids": len(remote),
+        "pages": pages,
+        "only_local": only_local,
+        "only_remote": only_remote,
+        "consistent": not only_local and not only_remote,
+    }
+    STATE.mkdir(parents=True, exist_ok=True)
+    out = STATE / "mirror-report.json"
+    out.write_text(jdump(report), encoding="utf-8")
+    if getattr(args, "json", False):
+        print(jdump({"ok": True, "path": str(out), "report": report}))
+        return 0
+    print(f"镜像对账：本地 {report['local_files']} 个文件 / {len(local)} 个 id ｜ 线上 {len(remote)} 个 id（{pages} 页）")
+    if report["consistent"]:
+        print("✅ 本地与线上完全一致")
+    else:
+        print(f"⚠ 只有本地有（线上没有，可能已被删）：{len(only_local)} 条")
+        for nid in only_local[:10]:
+            print(f"   {nid}  {local[nid]['title'][:40]}")
+        print(f"⚠ 只有线上有（本地缺，需要下载）：{len(only_remote)} 条")
+        for nid in only_remote[:10]:
+            print(f"   {nid}  {remote[nid]['title'][:40]}")
+        if len(only_local) > 10 or len(only_remote) > 10:
+            print(f"   …其余见 {out}")
+    print(f"   报告：{out}")
+    if getattr(args, "strict", False) and not report["consistent"]:
+        return 1
+    return 0
+
+
 def cmd_agent_brief(args):
     """给 AI 读的「我最近在干什么」提纯包（纯本地，不耗配额）。
 
@@ -3198,6 +3512,12 @@ def _save_to_trash(client, note_id):
 
 
 def cmd_tag_add(args):
+    _, tagtbl = _load_ids_table()
+    dup = {nm: _ids_for_name(tagtbl, nm) for nm in (args.tags or []) if len(_ids_for_name(tagtbl, nm)) > 1}
+    if dup:
+        print("⚠ 以下标签名对应多个 ID，平台按名字处理可能命中其中一个：", file=sys.stderr)
+        for nm, ids in dup.items():
+            print(f"   「{nm}」→ {', '.join(ids)}", file=sys.stderr)
     c = make_client(args)
     _mutate_guard(args, c)
     r = c.tag_add(args.note_id, args.tags)
@@ -3207,9 +3527,20 @@ def cmd_tag_add(args):
 
 
 def cmd_tag_remove(args):
+    tag_id = (getattr(args, "tag_id", "") or "").strip()
+    if not tag_id:
+        _, tagtbl = _load_ids_table()
+        ids = _ids_for_name(tagtbl, getattr(args, "tag", "") or "")
+        if not ids:
+            print(f"❌ ids.json 里找不到标签「{args.tag}」；先跑 `gn.py ids`", file=sys.stderr)
+            return 2
+        if len(ids) > 1:
+            print("❌ " + _ambiguity_message("标签", args.tag, ids), file=sys.stderr)
+            return 2
+        tag_id = ids[0]
     c = make_client(args)
     _mutate_guard(args, c)
-    r = c.tag_delete(args.note_id, args.tag_id)
+    r = c.tag_delete(args.note_id, tag_id)
     if not print_dry(r, "tags/delete"):
         print(jdump(r))
     return 0
@@ -3557,9 +3888,66 @@ def cmd_auto_classify(args):
     return 0
 
 
+def _load_ids_table():
+    """读 state/ids.json（由 `gn.py ids` 生成）。没有或坏了都返回空表，不抛。"""
+    p = STATE / "ids.json"
+    if not p.is_file():
+        return {}, {}
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}, {}
+    return (d.get("kbs") or {}, d.get("tags") or {})
+
+
+def _ids_for_name(table, name):
+    """名字 → [id, ...]。table 是 ids.json 的 kbs / tags（{id: {name, names, count}}）。"""
+    if not name:
+        return []
+    return sorted(tid for tid, rec in (table or {}).items()
+                  if rec.get("name") == name or name in (rec.get("names") or []))
+
+
+def _ambiguity_message(kind, name, ids):
+    return (f"{kind}「{name}」对应多个 ID（{', '.join(ids)}）——按名字操作会静默命中其中一个。"
+            f"请改用唯一名字或显式指定 ID；可先跑 `gn.py ids` 看全名。")
+
+
+def _ambiguity_error(kind, name, ids):
+    return ApiError(_ambiguity_message(kind, name, ids))
+
+
+def _op_tag_add(c, a):
+    """计划里的 tag_add：标签名有歧义就拒绝，不静默命中其中一个。"""
+    tags = a.get("tags") or []
+    _, tagtbl = _load_ids_table()
+    dup = {nm: _ids_for_name(tagtbl, nm) for nm in tags if len(_ids_for_name(tagtbl, nm)) > 1}
+    if dup:
+        raise ApiError("tag_add 的标签名对应多个 ID："
+                       + "；".join(f"「{nm}」→ {', '.join(ids)}" for nm, ids in dup.items())
+                       + "。按名字写会静默命中其中一个，请改用唯一名字。")
+    return c.tag_add(a["note_id"], tags)
+
+
+def _op_tag_delete(c, a):
+    """计划里的 tag_delete：允许用 tag_name，但名字有歧义就拒绝。"""
+    if a.get("tag_id"):
+        return c.tag_delete(a["note_id"], a["tag_id"])
+    name = a.get("tag_name")
+    if not name:
+        raise ApiError("tag_delete 需要 tag_id 或 tag_name")
+    _, tagtbl = _load_ids_table()
+    ids = _ids_for_name(tagtbl, name)
+    if not ids:
+        raise ApiError(f"tag_delete：ids.json 里找不到标签「{name}」；先跑 `gn.py ids`")
+    if len(ids) > 1:
+        raise _ambiguity_error("标签", name, ids)
+    return c.tag_delete(a["note_id"], ids[0])
+
+
 ALLOWED_OPS = {
-    "tag_add": lambda c, a: c.tag_add(a["note_id"], a["tags"]),
-    "tag_delete": lambda c, a: c.tag_delete(a["note_id"], a["tag_id"]),
+    "tag_add": _op_tag_add,
+    "tag_delete": _op_tag_delete,
     "kb_batch_add": lambda c, a: c.kb_batch_add(a["topic_id"], a["note_ids"]),
     "kb_remove": lambda c, a: c.kb_remove(a["topic_id"], a["note_ids"]),
     "kb_create": lambda c, a: c.kb_create(a["name"], a.get("description", "")),
@@ -3583,6 +3971,9 @@ def _ensure_topic(c, op_args, ctx):
     name = str(op_args.get("name") or "").strip()
     if not name:
         raise ApiError("kb_ensure 缺少 name")
+    amb = ctx.get("topic_ambig") or {}
+    if name in amb:
+        raise _ambiguity_error("知识库", name, amb[name])
     if name in ctx["topic_ids"]:
         return ctx["topic_ids"][name]
     if c.dry_run:
@@ -3840,7 +4231,7 @@ def cmd_apply(args):
 
     # 计划里的知识库可以只写名字（topic_name / kb_ensure），由这里换成真实 id。
     # 必须先把已有知识库读进来：不读就无法「已存在就复用」，重跑会造出一堆同名空库。
-    ctx = {"topic_ids": {}}
+    ctx = {"topic_ids": {}, "topic_ambig": {}}
     need_topic = any(a["op"] == "kb_ensure"
                      or (a.get("args") or {}).get("topic_name") for a in actions)
     if need_topic:
@@ -3849,15 +4240,21 @@ def cmd_apply(args):
                 nm = t.get("name")
                 tid = t.get("topic_id") or t.get("id")
                 if nm and tid:
-                    ctx["topic_ids"].setdefault(nm, tid)
+                    prev = ctx["topic_ids"].get(nm)
+                    if prev is None:
+                        ctx["topic_ids"][nm] = tid
+                    elif prev != tid:
+                        ctx["topic_ambig"].setdefault(nm, [prev, tid])
         except ApiError as exc:
             print(f"[apply] 读取知识库列表失败：{redact(str(exc))}", file=sys.stderr)
             return 1
     results = []
+    resolved_actions = []
     for i, a in enumerate(actions, 1):
         op = a["op"]
         print(f"  [{i}/{len(actions)}] {op}  {a.get('reason', '')}")
         try:
+            tname = None
             if op == "kb_ensure":
                 r = {"topic_id": _ensure_topic(c, a.get("args") or {}, ctx),
                      "name": (a.get("args") or {}).get("name")}
@@ -3872,6 +4269,19 @@ def cmd_apply(args):
                             f" kb_ensure 动作，或那个 kb_ensure 没成功。")
                     aargs["topic_id"] = ctx["topic_ids"][tname]
                 r = ALLOWED_OPS[op](c, aargs)
+            entry = {"op": op, "args": {}}
+            if op == "kb_ensure":
+                entry["args"] = {"name": (a.get("args") or {}).get("name"),
+                                 "topic_id": (r or {}).get("topic_id")}
+            else:
+                entry["args"] = {k: v for k, v in aargs.items()}
+                if tname:
+                    entry["args"]["topic_name"] = tname
+                if op == "tag_add":
+                    _, _tbl = _load_ids_table()
+                    entry["args"]["tag_ids"] = {nm: _ids_for_name(_tbl, nm)
+                                                  for nm in (aargs.get("tags") or [])}
+            resolved_actions.append(entry)
             if isinstance(r, list):
                 results.extend([{"op": op, "result": x} for x in r])
             else:
@@ -3896,9 +4306,14 @@ def cmd_apply(args):
                 break
     STATE.mkdir(parents=True, exist_ok=True)
     log = STATE / f"apply-{stamp()}.json"
-    log.write_text(jdump({"plan": str(plan_path), "executed_at": now_iso(),
-                          "dry_run": args.dry_run, "calls": c.calls, "results": results}),
-                   encoding="utf-8")
+    try:
+        log.write_text(jdump({"plan": str(plan_path), "executed_at": now_iso(),
+                              "dry_run": args.dry_run, "calls": c.calls,
+                              "resolved_actions": resolved_actions,
+                              "results": results}),
+                       encoding="utf-8")
+    except OSError as exc:
+        print(f"[warn] 结果日志写入失败：{exc}", file=sys.stderr)
     print(f"\n[apply] 完成，调用 {c.calls} 次；结果日志 {log}")
     return 0
 
@@ -4173,6 +4588,28 @@ def build_parser():
                     help="层级路径，用 \\x1f 分隔：知识库\\x1f目录\\x1f书\\x1f讲；给几段就匹配几层")
     rv.add_argument("--into", default="current", help="镜像子目录（相对数据目录），默认 current")
     rv.set_defaults(func=cmd_resolve)
+    mc = sub.add_parser("mirror-check", help="本地镜像 vs 线上列表 对账（只读，耗读配额）")
+    mc.add_argument("--into", default="current", help="镜像子目录（相对数据目录），默认 current")
+    mc.add_argument("--strict", action="store_true", help="不一致时退出码 1（供自动化用）")
+    mc.add_argument("--json", action="store_true")
+    mc.set_defaults(func=cmd_mirror_check)
+
+    vz = sub.add_parser("vec-index", help="建本地稀疏向量索引（TF-IDF，纯本地，不调网络）")
+    vz.add_argument("--into", default="current", help="镜像子目录（相对数据目录），默认 current")
+    vz.set_defaults(func=cmd_vec_index)
+
+    sm = sub.add_parser("summarize", help="生成本地渐进摘要（Layer 3 自动、Layer 4 模板；不写回平台）")
+    sm.add_argument("--into", default="current", help="镜像子目录（相对数据目录），默认 current")
+    sm.add_argument("--note-id", default="", help="只处理这一条（默认全部）")
+    sm.add_argument("--top", type=int, default=4, help="每条抽多少句关键句")
+    sm.add_argument("--limit", type=int, default=0, help="最多处理多少篇（0=全部）")
+    sm.set_defaults(func=cmd_summarize)
+
+    vs = sub.add_parser("vec-search", help="在本地向量索引上做余弦检索（只读，不联网）")
+    vs.add_argument("--q", required=True)
+    vs.add_argument("--limit", type=int, default=10)
+    vs.add_argument("--json", action="store_true")
+    vs.set_defaults(func=cmd_vec_search)
 
     # 把「哪些是真知识库、哪些是电子书书架」拉下来缓存（只读，几次请求）。
     # 没有这一步，inventory 出来的 123 个顶层节点会把书架当成知识库展示。
@@ -4196,7 +4633,8 @@ def build_parser():
 
     tr = sub.add_parser("tag-remove", help="删除某个标签（system 类型标签不可删）")
     tr.add_argument("--note-id", required=True)
-    tr.add_argument("--tag-id", required=True)
+    tr.add_argument("--tag-id", default="", help="标签 ID；与 --tag 二选一")
+    tr.add_argument("--tag", default="", help="标签名（会先用 ids.json 解析；重名会报错，不猜）")
     add_write(tr)
     tr.set_defaults(func=cmd_tag_remove)
 

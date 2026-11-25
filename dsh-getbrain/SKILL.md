@@ -202,6 +202,21 @@ gn.py publish --kb <库名>        # 导出成自包含静态站点
 **发布产物**：`publish` 导出 `index.html` + 每篇一页 + `search.html`（纯前端搜索）。
 零外部依赖，双击就能看，整个目录可以直接发人。**不含凭据。**
 
+## 向量检索、镜像对账与摘要（v2.11.0 起）
+
+```
+gn.py vec-index                 # 建本地稀疏向量索引（TF-IDF + sqlite，纯本地）
+gn.py vec-search --q <词>       # 余弦检索，与 find 的字面检索互补
+gn.py mirror-check              # 本地镜像 vs 线上 list 对账（只读，耗读配额）
+gn.py summarize                 # 渐进摘要 L3 自动 + L4 模板，只写 <dataDir>/summaries/
+```
+
+- **`vec-search` 不是语义检索**（是 TF-IDF 稀疏向量）：同义不同词仍会漏；要语义用官方 `search` 或 `dsh-rag`。
+- **`mirror-check` 是写操作前的对账**：本地算错 = 批量打错线上，先对账再动。
+- **`summarize` 不写回平台**（写正文是 `note-update` 的覆盖语义，不可撤销）。
+- **`node tools/structure-check.mjs`** —— 改过 `client.js` 之后必跑，专拦「不报错但界面就是不对」的结构缺陷。
+- 标签/知识库**按名字操作前先跑 `gn.py ids`**：重名会静默命中其中一个（实测标签「AI」有两个 ID）。
+
 ## 按人检索与按人看工作内容（v2.10.0 起）
 
 这个账号混着三个人，检索与提纯都必须能**按人切开**，否则 Agent 分不清「谁的事」。

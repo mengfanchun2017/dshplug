@@ -1804,7 +1804,7 @@ python gn.py agent-brief --days 30 --json
   增量索引原本只按 md 文件的 `mtime` 判断要不要重算。而改 `state/personas.json`
   **不会碰任何 md 文件** → 索引纹丝不动 → 用户把某条从「未知」指成「老婆」之后
   `find --owner 老婆` 还是搜不到，界面上又看不出任何异常，只会觉得「指了没用」。
-  现在把配置的 `mtime` 存进库里的 `kv` 表（`persona_mtime`），变了就**全部重算 owner**。
+  现在把配置的 `mtime` 存进库里的 `kv` 表（`persona_sig`，值为 `logic<版本>|mtime<值>`），变了就**全部重算 owner**。
   重算**只 `UPDATE meta`，不重写 FTS 行** —— 后者会让库从 42 MB 涨到 58 MB
   （FTS5 的废弃记录 `VACUUM` 收不回来）。
 - **收空间要两步**：FTS5 的 `VACUUM` 管不到影子表，必须先
@@ -1818,3 +1818,96 @@ python gn.py agent-brief --days 30 --json
 - 归属依赖知识库名与关键词，**知识库改名会让归属漂移**（同一条笔记换了库就换了人），改完要重跑 `index`。
 - 没有「归属自动学习」：不做反馈训练，人的修正只体现为 `notes` 里的一条钉死。
 - 不做多用户协作、不做权限、不做冲突合并 —— 已否决，理由见 `docs/PKM-ROADMAP.md` §4.3。
+
+---
+
+### 11.15 结构体检、向量检索与一批地基修复（2026-11-26，v2.11.0）
+
+**（a）侧边栏「点了空白」的根因与修复（2026-11-22）**
+
+现象：App 窗口里点侧边栏 Mgetbrain，面板一片空白，DevTools 也不报错。
+
+根因：上一轮编辑误插了一个未闭合的 `React.useEffect(() => {`，把 `pkm` / `srch` / `pub` / `inv` / `log` 等 17 个 hooks 全吞进了 effect 回调体。
+hooks 写在回调里不会在组件渲染时执行，组件作用域里根本没有这些变量 → `ReferenceError` → 面板空白。
+`node --check` 只证明语法合法，**证明不了结构对**，所以这类事故能溜过去。
+
+修复 + 两道防线：
+
+- **类组件错误边界**（`GetnoteErrorBoundary`）：平台的 `SlotErrorBoundary` 会把渲染期异常吞掉，界面只剩空白。
+  类组件的 `componentDidCatch` 不参与 hooks 规则，是唯一安全的捕获位置；捕获后把栈 POST 到 `GET /plugins/getnote/report`。
+- **注册两次采样探针**：`atApply` 与 `at1500ms` 各采一次，用来区分「我没注册上」与「注册时机太早」（平台槽树首帧之后才声明）。
+
+验证：`GET /plugins/getnote/report` 里 `at1500ms.panellist.ids` 含 `getnote-workbench`、`mine:true`。
+
+**（b）结构体检脚本：把静默缺陷变成机器断言**
+
+```powershell
+node tools/structure-check.mjs     # 退出码 0 = 全绿
+```
+
+它拦的都是历史上真实踩过的、**不报错但界面就是不对**的类别：
+
+| 检查 | 拦什么 |
+|---|---|
+| 所有 hooks 缩进 == 6 | 防止再出现「hooks 被吞进 effect 回调」 |
+| useEffect 全在顶层 | 同上 |
+| `ctx.*` 都在 `inject` 里 | 防「apply 用了没注入的服务 → 浏览器半不注册」 |
+| `P.*` 引用的样式键都已定义 | 防「用了没定义的样式键 → 样式静默失效」 |
+| 不用 `--dsh-*`、不硬编码 `#fff` | 防深色主题下白底白字 |
+| zh / en 键集相等、`T()` 键都存在 | 防英文模式露中文（本次就抓到 36 个只写内联默认值的键） |
+| `id` / `key` 都用 `PANEL_ID` | 防侧边栏与面板寻址不一致 |
+| `exports` 含 `./client` 等三项 | 防界面不显示且不报错 |
+
+> 这个脚本本身就是被这次事故逼出来的：client.js 已经 3700+ 行 / 100 个 hooks，靠人眼数括号不可持续。
+
+**（c）新增命令（均纯本地或只读）**
+
+| 命令 | 作用 | 是否联网 |
+|---|---|---|
+| `gn.py mirror-check` | 本地镜像 vs 线上 list 逐条对账，写操作前跑一次 | 只读，耗读配额 |
+| `gn.py vec-index` | 建本地稀疏向量索引（TF-IDF + sqlite） | 不联网 |
+| `gn.py vec-search --q <词>` | 本地余弦检索，与字面检索互补 | 不联网 |
+| `gn.py summarize` | 渐进摘要 Layer 3（关键句自动）+ Layer 4（模板），只写 `<dataDir>/summaries/` | 不联网 |
+
+对应路由：`GET /plugins/getnote/mirror-check`、`GET /plugins/getnote/vec-search`、`POST /plugins/getnote/vec-index`。
+
+> **向量检索的诚实边界**：这是 **TF-IDF 稀疏向量**，不是语义嵌入。真正的语义向量要 embedding 模型（几 GB）与服务端，
+> 与本插件「零第三方依赖、离线、可解释」的硬约束相冲突。TF-IDF 能改善排序，但**同义不同词仍会漏**。
+> 要语义检索，用 `dsh-rag`（它走云端 embedding）；本插件负责把字面检索与稀疏向量检索做到极致。
+
+**（d）标签双 ID：不再静默命中其中一个**
+
+实测标签「AI」有两个 ID（`36111209` / `36117013`，共 26 篇）。平台按名字处理，命中哪个都不报错。
+现在：
+
+- `gn.py tag-remove --tag <名字>` 会先用 `state/ids.json` 解析；**重名直接报错并列出所有 ID**，不猜。
+- 计划里的 `tag_add` / `tag_delete` 同理（`tag_delete` 新增 `tag_name` 写法，也有消歧）。
+- `kb_ensure` / `topic_name` 遇到同名不同 ID 的知识库也会报错。
+- `gn.py ids` 的 `same_name_multi_id` 报告继续作为全局体检。
+
+**（e）计划与审计日志改用 ID 键（ID 表第 2 步）**
+
+`apply` 现在会把**解析后的动作**（`topic_name` → `topic_id`、标签名 → `tag_ids`）写进结果日志
+`state/apply-<时间戳>.json` 的 `resolved_actions`，审计时不再需要回查「当时那个名字是哪个 ID」。
+撤销记录本身已经按 `note_id` + 归属 ID 存储（`_infer_delta` 只比 ID），这一步补上了计划侧的缺口。
+
+**（f）仓库改名 `dshplug` → `dw-plugin`（2026-11-22）**
+
+文档、代码注释、patch 注释、界面示例文案已全部同步；数据目录 `C:\dsh\data-getbrain` 不受影响。
+
+**（g）顺带修掉的文档矛盾**
+
+- `PKM-ROADMAP.md` §3.2(a) 原写「合并笔记还没做」（实测 v2.9.0 已实装）、§6 落地顺序表整体过时 —— 已改写。
+- `PKM-THEORY.md` / `HANDOFF-2026-11-18.md` 里 9 处旧数字 `4053` —— 全部改为实测的 `4052`。
+- README §11.14(l) 的 `persona_mtime` —— 改为代码里真实的 `persona_sig`。
+
+**（h）真实写入已经跑通（2026-11-26，不再只是干跑）**
+
+- **合并**：把两条重复的「文件: 《现代思维工具词典》.pdf」合成一条新笔记 `1928038156641538072`；
+  旧笔记**全部保留**（合并命令本身不删东西，删旧另走 delete）。来源记录 `state/merge-20261126-005101.json`。
+- **删除**：删掉 5 条空白录音（3 条「空白录音笔记」+ 2 条「空语音转写记录」），每条都先存了本地 trash 副本
+  （`trash/<note_id>_<标题>.md` + 同名 `.json`），内容救得回来，但**操作本身不可撤销**。
+- 治理立场不变：只删「空白/测试」这类无内容笔记；那 4052 条课程摘录**不动**（ROADMAP §7）。
+
+> 新增的宿主路由（`/mirror-check`、`/vec-search`、`/vec-index`）属于**宿主半**改动，
+> 按平台规则**必须重启 App** 才会生效；CLI 版本不受影响，现在就能用。
