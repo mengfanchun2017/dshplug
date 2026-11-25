@@ -232,7 +232,7 @@ dsh-msynchub/
 不是所有东西都该同步，而且**「危险」是硬约束，不是一个可以勾掉的建议**。
 
 ```js
-surfaceEnabled(surface, cfg) => Boolean(cfg.surfaces[surface.id]) && surface.tier !== 'danger' && groupEnabled(cfg, surface.channel)
+surfaceEnabled(surface, cfg) => Boolean(cfg.surfaces[surface.id]) && surface.tier !== 'danger'
 ```
 
 ### safe（默认开）
@@ -347,7 +347,7 @@ Synchub-At: 2026-11-12T04:35:20.468Z
 ```
 
 各机器只写自己的提交，读时从 `origin/main` 的 `log` 里解析。
-两个通道都查，取时间戳更新的那个——可能只有会话通道被推过。
+各机器只写自己的提交，读时从 `origin/<br>` 的 `log` 里解析。
 
 ### 状态机
 
@@ -455,10 +455,10 @@ API：`GET /api/dsh-synchub/memory-map`。**只读，不写盘**；枚举失败�
 ### 分支不写死：main / master 都行
 
 早期版本把 `BRANCH = 'main'` 写死，这在你这台机器上会直接出事：
-`dsh-config` 远端只有 `master`，写死 `main` 会推上去一个**平行的空历史分支**，
+远端只有 `master` 时，写死 `main` 会推上去一个**平行的空历史分支**，
 两台机器各看一半，而旧提交全在 `master` 上——等于凭空丢了历史。
 
-现在的顺序是：`config.channels[ch].branch` → `ls-remote --symref origin HEAD` → `main`。
+现在的顺序是：本地 `.git/HEAD` → `ls-remote --symref origin HEAD` → `main`。
 尚未初始化的仓库，`status` 报 `branch: null` 而不是 `main`——
 **「未知」不能伪装成「默认值」**，否则你会以为分支已经确定了。
 ### 导入是**并集合并**，不是覆盖
@@ -476,7 +476,7 @@ API：`GET /api/dsh-synchub/memory-map`。**只读，不写盘**；枚举失败�
 | 路由 | 作用 | 写本机？ |
 |---|---|---|
 | `GET /config` | 当前配置 | 否 |
-| `GET /status` | 两通道 ahead/behind/dirty + 机器信标 + `state`（状态目录真实磁盘状态） | 否 |
+| `GET /status` | 仓库 ahead/behind/dirty + 机器信标 + `state`（状态目录真实磁盘状态） | 否 |
 | `GET /state` | 状态目录真实状态（初始化/仓库/回滚点；只读不创建） | 否 |
 | `GET /install-info` | 安装信息（插件目录、数据目录、版本，供面板显示绝对路径） | 否 |
 | `GET /self-check` | 一次性自检结论 + 引导（含「还缺什么、点哪里」） | 否 |
@@ -485,15 +485,15 @@ API：`GET /api/dsh-synchub/memory-map`。**只读，不写盘**；枚举失败�
 | `GET /preflight` | 开工检查（一句话结论 + 逐项） | 否 |
 | `GET /check` | 全项体检 | 否 |
 | `POST /scan` | 扫描本机改动、算差异（不落盘） | 否 |
-| `POST /stage` | 把本机改动写进 payload | 是（仅 payload） |
+| `POST /stage` | 把本机改动写进 dsh-home | 是（仅 dsh-home） |
 | `POST /pull` | 拉取（`apply:true` 才写回本机，`prune:true` 才删） | 视参数 |
-| `POST /push` | 提交 + 推送（落后则拒绝） | 是（仅 payload） |
+| `POST /push` | 提交 + 推送（落后则拒绝） | 是（仅 dsh-home） |
 | `POST /sync` | pull → 拉取不一致则停；否则 stage → push | 视情况 |
 | `POST /auto` | 空闲自动上传的一次 tick | 视情况 |
 | `GET /repos` | 代码仓库状态清单（未提交 / 领先 / 落后 / 是否连远端，只读本地） | 否 |
 | `POST /repos/sync` `{id}` | 单个代码仓库：add -A → commit → push（无远端则只提交并说明） | 是（提交该仓库） |
 | `GET /diverge?id=<通道>` | 分叉详情（两边提交列表 + 建议），只读 | 否 |
-| `POST /diverge/resolve` `{side:'local'|'remote', confirm}` | 分叉二选一（覆盖前双向备份提交哈希） | 是（改写 payload/远端） |
+| `POST /diverge/resolve` `{side:'local'|'remote', confirm}` | 分叉二选一（覆盖前双向备份提交哈希） | 是（改写 dsh-home/远端） |
 | `GET /purge-session?id=<id>` | 受控删除**预览**（只读；见 ADR-013） | 否 |
 | `POST /purge-session` `{id, confirm:<同一个id>}` | 受控删除**执行**（二次确认 + 备份 + 原子改多处；需重启验收） | 是（删除单个本机会话） |
 | `GET /purge-session?id=<id>&verify=1` | 重启后验收删除是否干净 | 否 |
@@ -565,7 +565,7 @@ $DSH_HOME/dsh-synchub/
 | 入口 | 只用做这些 | 不做什么 |
 |---|---|---|
 | **侧边栏 Msynchub** | ① **仪表盘**（一句话结论 + 四个数字 + 下次自动）；② **分叉二选一卡**（两台各自推过时）；③ 自检结论（就绪/待处理 + 逐步引导）；④ 通道快照（落后/领先/脏）；⑤ 空闲开关一行摘要；⑥ 目录地图；⑦ 按钮：立即同步（主）/ 提交并推送 / 拉取并应用 / 重新检查；⑧ 高级操作折叠区 | **不写任何配置**（不内嵌输入框，也没有保存按钮） |
-| **设置 → Msynchub** | **唯一配置入口**：① 必做：仓库模式与仓库地址（单仓库一个 / 双仓库两个）；② 可选：本机设置与工作区映射、同步面开关；③ 诊断与维护：当前状态、检查结果、目录清单 | 不放日常同步按钮 |
+| **设置 → Msynchub** | **唯一配置入口**：① 必做：仓库地址（唯一仓库 dsh-msynchub）；② 可选：本机设置与工作区映射、同步面开关；③ 诊断与维护：当前状态、检查结果、目录清单 | 不放日常同步按钮 |
 
 **自检怎么用**：打开侧边栏，第一张卡直接告诉你结论。
 - `✓ 同步已就绪` → 点「立即同步」（拉+推一口气；0.6.0 前是分两个按钮）。
@@ -666,18 +666,16 @@ $DSH_HOME/dsh-synchub/
 
 ## 11.5 常见问题（2026-11-17 补充）
 
-### Q1. 为什么配置和会话要两个仓库？能合并成一个吗？
+### Q1. 为什么只有一个仓库？以前不是两个吗？
 
-**现在能合并了（0.10.0 起）。** 以前不做，是因为两个通道是**两个独立工作副本**，
-把两个 `remote` 填成同一地址只会让第二个通道推同分支时落后/分叉，并不是真合并。
-现在设置页选「单仓库」即可：一个地址、一个 `repos/all`、两个分组开关（ADR-036）。
+以前是 `dsh-config` + `dsh-session` 两个仓库（体积/写入频率不同、互不干扰）。
+2026-11-25 起合并为**唯一仓库 `dsh-msynchub`**（ADR-037）：
 
-仍然保留「双仓库」作为默认，因为它有两个真实价值：
+- 一个 `cfg.remote`、一个本地工作副本 `repos/all`；
+- 镜像目录 `dsh-home/`，仓库根有自动生成的 `README.md`；
+- 旧 `dsh-config` 已从 GitHub 删除，`dsh-session` 已改名为 `dsh-msynchub`。
 
-- 体积/写入频率：`config` 几百 KB、改动少；`sessions` 几十 MB 且每次对话都在长，分开历史才不会把配置提交冲爆。
-- **通道互相独立**：一个坏了另一个照样能救。
-
-> 单仓库模式会失去这两个价值，换来的是「只填一个地址」。数据量不大时这个交易划算（你的原话：量不大）。
+代价是失去「一个坏了另一个能救」的隔离、提交历史混合；换来的是只填一个地址、结构一目了然。
 ### Q2. 「空闲」到底怎么算？
 
 **空闲 = 距上次对 Msynchub 面板/接口的手动操作超过 `idlePushMinutes`（默认 20 分钟）**，
@@ -774,7 +772,7 @@ git clone https://github.com/mengfanchun2017/dswp-plugin.git C:\dsh\dshplug
    **先确认** `dsh-config-manager` 里的加密备份还有用——那是独立的恢复手段。
 2. 在 `dsh-config-manager` 里**取消勾选 `plugins` 分区**，
    避免它 `npm pack` 后重写 spec，和本仓库管理的插件清单打架。
-3. 装 0.3，配好两个远端，第一台推一次基线。
+3. 装 0.3，填好仓库地址，第一台推一次基线。
 4. 第二台拉取时，插件发现本地仓库已 `git init` 但还没有 `HEAD`，
    会自动走 **bootstrap**：把本地 `payload/`、`synchub/`、`.gitattributes`、
    `.gitignore` 移到 `backups/pre-bootstrap-<ts>/` 再对齐远端。

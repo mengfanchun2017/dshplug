@@ -1844,6 +1844,7 @@ DSH 在目录改名后会为该新路径**新建**一个 `workspaceId`，旧记�
 - **背景（真实故障）**：
   用户报 `session-e617aefb-…` 历史打不开：`corrupt session log: invalid committed event at line 1173: released v2 row 1172 has seq gap (expected 1172, got 1369)`。
   实测该文件是 `0..1171 + 1369..1610`：中间 197 条（1172..1368）没了。
+  同一事故还打坏了 `session-85cb7c21-…`（同样形态：`0..1657 + 1809..1852`，缺 1658..1808），已用同一方法修复；全量扫描 119 份会话日志后无第三例。
   时间线：16:34:51 本机日志还是连续的 `0..1368`（synchub 备份为证）；16:34:58 `/sync` 的 apply
   把停滞的 payload（`0..1171`）盖到本机；DSH 内存里 lastSeq 仍是 1368，继续追加 `1369..`；
   16:34:59 stage 把这份断口日志抄回 payload 并提交，坏数据被固化。

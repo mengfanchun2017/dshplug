@@ -4141,12 +4141,12 @@ async function resolveLlmRoute(llm, cfg) {
     if (!provider && typeof llm.listProviders === 'function') {
       const ps = llm.listProviders() || [];
       const first = ps[0];
-      provider = typeof first === 'string' ? first : (first && (first.name || first.id)) || '';
+      provider = typeof first === 'string' ? first : (first && (first.id || first.name)) || '';
     }
   } catch { /* 拿不到不抛 */ }
   try {
     if (!model && typeof llm.listModels === 'function') {
-      const ms = await llm.listModels({ provider });
+      const ms = await llm.listModels(provider);
       const arr = Array.isArray(ms) ? ms : ((ms && ms.models) || []);
       const f = arr[0];
       model = typeof f === 'string' ? f : (f && (f.id || f.name)) || '';
