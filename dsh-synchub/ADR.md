@@ -1617,3 +1617,117 @@ DSH 在目录改名后会为该新路径**新建**一个 `workspaceId`，旧记�
     `repo-sync-smoke` 在本沙箱因 `spawnSync git EPERM` 无法跑（测试自己起 git，非本次改动引入）。
   - **真机重启验收未做**：改了 `index.js`，必须完全退出 DSH 再打开；单仓库的真实 push/pull
     需要在真机（能跑 git 的环境）上验。
+
+---
+
+## ADR-037 · 0.11.0：插件清单备份/恢复（npm + link 两类）纳入同步中心
+
+- **日期**：2026-11-25
+- **状态**：已采纳（设计定稿，待实现；实现前不要据本文改代码）
+- **背景（用户原话）**：
+  > 「有插件备份和恢复功能（手动，可以定期执行）」
+  > 「执行时候如果没变化，就不更新文件，记录插件就是名字，不记录版本」
+  > 「恢复时候点击后会弹出修改内容，点击确认后再更新（都是从插件走，版本为最新）」
+  > 「备份恢复都通过 synchub 的仓库记录文件」
+  > 「与其装很多的插件儿，不如我这个 synchub 把这些需要同步的所有事情都在这里处理，所以功能会有扩展」
+  > 「link 这一块……npm 你可以分类，npm 没有几个，然后备份同步只走它；下一个是 link 的检查，
+  >  点了检查之后就从 synchub 里面同步的仓库里去检查，如果仓库里有 dsh-plugin 这个仓库……
+  >  它就自己恢复添加上」
+  > 「我这个同步可以有开关，我如果别人用了 ds-market 这个插件同步这块也可以关上，
+  >  就作为放在自己，这样才能节约一个仓库的配置」
+
+- **调研结论（先纠正三个前提）**：
+  1. **`profileManifest` 面硬编码不同步，但「只记名字」的清单是安全的**。
+     `surfaceEnabled()` 对 `danger` 直接返回 false（`lib/index.js:937-939`），理由是
+     `package.json` 含 `link:C:/dsh/...` 绝对路径，跨机搬运会让 DSH 起不来。
+     而本功能只记**名字（npm）/ 名字+相对位置（link）**，不含绝对路径 spec，
+     因此可以作为一条**新路径**进 config 仓库，不必动 `profileManifest` 的 danger 定性。
+  2. **桌面宿主已提供 `pluginManager` 服务，运行时可装 npm 插件，不必自己 spawn pnpm、
+     也不必退出 DSH**。`ctx.get('pluginManager')` 暴露 `listBundles / installBundle /
+     removeBundle / cancelInstall`（证据：dsh-market `lib/index.js:304`、
+     `lib/official-desktop.js:502-543`、asar 内 `@deepseek-ai/dsh-plugin-manager/README.md`）。
+     dsh-market 在官方桌面端就是走它，并明确「绝不 fallback 到 `dsh plugin --profile desktop`」
+     （`lib/official-desktop.js:493-500` 注释：CLI 会要求 Desktop 完全退出）。
+     所以「写个脚本去跑 dsh CLI」不是唯一解，**优先用宿主服务**。
+  3. **`link:` 插件无法用 `installBundle` 装**。官方 manager 只接受 npm 目标
+     （`lib/official-desktop.js:547` 的 `TARGET_RE` 校验，超出即 127）；
+     dsh-market 恢复 `link:` 的办法是**写回 `package.json` 的 `link:` spec 再 `pnpm install`**
+     （`lib/routes.js:2693-2708`）。synchub 的 link 恢复必须走同一条路。
+  4. **dsh-market 已有备份/恢复，可借鉴、不可重复搬**。它导出 profile 配置快照
+     （含 `package.json`），存 WebDAV/私有 Gist，每日自动备份（前端 localStorage 计时），
+     恢复是「合并式 + 校验 + 回滚」，UI 有「预览 → 确认」两步。证据：
+     `lib/backup.js:15-17,94-151,153-202,204-240,609-654`、`lib/gist.js:29-33,312-330`、
+     `lib/snapshot.js:37,388-485`、`client/client.js:15164-15188`。
+     **它的「插件清单」是配置快照的一部分，和本功能重叠**，所以本功能必须带开关。
+  5. **synchub 已有全部所需机制**：sha256 diff（`lib/index.js:1027`，内容相同即 `unchanged`
+     不写盘）、60s 单定时器（`lib/index.js:3510`，`autoPushTick` + `codeRepoAutoTick`）、
+     预览→确认范式（`purge-session` / `session-move`）、覆盖前备份（规则二）、
+     `codeRepos` 只读状态（`lib/index.js:1419`，可判断 link 目标目录是否存在）。
+
+- **决策**：
+  1. **新增「插件清单」备份，落 `payload/plugins/manifest.json`（config 组）**，
+     复用现有 config 仓库，**不新增第三个仓库**。`profileManifest` 面的 danger 定性不变。
+  2. 清单结构只记最小信息，**不记版本**：
+     `{ "plugins": [ { "name": "dsh-free-search", "kind": "npm" },
+                   { "name": "dsh-gitok", "kind": "link",
+                     "linkPath": "C:/dsh/dw-plugin/dsh-gitok" } ] }`。
+     npm 只记名字（恢复时裸名安装 = 最新）；link 记名字 + 目标路径（仅用于「检查」，
+     不用于跨机搬运）。可用 `cfg.pluginSync.includeLink` 控制是否把 link 纳入清单。
+  3. **备份**：优先 `pluginManager.listBundles()` 取已装 bundle（含 `source` spec，可区分
+     npm/link/git）；宿主服务不可用时回退读 `profiles/<p>/package.json` 的 dependencies。
+     写入走现有 `diffLocalToPayload`/`stageChanges`，**内容相同则不写盘、不产生提交**
+     （用户要求「没变化就不更新文件」由 sha256 天然满足）。
+  4. **周期执行**：复用 60s 定时器，新增 `cfg.pluginSync.autoMinutes`（0=不自动，仅手动）。
+     备份是只读+写 payload，风险低；**恢复绝不自动**，只能手动。
+  5. **恢复 = 预览 → 确认 → 执行**：
+     - 预览（只读）：对比「清单 vs 当前已装」，列出 新增 npm / 新增 link / link 目标缺失；
+       link 目标是否存在，用 `codeRepoState`（`cfg.codeRepos`，如 `C:\dsh\dw-plugin`）判断。
+     - 执行：npm 走 `pluginManager.installBundle(name)`（运行时生效，无需退出 DSH）；
+       link 走「校验目标存在 → 备份 `package.json` → 写 `link:` 依赖与
+       `dsh.profile.bundles` → 跑 bundled pnpm install」。执行前必须备份被覆盖的
+       `package.json`（规则二），失败可回滚。
+  6. **开关**：`cfg.pluginSync.enabled`（默认 **关**）。语义是「插件清单是否由本插件备份/恢复」。
+     与 dsh-market 的备份导出**二选一**：用户用 dsh-market 备份时关掉此项，避免两处
+     同时判定插件清单（`client.js` 已有一句「两套不要同时管同一个东西」的提醒，
+     本开关把它变成可执行开关）。
+
+- **理由**：
+  - 用户的两台机器插件要一致，而插件清单是唯一还没被任何自研通道覆盖的同步面；
+    放进 synchub 后，「会话 / 配置 / 技能 / 插件清单」一个面板管完，符合用户
+    「与其装很多插件，不如 synchub 把所有要同步的事在这里处理」的诉求。
+  - 复用 config 仓库而非新开仓库：清单只有几十行 JSON，独立仓库的管理成本大于收益；
+    且 ADR-036 已把配置面压到「1 地址 + 2 开关」，再加仓库会把它变回去。
+  - npm 走宿主服务而不是自己 spawn pnpm：宿主服务已处理写锁、`restart-required`、
+    build 审批、平台校验，自造轮子会重蹈 dsh-market 上千行 pnpm 兼容逻辑。
+  - link 之所以只「检查 + 重新链接」而不是备份源码：源码归 `dshplug` 仓库管（ADR-001），
+    B 机本来就必须 clone 它；synchub 只需确认目标在、再补 profile 依赖。
+
+- **反面代价**：
+  - **npm「版本为最新」不可复现**：清单不记版本，恢复时装的是恢复当天的最新版；
+    若某插件新版不兼容，恢复结果与备份时的机器不同。用户已明确选「最新版」。
+  - **link 恢复要跑 pnpm**：这是本插件第一次在恢复路径里执行包管理器；
+    需要处理 pnpm 失败/文件占用，且会改 `package.json`（已用备份缓解）。
+  - **与 dsh-market 的边界靠开关维持**：两个都开就会重复；开关默认关，
+    但用户要自己知道该关哪个。
+  - **`pluginManager` 服务并非所有宿主都有**：CLI/web 宿主可能没有，
+    此时 npm 恢复要回退到生成命令让用户执行，能力降级（必须在预览里写清）。
+  - **清单由 sync 时机决定**：自动备份间隔内新装的插件，要等下一次备份才进清单。
+
+- **已否决的替代方案**：
+  | 方案 | 否决原因 |
+  |---|---|
+  | 打开现有 `profileManifest` 面的开关 | `surfaceEnabled()` 对 danger 硬编码 false（`lib/index.js:939`），且它含 `link:` 绝对路径，跨机会让 DSH 起不来 |
+  | 让 synchub 自己 spawn `dsh plugin --profile desktop add ...` | 官方桌面端 CLI 拒绝该 profile（要求 DSH 完全退出）；运行中调用必然失败 |
+  | 用 `pluginManager.installBundle` 装 link: 插件 | manager 只接受 npm 目标（`TARGET_RE`），link 目标被拒（127） |
+  | 恢复时只生成命令让用户贴终端 | 用户明确要「点击确认后再更新」；且 npm 走宿主服务可自动完成，只给命令是能力浪费 |
+  | 新增第三个同步仓库放插件清单 | 几十行 JSON 不值得一个仓库；ADR-036 刚把配置面压到一地址 |
+  | 记版本号以便精确复现 | 用户明确「不记录版本、都装最新」 |
+  | 把 link 源码也备份进 synchub | 源码归 `dshplug` 仓库（ADR-001），且跨机路径不同；备份源码会重复且失真 |
+
+- **验证（实现时补）**：
+  - 备份：清单写入 `payload/plugins/manifest.json`，内容相同重复执行不产生新提交（sha256 diff 归零）。
+  - 无变化：连续两次备份 `git log` 无新提交。
+  - 预览：只读，不改 `package.json`；能区分 npm/link，link 目标缺失要显式列出。
+  - 恢复：执行前 `package.json` 有备份；npm 走宿主服务；link 恢复后目标目录存在且 profile 依赖含 `link:`。
+  - 开关：`pluginSync.enabled=false` 时备份不写 payload、恢复按钮不可用。
+  - 全部 smoke 与 `node --check` 全绿；改 `index.js` 需重启 DSH 验收。

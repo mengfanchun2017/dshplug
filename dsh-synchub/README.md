@@ -4,6 +4,10 @@
 并用一个侧边栏面板把「现在能不能开工 / 该先拉还是先推 / 哪些目录动不得」讲清楚。
 
 > **三份文档分工**：本 [`README.md`](./README.md)=怎么用；[`BOOTSTRAP.md`](./BOOTSTRAP.md)=怎么做（安装/验证/排错/迁移/命令行）；[`ADR.md`](./ADR.md)=为什么（决策+反面代价+已否决方案）。详细调研在 [`docs/`](./docs/)。
+>
+> **0.11.0（ADR-037，设计中）**：把「插件清单」也纳入同步中心——备份只记名字（npm）与
+> 名字+位置（link），恢复「预览 → 确认 → 执行」，复用 config 仓库、带开关。本文以下章节描述的是
+> 已实现的 0.10.0；插件备份/恢复的落地细节以 ADR-037 为准。
 
 0.10.0 是**单仓库模式版**（ADR-036）：设置页可选「单仓库」——一个地址、一个 `repos/all`、
 两个分组开关（配置组 / 会话组），不再需要建两个仓库、填两个地址。同时新增同步面
@@ -259,9 +263,14 @@ surfaceEnabled(surface, cfg) => Boolean(cfg.surfaces[surface.id]) && surface.tie
 | `profileOther` | `profiles/` 除那两份 yml 之外 | 还包括 `node_modules`、`.pnpm`、缓存的登录态 |
 | `deviceId` | `.anonymous-user-id` | 每台机一个身份；同步会让两台机互相冒充 |
 
-插件清单不同步是刻意的：**插件由 `dsh-market` 管**，
+插件清单整份（`package.json`）不同步是刻意的：**插件由 `dsh-market` 管**，
 而 `link:` 规格里的绝对路径本来就不能跨机搬运。
 
+> **例外（ADR-037，0.11.0 起）**：新增「插件清单备份」——只记**名字**（npm）与
+> **名字+目标位置**（link），不含绝对路径 spec、不含版本，落 `payload/plugins/manifest.json`，
+> 复用 config 仓库。恢复走「预览 → 确认 → 执行」，npm 用宿主 `pluginManager` 服务安装，
+> link 校验目标存在后重新链接。开关 `cfg.pluginSync.enabled`（默认关），与 dsh-market 的
+> 备份导出二选一。详见 [`ADR.md` ADR-037](./ADR.md)。
 ---
 
 ## 4. 三条硬规则
