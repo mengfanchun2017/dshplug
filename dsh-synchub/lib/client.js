@@ -551,22 +551,15 @@ function checkedAtText(atMs) {
 
       useEffect(() => {
         mounted.current = true;
-        /* 缓存还新鲜（20 分钟内）→ 首帧已经有内容了，这时 refresh 只做「后台更新」，
-           不进入加载态、不显示正在读取，用户点开就能看见上次结论和时间。*/
         const cached = panelCacheFresh();
         refresh(false);
-        /* 轮询只跑快接口：不能每 45s 就把 preflight + self-check 也拉一遍，
-           那等于每 45s 做一次 87MB 指纹 + 4 趟 GitHub 往返。
-           慢接口只在首屏、手动刷新、以及隔 5 分钟的定时里跑。 */
         const tick = () => {
           getJSON(`${API}/status?fast=1`, undefined, 20000)
             .then(S => {
               if (!mounted.current) return;
               setOwn(S); setCheckedAt(new Date()); bridge.publish(deriveAlerts(S));
             })
-            .catch(() => { /* 轮询失败不弹错，下一轮会自己好；手动刷新才报 */ });
-          /* 代码仓库状态也一起刷：否则用户手动 git commit 后面板上的数字
-             要等 5 分钟才变，会以为按钮没生效。这个接口只读本地、不访网，便宜。 */
+            .catch(() => { /* 轮询失败不弹错 */ });
           getJSON(`${API}/repos`, undefined, 20000)
             .then(R => { if (mounted.current && R) setRepos(R); })
             .catch(() => { /* 同上，静默 */ });
@@ -576,14 +569,15 @@ function checkedAtText(atMs) {
         return () => { mounted.current = false; clearInterval(id); clearInterval(slowId); };
       }, [refresh]);
 
-      /* 记忆地图：只读枚举，变化慢，单独拉一次即可。
-         不放进 refresh 的两批结构 —— 那会改动已有 allSettled 的下标与 render-smoke 的注入顺序。 */
+      /* 记忆地图：只读枚举，变化慢，单独拉一次即可。 */
       useEffect(() => {
         if (!mounted.current) return;
         getJSON(`${API}/memory-map`, undefined, 20000)
           .then(M => { if (mounted.current && M) setMemoryMap(M); })
           .catch(() => { /* 读不到不算故障：空表也要能打开面板 */ });
       }, []);
+
+
 
       /* saveRemotes 已删除：侧边栏不再写配置（ADR-022）。
          配置写入只在设置页的 doSave 一处，避免两条保存链路互踩。 */
@@ -662,6 +656,33 @@ function checkedAtText(atMs) {
       const [doctorPick, setDoctorPick] = useState({});
       /* 记忆地图（阶段①只读）：追加到 Panel 末尾，不插中间 —— render-smoke 按位置注入。 */
       const [memoryMap, setMemoryMap] = useState(null);
+      /* 侧栏记忆编辑（阶段④）：选文件 → 读 → 改 → 备份后写回。 */
+      const [memEditPath, setMemEditPath] = useState('');
+      const [memEditContent, setMemEditContent] = useState('');
+      const [memEditBusy, setMemEditBusy] = useState('');
+      const [memEditMsg, setMemEditMsg] = useState('');
+
+      const doMemEditLoad = useCallback(async (p) => {
+        setMemEditPath(p); setMemEditMsg('');
+        if (!p) { setMemEditContent(''); return; }
+        setMemEditBusy('读取');
+        try {
+          const r = await getJSON(`${API}/memory/file?path=${encodeURIComponent(p)}`);
+          if (r.ok) setMemEditContent(r.content || '');
+          else setMemEditMsg(r.error || '读取失败');
+        } catch (ex) { setMemEditMsg('读取异常：' + String((ex && ex.message) || ex)); }
+        setMemEditBusy('');
+      }, []);
+
+      const doMemEditSave = useCallback(async () => {
+        if (!memEditPath) { setMemEditMsg('先选要编辑的文件'); return; }
+        setMemEditBusy('保存'); setMemEditMsg('');
+        try {
+          const r = await post(`${API}/memory/file`, { path: memEditPath, content: memEditContent, confirm: 'WRITE' });
+          setMemEditMsg(r.ok ? '已保存（原文件已备份为 .bak-<时间>）' : (r.error || '保存失败'));
+        } catch (ex) { setMemEditMsg('保存异常：' + String((ex && ex.message) || ex)); }
+        setMemEditBusy('');
+      }, [memEditPath, memEditContent]);
       const doDivergePreview = useCallback(async () => {
         setErr('');
         try { setDivergeData(await getJSON(`${API}/diverge`, undefined, 30000)); }
@@ -1288,7 +1309,21 @@ function checkedAtText(atMs) {
           e('div', { style: { marginTop: 8 } }, e(MemoryTable, { layers: memoryMap.layers }))),
         e('div', { className: 'note' },
           '「记忆文件」是 Msynchub 的落点（<工作区>/memory/ 与 ~/.dsh/memory/USER.md），归档时自动写入；',
-          '项目规则与项目技能归各工作区 git 管，Msynchub 只列不动。')) : null;
+          '项目规则与项目技能归各工作区 git 管，Msynchub 只列不动。'),
+        e('details', { style: { marginTop: 8 } },
+          e('summary', { style: { cursor: 'pointer', fontSize: 12.5 } }, '编辑记忆文件（备份后写回）'),
+          e('select', { value: memEditPath, onChange: ev => doMemEditLoad(ev.target.value), style: { width: '100%', margin: '6px 0' } },
+            e('option', { value: '' }, '选择要编辑的记忆文件…'),
+            (memoryMap.layers.find(l => l.id === 'memory') || { rows: [] }).rows.map(r =>
+              e('option', { key: r.path, value: r.path }, r.label + ' — ' + r.path))),
+          memEditContent ? e('textarea', {
+            value: memEditContent, onChange: ev => setMemEditContent(ev.target.value), rows: 10,
+            style: { width: '100%', boxSizing: 'border-box', font: 'inherit', padding: 8, borderRadius: 6, border: '1px solid rgba(128,128,128,.4)', background: 'transparent', color: 'inherit', whiteSpace: 'pre', fontFamily: 'monospace' },
+          }) : null,
+          e('div', { className: 'btns' },
+            e('button', { className: 'primary', disabled: Boolean(memEditBusy) || !memEditPath, onClick: doMemEditSave },
+              memEditBusy === '保存' ? '保存中…' : '保存（先备份）')),
+          memEditMsg ? e('div', { className: 'note' }, memEditMsg) : null)) : null;
 
       return e('div', { className: 'dsc' },
         e('style', null, STYLES),
@@ -1882,6 +1917,16 @@ function checkedAtText(atMs) {
         finally { setMemBusy(''); }
       }, [memId]);
 
+      const doMemTidy = useCallback(async () => {
+        setMemBusy('整理'); setMsg({ text: '', kind: '' });
+        try {
+          const r = await post(`${API}/memory/tidy`, {});
+          setMemResult(r);
+          setMsg({ text: r && r.ok ? `整理完成：${(r.results || []).filter(x => x.ok).length} 个工作区` : `未整理：${(r && (r.error || r.skipped)) || '未知原因'}`, kind: r && r.ok ? 'ok' : 'err' });
+        } catch (ex) { setMsg({ text: '整理失败：' + String((ex && ex.message) || ex), kind: 'err' }); }
+        finally { setMemBusy(''); }
+      }, []);
+
       const mem = (form && form.memory) || {};
       const memWs = Array.isArray(mem.workspaces) ? mem.workspaces : [];
       const knownWs = (status && status.workspaceReport && status.workspaceReport.suggestions) || [];
@@ -1913,6 +1958,10 @@ function checkedAtText(atMs) {
           e('input', { type: 'checkbox', checked: Boolean(mem.userEnabled), onChange: ev => setMem({ userEnabled: ev.target.checked }) }),
           e('span', null, '同时写用户级'),
           e('span', { className: 'why' }, '~/.dsh/memory/USER.md')),
+        e('div', { className: 'chk' },
+          e('input', { type: 'checkbox', checked: Boolean(mem.tidy && mem.tidy.enabled), onChange: ev => setMem({ tidy: { ...(mem.tidy || {}), enabled: ev.target.checked } }) }),
+          e('span', null, '开启整理记忆'),
+          e('span', { className: 'why' }, '按间隔自动梳理（阶段③，在设置里保存后生效）')),
         e('div', { className: 'field' },
           e('label', null, 'provider / model'),
           e('span', null,
@@ -1932,7 +1981,8 @@ function checkedAtText(atMs) {
           e('label', null, '手动归档总结'),
           e('input', { type: 'text', value: memId, placeholder: 'session-xxxxxxxx-…', onChange: ev => setMemId(ev.target.value) })),
         e('div', { className: 'btns' },
-          e('button', { disabled: Boolean(busy) || Boolean(memBusy) || !memId.trim(), onClick: doMemArchive }, memBusy ? '归档中…' : '立即归档总结')),
+          e('button', { disabled: Boolean(busy) || Boolean(memBusy) || !memId.trim(), onClick: doMemArchive }, memBusy ? '归档中…' : '立即归档总结'),
+          e('button', { disabled: Boolean(busy) || Boolean(memBusy), onClick: doMemTidy }, memBusy === '整理' ? '整理中…' : '立即整理')),
         memResult ? e('div', { className: 'note' },
           '结果：',
           memResult.ok ? e('span', { className: 'good' }, '已写入') : e('span', { className: 'red' }, (memResult.error || memResult.skipped || '未写入')),

@@ -200,19 +200,19 @@ $P = 'C:\dsh\dw-plugin\dsh-synchub'
 & $node --check "$P\lib\client.js"
 & $node --check "$P\lib\sessiondoctor.js"
 
-# 全部 14 份；任何一份非 0 就停
+# 全部 15 份；任何一份非 0 就停
 Get-ChildItem "$P\test" -Filter *.cjs | Sort-Object Name | ForEach-Object {
   & $node $_.FullName
   if ($LASTEXITCODE -ne 0) { throw "FAIL $($_.Name)" }
 }
 ```
 各套件自己的通过标志（`ALL PASS` / `SYNCHUB_SMOKE_OK` / … / `会话体检 smoke：23 通过 / 0 失败`）。
-全绿 = 14/14 套件 exit 0。
+全绿 = 15/15 套件 exit 0。
 
 | 套件 | 盯什么 |
 |---|---|
 | `render-smoke.cjs` | 浏览器半**真渲染**：首帧/有数据/报错/钩子序（含 E0b+E0c 体检卡） |
-| `synchub-smoke.cjs` | 32 路由注册 + 三槽 + CSS + 新卡片 |
+| `synchub-smoke.cjs` | 34 路由注册 + 三槽 + CSS + 新卡片 |
 | `sessiondoctor-smoke.cjs` | 体检引擎：**23 条**，只读性/confirm 闸门/不误报 subagent/回滚点原文 + **J 组 6 条职责边界**（impact 不漏网 / health 三态 / 一键救援不碰空组） |
 | `sessionmove-smoke.cjs` | 单条+批量迁移（含 14 个真实目录交叉验证） |
 | `purge-smoke.cjs` | 受控删除 |
@@ -221,6 +221,7 @@ Get-ChildItem "$P\test" -Filter *.cjs | Sort-Object Name | ForEach-Object {
 | `unsynced-smoke.cjs` | 假绿回归：unsynced/pending/payloadMissing |
 | `diverge-smoke.cjs` | 分叉二选一 |
 | `repo-sync-smoke.cjs` | 代码仓库四态 |
+| `memoryedit-smoke.cjs` | 编辑白名单：允许用户级/工作区 memory 下 .md，拒绝相对路径、越界、非 md、凭据、目录穿越；含登记表损坏态 |
 | `memoryarchive-smoke.cjs` | 归档引擎：读会话（zstd 多帧）/ 定位落点 / 备份后追加 + 初始态 / 损坏会话 / 未分组 |
 | `memorymap-smoke.cjs` | 记忆地图枚举：完整场 / 初始态（空 DSH_HOME）/ 失败态（workspace.json 损坏）/ 边界（无 .git、路径不存在） |
 | `single-smoke.cjs` | 单仓库模式（ADR-036）：模式抽象 / 分组开关 / payload 落点 / 单通道状态 / 失败态 |

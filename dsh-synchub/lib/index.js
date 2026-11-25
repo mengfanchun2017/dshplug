@@ -34,7 +34,7 @@ const execFileAsync = promisify(execFile);
 
 const name = 'dsh-synchub';
 const inject = ['webServer'];
-const VERSION = '0.14.0';
+const VERSION = '0.16.0';
 /* 分支不能写死。远端仓库可能是 master（GitHub 旧默认）也可能是 main，
    写死一个就会在已有仓库上推出一个**平行的空历史分支**。
    优先级：config.channels[ch].branch → 远端 HEAD 指向的分支 → DEFAULT_BRANCH。 */
@@ -3164,6 +3164,26 @@ function routesFor() {
     },
     {
       kind: 'exact',
+      path: '/api/dsh-synchub/memory/file',
+      handler: async (req, res) => {
+        try {
+          const url = new URL(req.url || '/', 'http://127.0.0.1');
+          const target = url.searchParams.get('path') || '';
+          if (req.method === 'GET') {
+            const r = await resolveMemoryEditPath(target);
+            if (!r.ok) return json(res, 400, r);
+            const exists = fs.existsSync(r.path);
+            const content = exists ? await fsp.readFile(r.path, 'utf8') : '';
+            return json(res, 200, { ok: true, path: r.path, exists, content });
+          }
+          const body = await readBody(req);
+          const r = await editMemoryFile(target || body.path, body.content, body.confirm);
+          return json(res, r && r.ok ? 200 : 400, r);
+        } catch (e) { return json(res, 500, { ok: false, error: String(e.message || e) }); }
+      },
+    },
+    {
+      kind: 'exact',
       path: '/api/dsh-synchub/preflight',
       handler: async (_req, res) => {
         try {
@@ -4005,6 +4025,40 @@ async function tidyMemoryNow(reason) {
   }
 }
 
+/* ------------------------------------------------ 阶段④ 受控编辑记忆（ADR-042） */
+
+/** 允许编辑的记忆文件：用户级 ~/.dsh/memory/** 或某工作区 <path>/memory/**。 */
+async function resolveMemoryEditPath(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return { ok: false, error: '缺少路径' };
+  const abs = path.isAbsolute(raw) ? path.normalize(raw) : null;
+  if (!abs) return { ok: false, error: '路径必须是绝对路径' };
+  const userDir = path.join(DSH_HOME, 'memory');
+  const wss = await readWorkspacesList();
+  const allowed = [userDir, ...wss.map(w => path.join(w.path, 'memory'))];
+  const inside = allowed.some(dir => {
+    const rel = path.relative(dir, abs);
+    return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+  });
+  if (!inside) return { ok: false, error: '只允许编辑用户级 ~/.dsh/memory/ 或某工作区 <path>/memory/ 下的文件' };
+  if (!/\.(md|markdown)$/i.test(abs)) return { ok: false, error: '只允许 .md 文件' };
+  return { ok: true, path: abs };
+}
+
+async function readWorkspacesList() {
+  const { workspaces } = await realWorkspaces();
+  return workspaces || [];
+}
+
+async function editMemoryFile(input, content, confirm) {
+  const r = await resolveMemoryEditPath(input);
+  if (!r.ok) return r;
+  if (confirm !== true && confirm !== 'WRITE') return { ok: false, error: '需要二次确认：confirm 必须为 true 或 "WRITE"' };
+  if (typeof content !== 'string' || !content.trim()) return { ok: false, error: '内容为空，拒绝写盘' };
+  const w = await writeMemoryFile(r.path, content);
+  return { ok: true, path: r.path, bytes: w.bytes, existed: w.existed, unchanged: w.unchanged };
+}
+
 async function tidyTick(ctx) {
   try {
     const cfg = await readConfig();
@@ -4216,4 +4270,4 @@ async function codeRepoAutoTick(ctx) {
 export { name, inject, apply };
 export const VERSION_INFO = VERSION;
 // 供离线 smoke 测试用（node --check 查不出逻辑错，必须真跑一遍）。
-export const __test = { memoryMap, archiveSessionById, tidyMemoryNow, codeRepoList, codeRepoState, codeReposPayload, syncCodeRepo, syncAllCodeRepos, divergeInfo, resolveKeepLocal, resolveKeepRemote, stampTrailer, purgePreview, purgeExecute, purgeVerify, sessionIdForms, walkSessionRefs, bareSessionId, sessionNoteTemplate, sessionNotePreview, sessionNoteWrite, resolveNotePath, sessionMigrateGroup, sessionMigratePreview, sessionMigrateExecute, sessionMigrateVerify, encodeWorkspaceGroup, decodeWorkspaceGroup, stateInfo, installInfo, idleStandard, mergeConfig, normalizeRemoteToHttps, repoFacts, normalizeWorkspaceMap, realWorkspaces, workspaceReport, selfCheck, channelState, readConfig, statusPayload, preflightReport: selfCheck, sessionDoctorScan, sessionDoctorApply, channelsOf, repoKeyOf, remoteOf, surfaceEnabled, diffLocalToPayload, stageChanges, commitChanges, pushChannels, pullChannels, applyPayload, ensureRepo, channelLabel, classifyPluginSpec, readInstalledPlugins, buildPluginManifest, readPluginManifest, writePluginManifest, backupPluginManifest, pluginRestorePreview, pluginRestoreExecute, pluginManifestPath, PLUGIN_BACKUP_RUNTIME };
+export const __test = { memoryMap, archiveSessionById, tidyMemoryNow, editMemoryFile, resolveMemoryEditPath, codeRepoList, codeRepoState, codeReposPayload, syncCodeRepo, syncAllCodeRepos, divergeInfo, resolveKeepLocal, resolveKeepRemote, stampTrailer, purgePreview, purgeExecute, purgeVerify, sessionIdForms, walkSessionRefs, bareSessionId, sessionNoteTemplate, sessionNotePreview, sessionNoteWrite, resolveNotePath, sessionMigrateGroup, sessionMigratePreview, sessionMigrateExecute, sessionMigrateVerify, encodeWorkspaceGroup, decodeWorkspaceGroup, stateInfo, installInfo, idleStandard, mergeConfig, normalizeRemoteToHttps, repoFacts, normalizeWorkspaceMap, realWorkspaces, workspaceReport, selfCheck, channelState, readConfig, statusPayload, preflightReport: selfCheck, sessionDoctorScan, sessionDoctorApply, channelsOf, repoKeyOf, remoteOf, surfaceEnabled, diffLocalToPayload, stageChanges, commitChanges, pushChannels, pullChannels, applyPayload, ensureRepo, channelLabel, classifyPluginSpec, readInstalledPlugins, buildPluginManifest, readPluginManifest, writePluginManifest, backupPluginManifest, pluginRestorePreview, pluginRestoreExecute, pluginManifestPath, PLUGIN_BACKUP_RUNTIME };

@@ -38,10 +38,10 @@ const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
     webServer: { register(def) { routes.push(def); return () => {}; } },
   };
   idx.apply(ctx, {});
-  assert.equal(routes.length, 32, '应注册 32 条路由（含 session-doctor / plugin-backup / plugin-restore / memory-map / memory / memory/archive）');
+  assert.equal(routes.length, 34, '应注册 34 条路由（含 session-doctor / plugin-backup / plugin-restore / memory-map / memory / memory/archive / memory/tidy / memory/file）');
   const paths = routes.map(r => r.path);
   for (const p of [
-    'config', 'status', 'state', 'install-info', 'self-check', 'workspaces', 'map', 'memory-map', 'memory', 'memory/archive', 'preflight', 'check', 'scan', 'stage',
+    'config', 'status', 'state', 'install-info', 'self-check', 'workspaces', 'map', 'memory-map', 'memory', 'memory/archive', 'memory/tidy', 'memory/file', 'preflight', 'check', 'scan', 'stage',
     'pull', 'push', 'sync', 'auto', 'purge-session', 'purge-session/help', 'session-note', 'session-move', 'session-move/help', 'session-move/group',
     'diverge', 'diverge/resolve', 'repos', 'repos/sync', 'session-doctor', 'session-doctor/help',
     'plugin-backup', 'plugin-restore',
