@@ -220,13 +220,20 @@ git log -3 --oneline
 - id: hmr
   name: "@deepseek-ai/dsh-hmr"
   config:
+    base: "file:///C:/dsh"
     root:
-      - "C:/dsh/dw-plugin"
-      - "C:/dsh/dw-base"
+      - "dw-plugin/dsh-synchub"
+      - "dw-plugin/dsh-getbrain"
+      - "dw-plugin/dsh-gitok"
+      - "dw-plugin/dsh-larkcli"
+      - "dw-base/demo-rag/dsh-rag"
 ```
 
-- `root` 是**启动期**配置（HMR 插件 apply 时建 watcher）→ **加完这一次要完全退出 DSH 再打开**，之后就不用了。
-- `ignored` 用默认 `["**/node_modules", "**/.*", "cache", "data"]`，不会把 `node_modules` 跟进来。
+- `root`/`base` 是**启动期**配置（HMR 插件 apply 时建 watcher）→ **改完要完全退出 DSH 再打开**，之后就不用了。
+- **不能写成 `root: ["C:/dsh/dw-plugin"]`**（2026-11-27 实测踩到）：base 留默认（profile 目录）时，chokidar 吐出的相对路径带一串 `..`，`dsh-hmr` 用默认 `ignored` 的 `**/.*` 去匹配，picomatch 4.0.7 把反斜杠当转义符 → profile 目录之外的文件**全被忽略**，watcher 静默不触发（实测：等 4 秒无事件）。
+- 把 `base` 指到仓库父目录后路径不再有 `..`，但此时反斜杠路径下 `**/.*` 又**什么都不匹配**，所以 `.git`/`node_modules` 必须靠「不放进 `root`」排除。已实测五个插件目录内无点文件/点目录/node_modules。
+- `base` 也不能写 `C:/dsh`：`new URL('C:/dsh', baseUrl)` 会把它当 scheme `c:`，`fileURLToPath` 直接报错。必须写 `file://` URL。
+- 新增自研插件时，往 `root` 里加一行 `<父目录>/<插件目录>` 即可（不要图省事直接写仓库根）。
 - 换机器/换仓库位置时只改这两行路径。
 
 ### 验证（桌面端看不到 HMR 日志）
