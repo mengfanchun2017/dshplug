@@ -192,6 +192,52 @@ git log -3 --oneline
 
 ---
 
+## 3.1 改了什么要不要重启（2026-11-27 实测，源码级）
+
+**结论：桌面端现在改宿主半源码也不用重启。** 但这是**配置出来的**，不是默认的，所以先把边界写死。
+
+| 改了什么 | 桌面端（desktop profile） | 其它 profile / CLI |
+|---|---|---|
+| `client.js`（浏览器半） | 应用窗口 `Ctrl+R` | 刷新页面 |
+| `cordis.patch.yml` 的 `config:` | **不用重启**（HMR 监听 patch → remount 该行） | 同上 |
+| `lib/index.js` 等宿主半源码 | **不用重启**（已配 `hmr.root`） | **要重启**（`root: []`） |
+| `package.json` 的 `exports` / `main` / `dsh.*` | 要重启 | 要重启 |
+| 新增依赖 / 装新插件（`install.ps1`） | 要重启（首次装载） | 要重启 |
+| 改插件 `version` / `engines.dsh` | 要重启 | 要重启 |
+
+### 为什么（源码级）
+
+- HMR 在桌面端**是启用的**：`dsh-desktop-host/lib/index.js` 调 `runProfile(...)` → `dsh/src/profile-boot.ts` 里 `hostCtx.provide('profileContext', ...)` → base 组合包 `cordis.patch.yml` 的 `hmr` 行 `disabled: !!js "!ctx.get('profileContext')"` 为 false。
+- 但 base 组合包把该行写死 `config: { root: [] }`，注释原文是 "Profile configuration reloads by default; module roots are opt-in"。`root: []` = **只监听配置**（`profile/package.json`、profile 与 home 两级 `cordis.patch.yml`），**不监听任何源码目录**。这就是「改源码要重启」的根因，是默认行为不是 bug。
+- 每次 recompose 时 `Hmr.reconcileProfile()` 会比对 **profile 目录 + 所有 `link:` 目标**（`profileRoots()` 读 `node_modules` 里的符号链接），所以只要触发一次 recompose，link: 插件的磁盘改动就会被热替换。
+- 本仓库插件全部是 `link:` Junction（`install.ps1 -Check` 全绿可证），所以只要让 watcher 能「看见」源码目录即可。
+
+### desktop profile 已做的配置
+
+`~/.dsh/profiles/desktop/cordis.patch.yml` 末尾（2026-11-27 加，备份 `.bak-hmr-20261127-211014`）：
+
+```yaml
+- id: hmr
+  name: "@deepseek-ai/dsh-hmr"
+  config:
+    root:
+      - "C:/dsh/dw-plugin"
+      - "C:/dsh/dw-base"
+```
+
+- `root` 是**启动期**配置（HMR 插件 apply 时建 watcher）→ **加完这一次要完全退出 DSH 再打开**，之后就不用了。
+- `ignored` 用默认 `["**/node_modules", "**/.*", "cache", "data"]`，不会把 `node_modules` 跟进来。
+- 换机器/换仓库位置时只改这两行路径。
+
+### 验证（桌面端看不到 HMR 日志）
+
+`hmr` 的 `watching [...]` / `reload plugin ...` 走 Cordis logger → 宿主子进程 stdout → Electron 主进程 stdout，**打包应用里不落盘**（`~/.dsh/logs` 与安装目录 `debug.log` 都没有）。所以用行为验证：
+
+1. 改一个自研插件宿主半的某个 HTTP 路由返回值（例如 `dsh-synchub` 的 `/status` 加个临时字段）。
+2. 浏览器地址栏直接开 `http://127.0.0.1:<当前端口>/api/dsh-synchub/status?fast=1`（浏览器带会话 cookie；终端里 `curl` 会 401）。
+3. 看到新字段 = 生效；看不到 = 没生效。验完删掉临时字段。
+---
+
 ## 4. 常见报错对照
 
 | 报错 | 原因 | 处理 |
@@ -201,8 +247,8 @@ git log -3 --oneline
 | `SEC_E_NO_CREDENTIALS (0x8009030e)` | MinGit schannel | `git -C C:\dsh\dshplug config http.sslBackend openssl` |
 | `Connection was reset` / `TLS connect error` | 网络间歇 | 重试 2~3 次；必要时临时 `git config http.proxy http://127.0.0.1:7897`，用完 `--unset` |
 | `dsh plugin add` 找不到本地插件 | 自研插件不在 npm | 一律用 `install.ps1`，不要 `dsh plugin add <本地包名>` |
-| `plugpush` 之后另一台还是旧代码 | 忘了 `install.ps1` / 没退出重开 DSH | 新机器首次必须 `install.ps1` + 完全退出再打开 |
-| 改了 `cordis.patch.yml` 不生效 | 配置层在**行激活时**读取 | 必须**重启 App**；`client.js` 只需刷新页面 |
+| `plugpush` 之后另一台还是旧代码 | 忘了 `install.ps1` / 新机器首次要完全退出再打开 | 新机器首次必须 `install.ps1` + 完全退出再打开（首次装载） |
+| 改了 `cordis.patch.yml` 不生效 | 先看是不是改完没保存/改错了文件 | 配置层改动**热生效**（`dsh-hmr` 监听 profile 与 home 两级 patch）；不生效多半是改到了别的 profile。`client.js` 只需刷新页面 |
 | `src refspec main does not match any` | 分支名猜错 | 脚本已改为跟随本地当前分支（本机是 `master`）；显式 `-Branch` 才覆盖 |
 
 ---
