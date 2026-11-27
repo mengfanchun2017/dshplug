@@ -243,6 +243,17 @@ git log -3 --oneline
 1. 改一个自研插件宿主半的某个 HTTP 路由返回值（例如 `dsh-synchub` 的 `/status` 加个临时字段）。
 2. 浏览器地址栏直接开 `http://127.0.0.1:<当前端口>/api/dsh-synchub/status?fast=1`（浏览器带会话 cookie；终端里 `curl` 会 401）。
 3. 看到新字段 = 生效；看不到 = 没生效。验完删掉临时字段。
+
+### 实测已通过（2026-11-27 22:13）
+
+`dsh-synchub` 每次 `apply` 会往 `~/.dsh/logs/dsh-synchub-boot.log` 写一行 JSON，这是桌面端**唯一能直接读到的宿主半热重载证据**（HMR 自己的 `watching`/`reload plugin` 日志不落盘）。实测：
+
+1. 在 `dsh-synchub\lib\index.js` 末尾加一行注释 → 8 秒内 boot log 新增 `{"phase":"apply"}` + `{"phase":"routes-ok","count":35}`；
+2. **pid 不变**（11960，与 22:10 重启时相同）→ 是同进程内热重载，不是重启；
+3. 时间戳与写文件时刻同秒（14:13:05Z = 22:13:05 +08:00）；
+4. 删掉注释后又触发一次（14:13:52Z），路由数仍为 35 → 重载后插件健康；文件恢复原大小 201436 字节。
+
+所以验证方法就是：改插件源码 → 看 `~/.dsh/logs/dsh-synchub-boot.log` 有没有新增**同 pid** 的 `apply`。
 ---
 
 ## 4. 常见报错对照
